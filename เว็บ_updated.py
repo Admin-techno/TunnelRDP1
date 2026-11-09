@@ -1,0 +1,9151 @@
+import discord
+from discord import app_commands
+from discord.ext import commands
+from fastapi import FastAPI, Request, Form, Response, Cookie, WebSocket, WebSocketDisconnect, BackgroundTasks, UploadFile, File
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+import uvicorn
+import asyncio
+import sqlite3
+import os
+from datetime import datetime, timedelta
+from typing import Optional
+import urllib.parse
+import hashlib
+
+# 🖼️ ตั้งค่าโลโก้ระบบ (ใส่ลิงก์ URL รูปภาพจากอินเทอร์เน็ตได้ที่นี่)
+LOGO_URL = "https://upload.wikimedia.org/wikipedia/th/8/89/Bunditpatanasilpa_Institute_Logo.png"
+import httpx
+import collections
+
+# ==========================================
+# 🌐 CONFIGURATION & DISCORD BOT SETUP
+# ==========================================
+app = FastAPI()
+SYSTEM_LOGS = collections.deque(maxlen=100)
+
+# 🖼️ โฟลเดอร์เก็บรูปโปรไฟล์นักเรียน (อัปโหลดโดยแอดมิน/หัวหน้าระดับ/ฝ่ายกิจการ เท่านั้น)
+PROFILE_PHOTO_DIR = os.path.join("static", "profiles")
+os.makedirs(PROFILE_PHOTO_DIR, exist_ok=True)
+app.mount("/static", StaticFiles(directory="static"), name="static")
+ALLOWED_PHOTO_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
+MAX_PHOTO_SIZE_BYTES = 3 * 1024 * 1024  # 3MB
+
+def add_log(msg):
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    SYSTEM_LOGS.appendleft(f"[{timestamp}] {msg}")
+
+add_log("ระบบ K-School Enterprise เริ่มต้นการทำงาน")
+SECRET_WEB_TOKEN = "0eff3ca11601bbea28c703f2e9b9b7db" 
+
+SERVER_START_TIME = datetime.now()  # ⏱️ ใช้คำนวณ Uptime ในหน้า System Status
+
+TXT_DATABASE_PATH = "students_master.txt" 
+
+ADMIN_USER = "Admincda"
+ADMIN_PASS = "Nammon29"
+
+COOKIE_MAX_AGE = 2592000 
+
+class AttendanceBot(commands.Bot):
+    def __init__(self):
+        intents = discord.Intents.default()
+        super().__init__(command_prefix="?", intents=intents)
+
+    async def setup_hook(self):
+        try:
+            await self.tree.sync()
+            print("⚡ [DISCORD BOT] Synced Command Tree")
+        except Exception as e:
+            print(f"❌ [DISCORD BOT] Sync Tree Error: {e}")
+
+bot = AttendanceBot()
+
+async def send_discord_log(title: str, description: str, color: discord.Color):
+    sent_flag = False
+    for guild in bot.guilds:
+        for channel in guild.text_channels:
+            if channel.permissions_for(guild.me).send_messages:
+                try:
+                    embed = discord.Embed(title=title, description=description, color=color)
+                    await channel.send(embed=embed)
+                    sent_flag = True
+                    break 
+                except Exception as e:
+                    print(f"❌ Cannot send to {channel.name}: {e}")
+        if sent_flag:
+            return True
+    return False
+
+@bot.event
+async def on_ready():
+    print(f'⚡ [DISCORD BOT] ทำงานปกติ เข้าสู่ระบบในชื่อ {bot.user}')
+
+# ==========================================
+# 🎛️ DISCORD SLASH COMMAND /admin — MAINTENANCE CONTROL
+# ==========================================
+
+# Modal ขอรหัสผ่าน + เลือก mode (ใช้สำหรับทั้งเปิดและปิดเว็บ)
+class MaintenanceModeModal(discord.ui.Modal):
+    def __init__(self, action: str, mode_type: str, label: str):
+        super().__init__(title=f"🔐 ยืนยันรหัส Admin — {label}")
+        self.action = action        # "on" หรือ "off"
+        self.mode_type = mode_type  # "off" / "maintenance" / "updating" / ...
+
+        self.password_input = discord.ui.TextInput(
+            label="รหัสผ่าน Admin",
+            placeholder="กรอกรหัสเจ้าของเว็บ",
+            style=discord.TextStyle.short,
+            required=True,
+            min_length=1,
+            max_length=50
+        )
+        self.add_item(self.password_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if self.password_input.value != ADMIN_PASS:
+            await interaction.response.send_message("❌ รหัสผ่านไม่ถูกต้อง! ปฏิเสธการเข้าถึง", ephemeral=True)
+            return
+
+        is_active = 0 if self.mode_type == "off" else 1
+
+        # อัปเดต DB โดยตรง (ไม่ต้องผ่าน HTTP เพราะอยู่ใน process เดียวกัน)
+        try:
+            conn = sqlite3.connect('attendance_pro.db')
+            cursor = conn.cursor()
+            cursor.execute("UPDATE maintenance_settings SET is_active = ?, mode_type = ? WHERE id = 1", (is_active, self.mode_type))
+            conn.commit()
+            conn.close()
+            add_log(f"เปลี่ยนสถานะเว็บไซต์เป็น: {self.mode_type} (โดย Discord)")
+        except Exception as e:
+            await interaction.response.send_message(f"❌ เกิดข้อผิดพลาด DB: {e}", ephemeral=True)
+            return
+
+        # Broadcast WebSocket ให้หน้าเว็บทุก client เปลี่ยนสถานะทันที
+        try:
+            conn_manager = interaction.client._connection  # ใช้ manager จาก global
+            await manager.broadcast("STATUS_CHANGED")
+        except Exception: pass
+
+        mode_labels = {
+            "off": "🟢 เปิดเว็บออนไลน์ปกติ",
+            "maintenance": "🏗️ กำลังแก้ไขเว็บไซต์",
+            "updating": "🚀 กำลังอัปเดตระบบ",
+            "testing": "🧪 กำลังทดสอบระบบ (BETA)",
+            "disabled": "🔒 ปิดระบบชั่วคราว",
+            "ip_error": "🚫 ERROR 404 — IP Unassigned"
+        }
+        result_label = mode_labels.get(self.mode_type, self.mode_type)
+
+        embed = discord.Embed(
+            title="✅ อัปเดตสถานะเว็บสำเร็จ",
+            description=f"**สถานะใหม่:** {result_label}\n**ดำเนินการโดย:** {interaction.user.mention}",
+            color=discord.Color.green() if self.mode_type == "off" else discord.Color.red()
+        )
+        embed.set_footer(text="K-School Platform | KK Studio Group")
+        await interaction.response.send_message(embed=embed)
+
+
+# View ปุ่มควบคุม Maintenance (ปุ่มเปิด + ปุ่มปิดแต่ละโหมด)
+class AdminControlView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=120)
+
+    @discord.ui.button(label="✅ เปิดเว็บปกติ", style=discord.ButtonStyle.success, row=0)
+    async def btn_open(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(MaintenanceModeModal("off", "off", "เปิดเว็บปกติ"))
+
+    @discord.ui.button(label="🏗️ กำลังแก้ไขเว็บ", style=discord.ButtonStyle.danger, row=0)
+    async def btn_maintenance(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(MaintenanceModeModal("on", "maintenance", "กำลังแก้ไขเว็บ"))
+
+    @discord.ui.button(label="🚀 กำลังอัปเดต", style=discord.ButtonStyle.danger, row=1)
+    async def btn_updating(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(MaintenanceModeModal("on", "updating", "กำลังอัปเดตระบบ"))
+
+    @discord.ui.button(label="🧪 กำลังทดสอบ", style=discord.ButtonStyle.secondary, row=1)
+    async def btn_testing(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(MaintenanceModeModal("on", "testing", "ทดสอบระบบ BETA"))
+
+    @discord.ui.button(label="🔒 ปิดชั่วคราว", style=discord.ButtonStyle.danger, row=2)
+    async def btn_disabled(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(MaintenanceModeModal("on", "disabled", "ปิดระบบชั่วคราว"))
+
+    @discord.ui.button(label="🚫 IP Error 404", style=discord.ButtonStyle.danger, row=2)
+    async def btn_ip_error(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(MaintenanceModeModal("on", "ip_error", "ERROR 404 IP Unassigned"))
+
+
+@bot.tree.command(name="admin", description="🛡️ ควบคุมสถานะเว็บ K-School (เจ้าของเว็บเท่านั้น)")
+async def slash_admin(interaction: discord.Interaction):
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT is_active, mode_type FROM maintenance_settings WHERE id = 1")
+    res = cursor.fetchone()
+    conn.close()
+    
+    is_active = res[0] if res else 0
+    mode_type = res[1] if res else "off"
+    
+    mode_labels = {
+        "off": "🟢 เปิดออนไลน์ปกติ",
+        "maintenance": "🏗️ กำลังแก้ไขเว็บไซต์",
+        "updating": "🚀 กำลังอัปเดตระบบ",
+        "testing": "🧪 กำลังทดสอบ (BETA)",
+        "disabled": "🔒 ปิดชั่วคราว",
+        "ip_error": "🚫 ERROR 404 — IP Unassigned"
+    }
+    current_label = mode_labels.get(mode_type, mode_type)
+
+    embed = discord.Embed(
+        title="🛡️ K-School — แผงบริหารจัดการระบบ (Administrative Console)",
+        description=(
+            f"**สถานะปัจจุบัน:** {current_label}\n\n"
+            "กดปุ่มด้านล่างเพื่อเปลี่ยนสถานะเว็บ\n"
+            "⚠️ ระบบจะขอรหัส Admin ก่อนดำเนินการทุกครั้ง"
+        ),
+        color=discord.Color.green() if is_active == 0 else discord.Color.red()
+    )
+    embed.set_footer(text="K-School Platform | KK Studio Group")
+    await interaction.response.send_message(embed=embed, view=AdminControlView(), ephemeral=True)
+
+# ==========================================
+# 🔌 WEBSOCKETS REAL-TIME MANAGER (ระบบตอบสนองแบบเรียลไทม์)
+# ==========================================
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: list[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+
+    async def broadcast(self, message: str):
+        for connection in self.active_connections:
+            try:
+                await connection.send_text(message)
+            except Exception:
+                pass
+
+manager = ConnectionManager()
+
+@app.websocket("/ws/maintenance")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+
+@app.websocket("/ws/notify")
+async def websocket_notify_endpoint(websocket: WebSocket):
+    """🔔 ช่องทางแจ้งเตือนเรียลไทม์ทั่วไป (ใช้ manager ตัวเดียวกับ /ws/maintenance)
+    ทุกอีเวนต์ที่เกี่ยวกับนักเรียน/ครู (หักคะแนน คืนคะแนน ฯลฯ) จะยิงผ่านช่องนี้
+    ฝั่ง client จะกรองด้วยฟิลด์ type/target_uid/target_user เอง จึงเชื่อมสาย /ws/maintenance หรือ /ws/notify ก็ได้ผลเหมือนกัน"""
+    await manager.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+
+# ==========================================
+# 🎨 PREMIUM UI STYLE WITH LIVE WEBSOCKET SCRIPT
+# ==========================================
+STYLE_HEADER = """
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>K-School Platform | KK Studio Group</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Sarabun:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --navy-900: #020617;
+            --navy-800: #0f172a;
+            --navy-700: #1e293b;
+            --navy-600: #1e40af;
+            --gold: #d4af37;
+            --gold-light: #f2d879;
+            --surface: #ffffff;
+            --surface-muted: #f7f9fc;
+            --border: #e6eaf1;
+            --text: #0f172a;
+            --text-soft: #64748b;
+            --shadow-sm: 0 1px 2px rgba(15,23,42,0.04), 0 1px 3px rgba(15,23,42,0.06);
+            --shadow-md: 0 6px 16px -4px rgba(15,23,42,0.10), 0 3px 6px -3px rgba(15,23,42,0.06);
+            --shadow-lg: 0 20px 40px -12px rgba(15,23,42,0.18);
+            --radius: 16px;
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', 'Sarabun', sans-serif;
+            background:
+                radial-gradient(1200px 500px at 100% -10%, rgba(30,58,138,0.06), transparent),
+                radial-gradient(900px 400px at -10% 0%, rgba(212,175,55,0.05), transparent),
+                var(--surface-muted);
+            color: var(--text);
+            margin: 0; padding: 0;
+            -webkit-tap-highlight-color: transparent;
+            letter-spacing: 0.1px;
+        }
+
+        /* ─── NAVBAR ─── */
+        .navbar {
+            background: linear-gradient(120deg, var(--navy-900), var(--navy-700) 60%, #16213e);
+            color: white; padding: 14px 24px;
+            display: flex; justify-content: space-between; align-items: center;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.18);
+            border-bottom: 3px solid var(--gold);
+            position: sticky; top: 0; z-index: 40;
+        }
+        .navbar h1 {
+            margin: 0; font-size: 17.5px; font-weight: 700; letter-spacing: 0.3px;
+            color: #f8fafc; display: flex; align-items: center; gap: 10px;
+        }
+        .nav-logo { height: 34px; width: auto; object-fit: contain; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.35)); }
+
+        /* ─── APP HEADER ─── */
+        .app-header {
+            background: linear-gradient(150deg, var(--navy-600), var(--navy-900) 70%);
+            color: white; padding: 34px 20px 30px; text-align: center;
+            box-shadow: 0 8px 24px rgba(15,23,42,0.18);
+            border-bottom: 3px solid var(--gold);
+            position: relative; overflow: hidden;
+        }
+        .app-header::before {
+            content: ""; position: absolute; inset: 0;
+            background: radial-gradient(500px 200px at 50% -40%, rgba(212,175,55,0.25), transparent 70%);
+            pointer-events: none;
+        }
+        .header-logo { height: 78px; width: auto; margin-bottom: 14px; filter: drop-shadow(0 6px 12px rgba(0,0,0,0.35)); position: relative; }
+        .app-header h1 { margin: 0; font-size: 21px; font-weight: 800; letter-spacing: 0.8px; text-shadow: 0 2px 6px rgba(0,0,0,0.25); position: relative; }
+        .app-header p { margin: 7px 0 0 0; font-size: 13px; color: #bcd2fb; font-weight: 500; position: relative; }
+
+        .main-container { padding: 22px 16px 40px; max-width: 650px; margin: 0 auto; box-sizing: border-box; }
+
+        /* ─── CARDS ─── */
+        .card {
+            background: var(--surface); border-radius: var(--radius); padding: 24px;
+            box-shadow: var(--shadow-sm); margin-bottom: 22px;
+            border: 1px solid var(--border);
+            transition: box-shadow 0.25s ease, transform 0.25s ease;
+        }
+        .card h2 {
+            margin-top: 0; font-size: 15.5px; color: var(--navy-800); font-weight: 700;
+            border-bottom: 2px solid var(--surface-muted); padding-bottom: 13px; margin-bottom: 18px;
+            display: flex; align-items: center; gap: 8px;
+        }
+
+        /* ─── MENU GRID ─── */
+        .menu-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-bottom: 24px; }
+        .menu-btn {
+            background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+            padding: 22px 12px; text-align: center; text-decoration: none; color: var(--navy-800);
+            box-shadow: var(--shadow-sm);
+            display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px;
+            transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+            border-bottom: 3px solid var(--border);
+        }
+        .menu-btn:active { transform: translateY(2px) scale(0.98); border-bottom-width: 1px; background-color: var(--surface-muted); }
+        @media (hover: hover) {
+            .menu-btn:hover { transform: translateY(-3px); box-shadow: var(--shadow-md); border-color: var(--gold); }
+        }
+        .menu-btn .icon { font-size: 27px; filter: drop-shadow(0 2px 3px rgba(0,0,0,0.08)); }
+        .menu-btn .title { font-size: 13.5px; font-weight: 700; color: var(--navy-700); }
+
+        /* ─── TABLE ─── */
+        table { width: 100%; border-collapse: separate; border-spacing: 0; margin-top: 10px; background: var(--surface); border-radius: 12px; overflow: hidden; box-shadow: var(--shadow-sm); }
+        th, td { padding: 13px 10px; text-align: center; border-bottom: 1px solid var(--border); font-size: 13.5px; }
+        th { background: linear-gradient(180deg, #f8fafc, #eef2f8); color: var(--navy-700); font-weight: 700; letter-spacing: 0.2px; }
+        tbody tr:nth-child(even) { background: #fbfcfe; }
+        tbody tr:last-child td { border-bottom: none; }
+        @media (hover: hover) {
+            tbody tr:hover td { background: rgba(30,58,138,0.035); }
+        }
+
+        /* ─── BUTTONS ─── */
+        .btn {
+            padding: 9px 15px; font-size: 13px; font-weight: 700; border: none; border-radius: 8px;
+            cursor: pointer; text-decoration: none; display: inline-block; text-align: center;
+            transition: filter 0.15s ease, transform 0.15s ease; box-shadow: var(--shadow-sm);
+        }
+        .btn:active { transform: translateY(1px); }
+        @media (hover: hover) { .btn:hover { filter: brightness(1.07); } }
+        .btn-submit {
+            background: linear-gradient(135deg, var(--navy-600), var(--navy-900));
+            color: white; width: 100%; padding: 15px; font-size: 15px; margin-top: 5px;
+            box-sizing: border-box; font-weight: 700; border-radius: 10px; border: none; cursor: pointer;
+            border-bottom: 3px solid var(--navy-900); box-shadow: 0 6px 16px -4px rgba(30,58,138,0.35);
+            letter-spacing: 0.3px;
+        }
+        .btn-submit:active { transform: translateY(2px); border-bottom-width: 1px; box-shadow: 0 2px 6px rgba(30,58,138,0.25); }
+        @media (hover: hover) { .btn-submit:hover { filter: brightness(1.08); } }
+        .btn-danger { background: linear-gradient(135deg, #ef4444, #dc2626); color: white; }
+        .btn-warning { background: linear-gradient(135deg, #f59e0b, #d97706); color: white; }
+        .btn-secondary { background: linear-gradient(135deg, #64748b, #475569); color: white; }
+
+        /* ─── FORM CONTROLS ─── */
+        input[type="text"], input[type="password"], input[type="date"], select {
+            width: 100%; padding: 12.5px 14px; border: 1.5px solid var(--border); border-radius: 10px;
+            box-sizing: border-box; margin-bottom: 14px; font-family: 'Inter', 'Sarabun', sans-serif;
+            font-size: 14px; background-color: #fff; color: var(--navy-800);
+            transition: border-color 0.18s ease, box-shadow 0.18s ease;
+        }
+        input[type="text"]:focus, input[type="password"]:focus, input[type="date"]:focus, select:focus {
+            outline: none; border-color: var(--navy-600); box-shadow: 0 0 0 4px rgba(30,58,138,0.12);
+        }
+
+        .checkbox-container { display: flex; align-items: center; gap: 12px; padding: 12px 10px; border-bottom: 1px solid var(--border); text-align: left; }
+        .checkbox-container input[type="checkbox"] { display: block; width: 18px; height: 18px; margin: 0; cursor: pointer; accent-color: var(--navy-600); }
+        .badge {
+            background: linear-gradient(135deg, #ecfdf5, #f0fdf4); color: #166534; padding: 3px 9px;
+            border-radius: 20px; font-size: 11.5px; font-weight: 700; border: 1px solid #bbf7d0;
+        }
+
+        /* ─── STATUS SELECTOR ─── */
+        .status-group { display: flex; gap: 4px; border: 1px solid var(--border); padding: 3px; border-radius: 12px; background-color: var(--surface-muted); }
+        .status-label { flex: 1; text-align: center; font-size: 12.5px; font-weight: 700; padding: 9px 12px; border-radius: 9px; cursor: pointer; transition: all 0.15s; color: var(--text-soft); border: 1px solid transparent; }
+        .status-group input[type="radio"] { display: none; }
+
+        .status-group input[type="radio"][value="มา"]:checked + .status-label { background: linear-gradient(135deg, #10b981, #059669); color: white; box-shadow: 0 3px 8px rgba(16,185,129,0.35); }
+        .status-group input[type="radio"][value="สาย"]:checked + .status-label { background: linear-gradient(135deg, #f59e0b, #d97706); color: white; box-shadow: 0 3px 8px rgba(245,158,11,0.35); }
+        .status-group input[type="radio"][value="ลา"]:checked + .status-label { background: linear-gradient(135deg, #3b82f6, #2563eb); color: white; box-shadow: 0 3px 8px rgba(59,130,246,0.35); }
+        .status-group input[type="radio"][value="ขาด"]:checked + .status-label { background: linear-gradient(135deg, #ef4444, #dc2626); color: white; box-shadow: 0 3px 8px rgba(239,68,68,0.35); }
+
+        /* ─── CUSTOM ALERT UI ─── */
+        .smart-alert-overlay { position: fixed; inset: 0; background: rgba(11,17,32,0.65); backdrop-filter: blur(6px); display: flex; align-items: center; justify-content: center; z-index: 9999; opacity: 0; visibility: hidden; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+        .smart-alert-overlay.active { opacity: 1; visibility: visible; }
+        .smart-alert-card { background: var(--surface); width: 90%; max-width: 400px; border-radius: 22px; padding: 34px 26px; text-align: center; box-shadow: var(--shadow-lg); transform: scale(0.9); transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); border: 1px solid var(--border); }
+        .smart-alert-overlay.active .smart-alert-card { transform: scale(1); }
+        .smart-alert-icon { width: 66px; height: 66px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 32px; margin: 0 auto 20px; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.03); }
+        .smart-alert-title { font-size: 20px; font-weight: 800; color: var(--navy-800); margin-bottom: 8px; }
+        .smart-alert-msg { font-size: 14.5px; color: var(--text-soft); line-height: 1.65; margin-bottom: 24px; }
+        .smart-alert-btn { background: linear-gradient(135deg, var(--navy-600), var(--navy-900)); color: white; border: none; padding: 12px 34px; border-radius: 12px; font-weight: 700; font-size: 15px; cursor: pointer; transition: all 0.2s; box-shadow: 0 6px 14px rgba(30, 58, 138, 0.28); }
+        .smart-alert-btn:active { transform: translateY(2px); box-shadow: none; }
+
+        /* Alert Types */
+        .alert-success .smart-alert-icon { background: #f0fdf4; color: #10b981; }
+        .alert-error .smart-alert-icon { background: #fef2f2; color: #ef4444; }
+        .alert-warning .smart-alert-icon { background: #fffbeb; color: #f59e0b; }
+        .alert-info .smart-alert-icon { background: #eff6ff; color: #3b82f6; }
+
+        /* ─── SCREEN LOCK OVERLAY ─── */
+        body.screen-locked { pointer-events: none; user-select: none; }
+        body.screen-locked #screenlock-overlay { pointer-events: all; }
+
+        #screenlock-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 99999;
+            background: rgba(11,17,32,0.96);
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+        }
+        #screenlock-overlay.active { display: flex; }
+        #screenlock-box {
+            background: var(--surface);
+            border-radius: 22px;
+            padding: 38px 28px;
+            width: 90%;
+            max-width: 360px;
+            text-align: center;
+            box-shadow: 0 30px 60px rgba(0,0,0,0.55);
+            animation: lockPop 0.35s cubic-bezier(0.34,1.56,0.64,1);
+            pointer-events: all;
+            border: 1px solid rgba(212,175,55,0.25);
+        }
+        @keyframes lockPop { from { transform: scale(0.85); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+        #screenlock-box .lock-icon { font-size: 52px; margin-bottom: 12px; }
+        #screenlock-box h2 { margin: 0 0 4px; font-size: 20px; font-weight: 800; color: var(--navy-800); }
+        #screenlock-box p { margin: 0 0 20px; font-size: 13.5px; color: var(--text-soft); }
+        #screenlock-input {
+            width: 100%;
+            padding: 13px;
+            border: 2px solid var(--border);
+            border-radius: 12px;
+            font-size: 16px;
+            font-family: 'Inter', 'Sarabun', sans-serif;
+            box-sizing: border-box;
+            margin-bottom: 14px;
+            text-align: center;
+            letter-spacing: 3px;
+            transition: border 0.2s, box-shadow 0.2s;
+            pointer-events: all;
+            user-select: text;
+        }
+        #screenlock-input:focus { outline: none; border-color: var(--navy-600); box-shadow: 0 0 0 4px rgba(30,58,138,0.15); }
+        #screenlock-input.shake {
+            animation: shake 0.4s ease;
+            border-color: #ef4444;
+        }
+        @keyframes shake {
+            0%,100% { transform: translateX(0); }
+            20% { transform: translateX(-8px); }
+            40% { transform: translateX(8px); }
+            60% { transform: translateX(-6px); }
+            80% { transform: translateX(6px); }
+        }
+        #screenlock-btn {
+            width: 100%;
+            padding: 13px;
+            background: linear-gradient(135deg, var(--navy-600), var(--navy-900));
+            color: white;
+            border: none;
+            border-radius: 12px;
+            font-size: 15px;
+            font-weight: 700;
+            font-family: 'Inter', 'Sarabun', sans-serif;
+            cursor: pointer;
+            border-bottom: 3px solid var(--navy-900);
+            pointer-events: all;
+            box-shadow: 0 6px 16px -4px rgba(30,58,138,0.35);
+        }
+        #screenlock-btn:active { transform: translateY(2px); border-bottom-width: 1px; }
+        #screenlock-error { color: #ef4444; font-size: 13px; margin-top: 10px; min-height: 18px; font-weight: 600; }
+        #btn-lock-screen {
+            background: linear-gradient(135deg, #1e293b, #0f172a);
+            color: var(--gold-light);
+            border: none;
+            border-radius: 8px;
+            padding: 7px 14px;
+            font-size: 13px;
+            font-weight: 700;
+            font-family: 'Inter', 'Sarabun', sans-serif;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            border-bottom: 2px solid #0f172a;
+            transition: filter 0.2s;
+        }
+        #btn-lock-screen:active { transform: translateY(1px); border-bottom-width: 1px; }
+        @keyframes toastIn { from { opacity:0; transform:translateX(-50%) translateY(12px); } to { opacity:1; transform:translateX(-50%) translateY(0); } }
+
+        /* ─── SCROLLBAR POLISH (desktop) ─── */
+        ::-webkit-scrollbar { width: 10px; height: 10px; }
+        ::-webkit-scrollbar-track { background: var(--surface-muted); }
+        ::-webkit-scrollbar-thumb { background: #c7d0dd; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: #aab4c4; }
+    </style>
+    
+    <script>
+        // 🎨 CUSTOM ALERT SYSTEM BY KK STUDIO
+        function smartAlert(options) {
+            const { title, message, type = 'success', callback = null } = options;
+            const overlay = document.createElement('div');
+            overlay.className = `smart-alert-overlay alert-${type}`;
+            
+            const icons = { success: '✅', error: '❌', warning: '⚠️', info: 'ℹ️' };
+            
+            overlay.innerHTML = `
+                <div class="smart-alert-card">
+                    <div class="smart-alert-icon">${icons[type]}</div>
+                    <div class="smart-alert-title">${title}</div>
+                    <div class="smart-alert-msg">${message}</div>
+                    <button class="smart-alert-btn">ตกลง</button>
+                </div>
+            `;
+            
+            document.body.appendChild(overlay);
+            setTimeout(() => overlay.classList.add('active'), 10);
+            
+            const closeBtn = overlay.querySelector('.smart-alert-btn');
+            closeBtn.onclick = () => {
+                overlay.classList.remove('active');
+                setTimeout(() => {
+                    overlay.remove();
+                    if (callback) callback();
+                }, 300);
+            };
+        }
+
+        // ⚡ ใช้ AudioContext ตัวเดียวซ้ำตลอด (ตัวเดิมสร้างใหม่ทุกคลิกแล้วไม่ปิด ทำให้เว็บหน่วง/ค้างเมื่อใช้ไปนานๆ)
+        let __sharedAudioCtx = null;
+        function getAudioCtx() {
+            if (!__sharedAudioCtx) {
+                try { __sharedAudioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+                catch (e) { return null; }
+            }
+            if (__sharedAudioCtx.state === 'suspended') { __sharedAudioCtx.resume(); }
+            return __sharedAudioCtx;
+        }
+        function playClickSound() {
+            try {
+                const audioCtx = getAudioCtx();
+                if (!audioCtx) return;
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+                oscillator.type = 'sine';
+                oscillator.frequency.setValueAtTime(1800, audioCtx.currentTime); 
+                oscillator.frequency.exponentialRampToValueAtTime(800, audioCtx.currentTime + 0.03);
+                gainNode.gain.setValueAtTime(0.08, audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.03); 
+                oscillator.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+                oscillator.start(); oscillator.stop(audioCtx.currentTime + 0.03);
+                oscillator.onended = () => { oscillator.disconnect(); gainNode.disconnect(); };
+            } catch (e) { console.log(e); }
+        }
+
+        // 📡 ระบบ WebSockets เรียลไทม์ (กดเปลี่ยนโหมดปุ๊บ ดีดหน้าจออาจารย์ทันทีทุกคน)
+        let lsReconnectDelay = 1000;
+        function initLiveSocket() {
+            if (window.location.pathname.startsWith("/admin")) return; 
+
+            const protocol = window.location.protocol === "https:" ? "wss://" : "ws://";
+            const wsUrl = protocol + window.location.host + "/ws/maintenance";
+            const ws = new WebSocket(wsUrl);
+
+            ws.onopen = function() {
+                lsReconnectDelay = 1000; // เชื่อมต่อสำเร็จ รีเซ็ตดีเลย์กลับเป็นค่าเริ่มต้น
+            };
+
+            ws.onmessage = function(event) {
+                if (event.data === "STATUS_CHANGED") {
+                    fetch('/api/check_maintenance_status')
+                        .then(response => response.json())
+                        .then(data => {
+                            if (data.is_active === 1) {
+                                if (!window.location.pathname.includes("/login")) {
+                                    window.location.href = "/login"; 
+                                } else {
+                                    window.location.reload();
+                                }
+                            } else {
+                                if (document.getElementById("maintenance-screen")) {
+                                    window.location.href = "/login"; 
+                                }
+                            }
+                        }).catch(err => console.log(err));
+                }
+            };
+
+            ws.onclose = function() {
+                // Exponential backoff (สูงสุด 30 วินาที) กันไม่ให้ยิง reconnect ถี่เกินไปตอนเน็ต/tunnel ไม่เสถียร
+                setTimeout(initLiveSocket, lsReconnectDelay);
+                lsReconnectDelay = Math.min(lsReconnectDelay * 1.7, 30000);
+            };
+        }
+
+        document.addEventListener("DOMContentLoaded", function() {
+            initLiveSocket();
+            document.querySelectorAll("a, button, input[type='submit'], input[type='checkbox'], input[type='radio'], .status-label, select").forEach(function(item) {
+                item.addEventListener("click", playClickSound);
+            });
+
+            // ─── SCREEN LOCK SYSTEM ───
+            const lockHTML = `
+                <div id="screenlock-overlay">
+                    <div id="screenlock-box">
+                        <div class="lock-icon">🔐</div>
+                        <h2>หน้าจอถูกล็อก</h2>
+                        <p>ใส่รหัสผ่าน Admin เพื่อใช้งานต่อ</p>
+                        <input id="screenlock-input" type="password" placeholder="รหัสผ่าน" autocomplete="off" />
+                        <button id="screenlock-btn" onclick="unlockScreen()">🔓 ปลดล็อก</button>
+                        <div id="screenlock-error"></div>
+                    </div>
+                </div>
+            `;
+            document.body.insertAdjacentHTML('beforeend', lockHTML);
+
+            // วางปุ่มล็อกข้างๆ ปุ่ม logout (a.btn ตัวสุดท้ายใน navbar)
+            const navbar = document.querySelector('.navbar');
+            if (navbar && window.location.pathname.startsWith('/admin')) {
+                const lockBtn = document.createElement('button');
+                lockBtn.id = 'btn-lock-screen';
+                lockBtn.innerHTML = '🔒 ล็อกหน้าจอ';
+                lockBtn.onclick = lockScreen;
+                const navBtns = navbar.querySelectorAll('a.btn');
+                const logoutBtn = navBtns[navBtns.length - 1]; // ปุ่มสุดท้าย = logout
+                if (logoutBtn) logoutBtn.insertAdjacentElement('beforebegin', lockBtn);
+                else navbar.appendChild(lockBtn);
+            }
+
+            // ── บล็อก ทุก event ขณะล็อก (capture phase = จับก่อน element ใดๆ) ──
+            const BLOCK_EVENTS = [
+                'click','mousedown','mouseup','touchstart','touchend',
+                'pointerdown','pointerup','keydown','keyup','keypress',
+                'submit','change','input','focus','contextmenu'
+            ];
+
+            function isInsideLockBox(target) {
+                const box = document.getElementById('screenlock-box');
+                return box && box.contains(target);
+            }
+
+            function isLocked() {
+                const overlay = document.getElementById('screenlock-overlay');
+                return overlay && overlay.classList.contains('active');
+            }
+
+            function showLockedToast() {
+                // ป้องกันขึ้นซ้ำ
+                if (document.getElementById('lock-toast')) return;
+                const toast = document.createElement('div');
+                toast.id = 'lock-toast';
+                toast.textContent = '⛔ คุณไม่มีสิทธิ์ใช้งานฟังก์ชันขณะนี้';
+                toast.style.cssText = [
+                    'position:fixed','bottom:32px','left:50%',
+                    'transform:translateX(-50%)','z-index:999999',
+                    'background:#0f172a','color:#fbbf24',
+                    'font-family:Sarabun,sans-serif','font-size:14px','font-weight:700',
+                    'padding:12px 24px','border-radius:12px',
+                    'box-shadow:0 8px 24px rgba(0,0,0,0.4)',
+                    'white-space:nowrap','pointer-events:none',
+                    'animation:toastIn 0.25s ease'
+                ].join(';');
+                document.body.appendChild(toast);
+                setTimeout(() => { toast.style.opacity='0'; toast.style.transition='opacity 0.3s'; }, 1400);
+                setTimeout(() => { if(toast.parentNode) toast.parentNode.removeChild(toast); }, 1700);
+            }
+
+            BLOCK_EVENTS.forEach(function(evtName) {
+                document.addEventListener(evtName, function(e) {
+                    if (!isLocked()) return;
+                    // อนุญาต: อยู่ใน lockbox หรือเป็น Enter ในช่อง input
+                    if (isInsideLockBox(e.target)) return;
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    // แสดง toast เฉพาะ event ที่ "กด" จริงๆ
+                    if (['click','mousedown','touchstart','pointerdown','keydown'].includes(evtName)) {
+                        showLockedToast();
+                    }
+                }, true);
+            });
+        });
+
+        function lockScreen() {
+            const overlay = document.getElementById('screenlock-overlay');
+            if (!overlay) return;
+            document.body.classList.add('screen-locked');
+            overlay.classList.add('active');
+            document.getElementById('screenlock-input').value = '';
+            document.getElementById('screenlock-error').textContent = '';
+            setTimeout(() => document.getElementById('screenlock-input').focus(), 150);
+        }
+
+        function unlockScreen() {
+            const input = document.getElementById('screenlock-input');
+            const errorEl = document.getElementById('screenlock-error');
+            fetch('/api/verify_admin_pass', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password: input.value })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.ok) {
+                    document.getElementById('screenlock-overlay').classList.remove('active');
+                    document.body.classList.remove('screen-locked');
+                    errorEl.textContent = '';
+                    input.value = '';
+                } else {
+                    input.classList.add('shake');
+                    input.value = '';
+                    errorEl.textContent = '❌ รหัสผ่านไม่ถูกต้อง';
+                    setTimeout(() => { input.classList.remove('shake'); input.focus(); }, 400);
+                }
+            })
+            .catch(() => { errorEl.textContent = '⚠️ เชื่อมต่อไม่ได้ ลองใหม่'; });
+        }
+    </script>
+</head>
+"""
+
+# ==========================================
+# 🛠️ HELPER FUNCTIONS
+# ==========================================
+
+def realtime_notify_script(my_id: str) -> str:
+    """🔴 สคริปต์แจ้งเตือนแบบเรียลไทม์ผ่าน WebSocket — เสียบไว้ในหน้าไหน พอมีเหตุการณ์เกี่ยวกับ my_id (uid นักเรียน)
+    เกิดขึ้น (เช่น ครูหักคะแนน/คืนคะแนน) จะยิงแจ้งเตือนจริงของเครื่อง (Notification API) ทันทีโดยไม่ต้องรีเฟรชหน้า
+    ถ้าเบราว์เซอร์/WebView ไม่รองรับหรือผู้ใช้ไม่ให้สิทธิ์ จะ fallback เป็น toast ในหน้าเว็บแทน
+    และอัปเดตตัวเลขคะแนนสดถ้ามี element ที่ใส่ attribute data-live-score ไว้ในหน้านั้น"""
+    return f"""
+    <script>
+    (function() {{
+        const MY_ID = {my_id!r};
+
+        // 🔔 ขอสิทธิ์แจ้งเตือนของเครื่องตั้งแต่โหลดหน้า (ต้องขอตอนมี user gesture บางเบราว์เซอร์ถึงจะติด แต่ลองไว้ก่อนเสมอ)
+        if (typeof Notification !== 'undefined' && Notification.permission === 'default') {{
+            try {{ Notification.requestPermission(); }} catch(e) {{}}
+        }}
+        // บาง WebView ต้องขอตอนมีการโต้ตอบจากผู้ใช้ก่อน — ขอซ้ำตอนแตะหน้าจอครั้งแรก เผื่อรอบแรกไม่ติด
+        document.addEventListener('click', function onFirstTap() {{
+            if (typeof Notification !== 'undefined' && Notification.permission === 'default') {{
+                try {{ Notification.requestPermission(); }} catch(e) {{}}
+            }}
+            document.removeEventListener('click', onFirstTap);
+        }}, {{ once: true }});
+
+        function showRealtimeToast(title, message, tone) {{
+            const colors = {{
+                success: {{bg:'#f0fdf4', border:'#bbf7d0', text:'#15803d', icon:'✅'}},
+                danger:  {{bg:'#fef2f2', border:'#fecaca', text:'#b91c1c', icon:'⚠️'}},
+                info:    {{bg:'#eff6ff', border:'#bfdbfe', text:'#1d4ed8', icon:'🔔'}}
+            }};
+            const c = colors[tone] || colors.info;
+            const toast = document.createElement('div');
+            toast.style.cssText = `position:fixed; top:calc(env(safe-area-inset-top,0px) + 12px); left:12px; right:12px; z-index:99999; background:${{c.bg}}; border:1.5px solid ${{c.border}}; color:${{c.text}}; border-radius:14px; padding:12px 14px; box-shadow:0 10px 30px -10px rgba(0,0,0,0.25); font-family:'Sarabun',sans-serif; transform:translateY(-140%); transition:transform .35s ease; display:flex; gap:10px; align-items:flex-start;`;
+            toast.innerHTML = `<span style="font-size:20px;">${{c.icon}}</span><div style="flex:1;min-width:0;"><div style="font-weight:800;font-size:13.5px;">${{title}}</div><div style="font-size:12.5px;margin-top:2px;">${{message}}</div></div><span style="cursor:pointer;font-weight:800;padding:0 4px;" onclick="this.parentElement.remove()">✕</span>`;
+            document.body.appendChild(toast);
+            requestAnimationFrame(() => {{ toast.style.transform = 'translateY(0)'; }});
+            setTimeout(() => {{ toast.style.transform = 'translateY(-140%)'; setTimeout(() => toast.remove(), 400); }}, 6000);
+        }}
+
+        function fireNotification(title, message, tone) {{
+            if (navigator.vibrate) {{ try {{ navigator.vibrate(tone === 'danger' ? [80, 40, 80] : 60); }} catch(e) {{}} }}
+            // 📱 ถ้าเบราว์เซอร์/WebView รองรับ Notification API และได้รับสิทธิ์แล้ว → ยิงเป็นแจ้งเตือนจริงของเครื่อง
+            if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {{
+                try {{
+                    const n = new Notification(title, {{
+                        body: message,
+                        icon: {LOGO_URL!r},
+                        tag: 'kschool-' + Date.now(),
+                    }});
+                    n.onclick = function() {{ try {{ window.focus(); }} catch(e) {{}} n.close(); }};
+                }} catch(e) {{
+                    showRealtimeToast(title, message, tone);
+                }}
+            }} else {{
+                // ยังไม่ได้สิทธิ์/ไม่รองรับ → ใช้ toast ในหน้าเว็บแทนไปก่อน
+                showRealtimeToast(title, message, tone);
+            }}
+        }}
+
+        function connectRealtime() {{
+            const protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+            let ws;
+            try {{ ws = new WebSocket(protocol + window.location.host + '/ws/notify'); }} catch(e) {{ return; }}
+            ws.onmessage = function(event) {{
+                let data;
+                try {{ data = JSON.parse(event.data); }} catch(e) {{ return; }}
+                if (data.type !== 'student_notify') return;
+                const isForMe = data.broadcast_all === true
+                    || (Array.isArray(data.target_uids) && data.target_uids.includes(MY_ID))
+                    || (data.target_uid !== undefined && data.target_uid === MY_ID);
+                if (!isForMe) return;
+                fireNotification(data.title, data.message, data.tone || 'info');
+                if (data.score_now !== undefined) {{
+                    document.querySelectorAll('[data-live-score]').forEach(el => {{ el.textContent = data.score_now; }});
+                }}
+            }};
+            ws.onclose = function() {{ setTimeout(connectRealtime, 3000); }};
+            ws.onerror = function() {{ try {{ ws.close(); }} catch(e) {{}} }};
+        }}
+        connectRealtime();
+    }})();
+    </script>
+    """
+
+async def push_student_notify(title: str, message: str, tone: str = "info",
+                               target_uids: Optional[list] = None, all_students: bool = False,
+                               score_now: Optional[int] = None):
+    """🔴 ส่งแจ้งเตือนเรียลไทม์ผ่าน WebSocket ไปยังนักเรียน
+    - target_uids: ส่งเฉพาะรายชื่อ uid ที่ระบุ (เช่น นักเรียนในกลุ่มวิชาที่ได้รับการบ้านใหม่)
+    - all_students: True = กระจายให้นักเรียนทุกคนเห็น (เช่น ประกาศใหม่)
+    ฝั่ง client (realtime_notify_script) จะกรองเองว่าใครควรเห็นข้อความนี้"""
+    import json as _json
+    payload = {"type": "student_notify", "title": title, "message": message, "tone": tone}
+    if all_students:
+        payload["broadcast_all"] = True
+    if target_uids:
+        payload["target_uids"] = list(target_uids)
+    if score_now is not None:
+        payload["score_now"] = score_now
+    await manager.broadcast(_json.dumps(payload))
+
+def find_student_uid(name: str, no: str, classroom: str) -> Optional[str]:
+    """🔎 หา uid ของนักเรียนจากชื่อ+เลขที่+ห้อง — ใช้กับตารางเก่า (เช่น leave_requests) ที่ยังไม่ได้ผูก uid ตรงๆ"""
+    for s in get_sorted_master_students():
+        if s['name'] == name and s['no'] == no and s['class'] == classroom:
+            return s['uid']
+    return None
+
+# 🔔 ใช้แทน "<script>alert(...); redirect</script>" ทั้งหมด — แสดงเป็นหน้าแจ้งเตือนสไตล์แอปของเราเอง
+# (ไม่พึ่ง STYLE_HEADER เพื่อให้โหลดเร็วและใช้ได้แม้ตอบกลับ POST request แบบเดี่ยวๆ)
+def alert_redirect(message: str, type: str = "info", url: Optional[str] = None, title: Optional[str] = None):
+    icon = {"success": "✅", "error": "❌", "warning": "⚠️", "info": "ℹ️"}.get(type, "ℹ️")
+    bg, fg = {
+        "success": ("#f0fdf4", "#10b981"),
+        "error": ("#fef2f2", "#ef4444"),
+        "warning": ("#fffbeb", "#f59e0b"),
+        "info": ("#eff6ff", "#3b82f6"),
+    }.get(type, ("#eff6ff", "#3b82f6"))
+    if not title:
+        title = {"success": "สำเร็จ", "error": "เกิดข้อผิดพลาด", "warning": "โปรดตรวจสอบ", "info": "แจ้งให้ทราบ"}.get(type, "แจ้งให้ทราบ")
+    action_js = f"window.location.href='{url}';" if url else "history.back();"
+    return HTMLResponse(f"""<!DOCTYPE html><html><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>K-School</title>
+<style>
+    * {{ box-sizing: border-box; }}
+    body {{
+        margin: 0; font-family: 'Inter', 'Sarabun', -apple-system, sans-serif;
+        background: rgba(11,17,32,0.68);
+        min-height: 100vh; min-height: 100dvh;
+        display: flex; align-items: center; justify-content: center; padding: 20px;
+    }}
+    .ar-card {{
+        background: #fff; width: 100%; max-width: 360px; border-radius: 22px;
+        padding: 32px 24px; text-align: center;
+        box-shadow: 0 20px 40px -12px rgba(15,23,42,0.4);
+        animation: arPop 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }}
+    @keyframes arPop {{ from {{ transform: scale(0.9); opacity: 0; }} to {{ transform: scale(1); opacity: 1; }} }}
+    .ar-icon {{
+        width: 62px; height: 62px; border-radius: 50%;
+        background: {bg}; color: {fg}; font-size: 30px;
+        display: flex; align-items: center; justify-content: center; margin: 0 auto 18px;
+    }}
+    .ar-card h2 {{ margin: 0 0 8px; font-size: 19px; font-weight: 800; color: #0f172a; }}
+    .ar-card p {{ margin: 0 0 22px; font-size: 14px; color: #64748b; line-height: 1.65; }}
+    .ar-card button {{
+        background: linear-gradient(135deg, #1e40af, #0f172a); color: #fff; border: none;
+        padding: 13px 32px; border-radius: 12px; font-weight: 700; font-size: 14.5px;
+        cursor: pointer; width: 100%;
+    }}
+    .ar-card button:active {{ transform: scale(0.98); }}
+</style></head>
+<body>
+    <div class="ar-card">
+        <div class="ar-icon">{icon}</div>
+        <h2>{title}</h2>
+        <p>{message}</p>
+        <button onclick="{action_js}">ตกลง</button>
+    </div>
+</body></html>""")
+
+def get_maintenance_status():
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT is_active, mode_type FROM maintenance_settings WHERE id = 1")
+    res = cursor.fetchone()
+    conn.close()
+    if res: return {"is_active": res[0], "mode_type": res[1]}
+    return {"is_active": 0, "mode_type": "off"}
+
+def generate_maintenance_html(mode_type: str):
+    config = {
+        "maintenance": {"icon": "🏗️", "title": "ระบบกำลังปรับปรุงแก้ไขเว็บไซต์", "desc": "เจ้าของเว็บกำลังเซ็ตติ้งปรับระบบหลังบ้านชั่วคราว กรุณากลับมาใหม่อีกครั้ง"},
+        "updating": {"icon": "🚀", "title": "กำลังอัปเดตระบบเวอร์ชันใหม่", "desc": "กำลังโหลดเพิ่มฟีเจอร์และเพิ่มความเสถียรให้เจ๋งขึ้นกว่าเดิม อดใจรอสักครู่!"},
+        "testing": {"icon": "🧪", "title": "กำลังอยู่ในช่วงทดสอบระบบ (BETA TESTING)", "desc": "ทีมพัฒนาซอฟต์แวร์กำลังจำลองทดลองเล่นระบบเพื่อหาจุดบั๊ก คลาสเรียนโปรดรอการอนุมัติ"},
+        "disabled": {"icon": "🔒", "title": "ระบบนี้ถูกปิดใช้งานชั่วคราว", "desc": "ขณะนี้ทางแอดมินกลางได้สั่งแช่แข็งปิดรับรายงานชั่วคราว ติดต่อเจ้าของเว็บเพื่อสอบถามข้อมูล"},
+        "ip_error": {"icon": "🚫", "title": "ไม่มีการจัดสรร IP — ERROR 404", "desc": "IP Address Gateway Unassigned. ไม่สามารถเชื่อมโยงเซิร์ฟเวอร์ปลายทางระบบ K-School ได้ในขณะนี้"}
+    }
+    c = config.get(mode_type, config["maintenance"])
+    
+    bg_color = "#1e293b"
+    if mode_type == "updating": bg_color = "#1e3a8a"
+    elif mode_type == "testing": bg_color = "#6d28d9"
+    elif mode_type == "disabled": bg_color = "#475569"
+    elif mode_type == "ip_error": bg_color = "#b91c1c"
+
+    return f"""
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>{c['title']}</title>
+        <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+        <style>
+            body {{ font-family: 'Inter', 'Sarabun', sans-serif; background-color: {bg_color}; color: white; margin: 0; padding: 24px; display: flex; align-items: center; justify-content: center; height: 100vh; box-sizing: border-box; text-align: center; }}
+            .m-box {{ background: rgba(0, 0, 0, 0.25); border-radius: 20px; padding: 40px 30px; max-width: 480px; box-shadow: 0 20px 4px rgba(0,0,0,0.15); border: 1px solid rgba(255,255,255,0.1); backdrop-filter: blur(8px); }}
+            .icon {{ font-size: 75px; margin-bottom: 15px; animation: float 3s ease-in-out infinite; }}
+            h1 {{ font-size: 24px; font-weight: 700; margin: 0 0 12px 0; letter-spacing: 0.5px; }}
+            p {{ font-size: 15px; color: #cbd5e1; margin: 0 0 20px 0; line-height: 1.6; }}
+            .brand {{ font-size: 12px; font-weight: 700; color: #d4af37; letter-spacing: 1px; text-transform: uppercase; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 15px; }}
+            @keyframes float {{ 0%, 100% {{ transform: translateY(0); }} 50% {{ transform: translateY(-12px); }} }}
+        </style>
+        <script>
+            // หน้าซ่อมแซมก็เกาะท่อ WebSocket ไว้ พอกดเปิดปกติปุ๊บ ทุกคนก็จะเด้งวับกลับไปพร้อมกัน
+            const protocol = window.location.protocol === "https:" ? "wss://" : "ws://";
+            const ws = new WebSocket(protocol + window.location.host + "/ws/maintenance");
+            ws.onmessage = function(event) {{
+                if (event.data === "STATUS_CHANGED") {{
+                    fetch('/api/check_maintenance_status')
+                        .then(res => res.json())
+                        .then(data => {{
+                            if (data.is_active === 0) {{ window.location.href = "/login"; }}
+                        }});
+                }}
+            }};
+            ws.onclose = function() {{
+                setTimeout(() => {{ window.location.reload(); }}, 3000);
+            }};
+        </script>
+    </head>
+    <body id="maintenance-screen">
+        <div class="m-box">
+            <div class="icon">{c['icon']}</div>
+            <h1>{c['title']}</h1>
+            <p>{c['desc']}</p>
+            <div class="brand">Powered by KK Studio Group ⚡</div>
+        </div>
+    </body>
+    </html>
+    """
+
+def get_sorted_master_students():
+    students = []
+    if os.path.exists(TXT_DATABASE_PATH):
+        with open(TXT_DATABASE_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and "," in line:
+                    parts = line.split(",")
+                    if len(parts) >= 4:
+                        students.append({
+                            "name": parts[0].strip(),
+                            "no": parts[1].strip(),
+                            "class": parts[2].strip(),
+                            "branch": parts[3].strip(),
+                            "uid": f"{parts[0].strip()}_{parts[1].strip()}"
+                        })
+    def sorting_key(x):
+        try: num = int(x["no"])
+        except ValueError: num = 999
+        return (x["class"], num)
+    students.sort(key=sorting_key)
+    return students
+
+CONDUCT_START_SCORE = 100
+
+def get_grade_level(classroom: str) -> str:
+    """แยกระดับชั้นจากชื่อห้อง เช่น 'ม.2/2' -> 'ม.2' (ถ้าไม่มี '/' จะคืนค่าห้องเดิมทั้งหมด)"""
+    if "/" in classroom:
+        return classroom.split("/")[0].strip()
+    return classroom.strip()
+
+def get_conduct_summary(class_filter: Optional[str] = None) -> list:
+    """คืนรายชื่อนักเรียนทั้งหมดพร้อมคะแนนความประพฤติปัจจุบัน (เริ่มต้น 100 บวก/ลบตามประวัติ)"""
+    students = get_sorted_master_students()
+    if class_filter:
+        students = [s for s in students if s['class'] == class_filter]
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT student_uid, SUM(points), COUNT(*), MAX(created_at) FROM conduct_scores GROUP BY student_uid")
+    rows = {r[0]: {"total": r[1] or 0, "count": r[2], "last": r[3]} for r in cursor.fetchall()}
+    conn.close()
+    result = []
+    for s in students:
+        info = rows.get(s['uid'], {"total": 0, "count": 0, "last": None})
+        score = max(0, min(100, CONDUCT_START_SCORE + info["total"]))
+        result.append({**s, "score": score, "entry_count": info["count"], "last_change": info["last"]})
+    return result
+
+def get_conduct_history(uid: str) -> list:
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, points, reason, recorded_by, created_at FROM conduct_scores WHERE student_uid = ? ORDER BY created_at DESC, id DESC", (uid,))
+    rows = cursor.fetchall()
+    conn.close()
+    history = []
+    running = CONDUCT_START_SCORE
+    # คำนวณคะแนนสะสม ณ แต่ละจุดเวลา (จากเก่าไปใหม่) แล้วค่อยกลับลำดับให้ล่าสุดอยู่บน
+    totals = []
+    running = CONDUCT_START_SCORE
+    for entry_id, points, reason, recorded_by, created_at in reversed(rows):
+        running = max(0, min(100, running + points))
+        totals.append((entry_id, points, reason, recorded_by, created_at, running))
+    for entry_id, points, reason, recorded_by, created_at, running_total in reversed(totals):
+        history.append({
+            "id": entry_id, "points": points, "reason": reason, "recorded_by": recorded_by,
+            "created_at": created_at, "running_total": running_total
+        })
+    return history
+
+# ==========================================
+# 🔐 ระบบสิทธิ์การเข้าถึงแยกตามบทบาท (RBAC)
+# ==========================================
+# บทบาทของครู: teacher (ครูผู้สอนทั่วไป) / level_head (หัวหน้าระดับ) / affairs (ฝ่ายกิจการนักเรียน)
+# admin คือเจ้าของระบบ (ผูกกับ ADMIN_USER/ADMIN_PASS เดิม ไม่ใช่ตาราง teachers)
+TEACHER_ROLES = {
+    "teacher":    {"label": "👩‍🏫 ครูผู้สอน",        "desc": "ดูแลเฉพาะคลาสเรียนของตนเอง"},
+    "level_head": {"label": "🎓 หัวหน้าระดับ",       "desc": "อนุมัติคำร้องลา/บันทึกความประพฤติ เฉพาะระดับชั้นที่รับผิดชอบ"},
+    "affairs":    {"label": "🛡️ ฝ่ายกิจการนักเรียน", "desc": "อนุมัติคำร้องลา/บันทึกความประพฤติ ได้ทุกระดับชั้นทั้งสถาบัน"},
+}
+
+def get_access(user_session: Optional[str]) -> dict:
+    """อ่านคุกกี้ session แล้วคืนค่าข้อมูลสิทธิ์การเข้าถึงของผู้ใช้งานปัจจุบัน"""
+    access = {"authenticated": False, "role": None, "username": None, "level_scope": "", "fullname": "", "role_label": ""}
+    if not user_session:
+        return access
+    if user_session == "admin":
+        access.update({"authenticated": True, "role": "admin", "username": "admin", "fullname": "ผู้ดูแลระบบ", "role_label": "👑 ผู้ดูแลระบบ"})
+        return access
+    if user_session.startswith("teacher_"):
+        username = urllib.parse.unquote(user_session.replace("teacher_", "", 1))
+        conn = sqlite3.connect('attendance_pro.db')
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT role, level_scope, fullname FROM teachers WHERE username=?", (username,))
+            row = cursor.fetchone()
+        finally:
+            conn.close()
+        if not row:
+            return access
+        role, level_scope, fullname = row
+        role = role or "teacher"
+        access.update({
+            "authenticated": True, "role": role, "username": username,
+            "level_scope": (level_scope or "").strip(), "fullname": fullname or username,
+            "role_label": TEACHER_ROLES.get(role, TEACHER_ROLES["teacher"])["label"]
+        })
+        return access
+    if user_session.startswith("student_"):
+        uid = urllib.parse.unquote(user_session.replace("student_", "", 1))
+        access.update({"authenticated": True, "role": "student", "username": uid, "role_label": "🎒 นักเรียน"})
+        return access
+    return access
+
+# ==========================================
+# 🧩 PERMISSION MATRIX — สิทธิ์แต่ละบทบาทที่แอดมินปรับได้เองผ่านหน้าเว็บ
+# ==========================================
+# กำหนดสิทธิ์ที่ตั้งค่าได้ + ค่าเริ่มต้น (ใช้ตอนยังไม่มี override ในตาราง role_permissions)
+PERMISSIONS = {
+    "manage_discipline":        {"label": "จัดการคำร้องลา / คะแนนความประพฤติ", "default_roles": ("admin", "affairs", "level_head")},
+    "manage_teacher_accounts":  {"label": "จัดการบัญชีครู",                    "default_roles": ("admin", "affairs", "level_head")},
+    "manage_student_profiles":  {"label": "จัดการโปรไฟล์นักเรียน",             "default_roles": ("admin", "affairs", "level_head")},
+    "view_analytics":           {"label": "ดูแดชบอร์ดสถิติขั้นสูง",            "default_roles": ("admin", "affairs", "level_head")},
+}
+# บทบาทที่ปรับสิทธิ์ผ่านตารางได้ (admin มีสิทธิ์ทุกอย่างเสมอ ไม่ต้องตั้งค่า)
+CONFIGURABLE_ROLES = ("teacher", "level_head", "affairs")
+
+def _load_permission_overrides() -> dict:
+    """อ่านค่าที่แอดมิน override ไว้ทั้งหมดจาก DB -> {(role, perm_key): 0/1}"""
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT role, perm_key, allowed FROM role_permissions")
+        rows = cursor.fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    conn.close()
+    return {(r[0], r[1]): r[2] for r in rows}
+
+def has_permission(access: dict, perm_key: str) -> bool:
+    """ตรวจสิทธิ์แบบ role-based: admin ผ่านเสมอ, บทบาทอื่นเช็คจากตาราง role_permissions ถ้ามี override ไม่งั้นใช้ค่า default_roles"""
+    role = access.get("role")
+    if role == "admin":
+        return True
+    if not role:
+        return False
+    meta = PERMISSIONS.get(perm_key)
+    if not meta:
+        return False
+    overrides = _load_permission_overrides()
+    key = (role, perm_key)
+    if key in overrides:
+        return bool(overrides[key])
+    return role in meta["default_roles"]
+
+def get_permission_matrix() -> dict:
+    """คืนตารางสิทธิ์ปัจจุบันทั้งหมด สำหรับแสดงในหน้า /admin/permissions -> {role: {perm_key: bool}}"""
+    overrides = _load_permission_overrides()
+    matrix = {}
+    for role in CONFIGURABLE_ROLES:
+        matrix[role] = {}
+        for perm_key, meta in PERMISSIONS.items():
+            key = (role, perm_key)
+            matrix[role][perm_key] = bool(overrides[key]) if key in overrides else (role in meta["default_roles"])
+    return matrix
+
+def can_manage_discipline(access: dict) -> bool:
+    """สิทธิ์จัดการคำร้องลา / คะแนนความประพฤติ (ปรับได้ที่ /admin/permissions)"""
+    return has_permission(access, "manage_discipline")
+
+def can_manage_teacher_accounts(access: dict) -> bool:
+    """สิทธิ์เปิดหน้าจัดการบัญชีครู (ปรับได้ที่ /admin/permissions)"""
+    return has_permission(access, "manage_teacher_accounts")
+
+def can_manage_student_profiles(access: dict) -> bool:
+    """สิทธิ์จัดการโปรไฟล์นักเรียน (ปรับได้ที่ /admin/permissions)"""
+    return has_permission(access, "manage_student_profiles")
+
+def can_view_analytics(access: dict) -> bool:
+    """สิทธิ์ดูแดชบอร์ดสถิติขั้นสูง (ปรับได้ที่ /admin/permissions)"""
+    return access.get("role") == "admin" or has_permission(access, "view_analytics")
+
+
+def verify_manager_password(access: dict, password: str) -> bool:
+    """ยืนยันรหัสผ่านก่อนแก้ไข/ลบบัญชีครู: admin ใช้รหัส Admin กลาง ส่วนหัวหน้าระดับ/ฝ่ายกิจการ ใช้รหัสผ่านบัญชีตัวเอง"""
+    if access.get("role") == "admin":
+        return password == ADMIN_PASS
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT password FROM teachers WHERE username = ?", (access.get("username"),))
+    row = cursor.fetchone()
+    conn.close()
+    return bool(row) and password == row[0]
+
+def in_discipline_scope(access: dict, classroom: str) -> bool:
+    """ตรวจว่าห้องเรียน classroom อยู่ในขอบเขตที่บทบาทนี้มีสิทธิ์เข้าถึงหรือไม่"""
+    role = access.get("role")
+    if role in ("admin", "affairs"):
+        return True
+    if role == "level_head":
+        return get_grade_level(classroom) == access.get("level_scope", "")
+    return False
+
+def require_discipline_access(user_session: Optional[str]):
+    """ใช้ต้นทางฟังก์ชัน route: คืน (access, redirect_or_None) — ถ้า redirect ไม่ใช่ None ให้ return ค่านั้นออกไปทันที"""
+    access = get_access(user_session)
+    if not access["authenticated"] or not can_manage_discipline(access):
+        return access, RedirectResponse(url="/login", status_code=303)
+    return access, None
+
+# ==========================================
+# 📡 LIVE API STATUS CHECK FOR FRONTEND
+# ==========================================
+@app.get("/api/check_maintenance_status")
+async def api_check_maintenance_status():
+    return JSONResponse(content=get_maintenance_status())
+
+@app.post("/api/verify_admin_pass")
+async def api_verify_admin_pass(request: Request, user_session: Optional[str] = Cookie(None)):
+    """ตรวจรหัสผ่านสำหรับระบบล็อกหน้าจอ — ต้อง login แล้วเท่านั้น"""
+    if user_session != "admin":
+        return JSONResponse({"ok": False}, status_code=401)
+    try:
+        body = await request.json()
+        password = body.get("password", "")
+    except Exception:
+        return JSONResponse({"ok": False}, status_code=400)
+    return JSONResponse({"ok": password == ADMIN_PASS})
+
+# ==========================================
+# 📜 ข้อกำหนดและเงื่อนไข / นโยบายความเป็นส่วนตัว
+# ==========================================
+def legal_page(icon: str, title: str, subtitle: str, sections: list) -> str:
+    body_html = ""
+    for h, p in sections:
+        body_html += f'<h2>{h}</h2><p>{p}</p>'
+    return f"""
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>{title} | K-School</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Sarabun:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        * {{ margin:0; padding:0; box-sizing:border-box; }}
+        body {{ font-family:'Sarabun',sans-serif; background:#f8fafc; color:#1e293b; }}
+        .lg-top {{ background:linear-gradient(135deg,#1e3a8a,#0f172a); color:#fff; padding:calc(env(safe-area-inset-top,0px) + 20px) 20px 22px; border-bottom:3px solid #d4af37; }}
+        .lg-top h1 {{ font-size:18px; font-weight:800; display:flex; align-items:center; gap:8px; }}
+        .lg-top p {{ font-size:12.5px; opacity:0.75; margin-top:4px; }}
+        .lg-body {{ max-width:640px; margin:0 auto; padding:22px 18px calc(env(safe-area-inset-bottom,0px) + 30px); }}
+        .lg-body h2 {{ font-size:15px; font-weight:800; color:#0f172a; margin:22px 0 8px; }}
+        .lg-body h2:first-child {{ margin-top:0; }}
+        .lg-body p {{ font-size:13.5px; line-height:1.8; color:#475569; }}
+        .lg-back {{ display:inline-flex; align-items:center; gap:6px; color:#d4af37; text-decoration:none; font-size:13px; font-weight:700; margin-top:26px; }}
+    </style>
+</head>
+<body>
+    <div class="lg-top">
+        <h1>{icon} {title}</h1>
+        <p>{subtitle}</p>
+    </div>
+    <div class="lg-body">
+        {body_html}
+        <a href="javascript:void(0)" onclick="history.back()" class="lg-back">← ย้อนกลับ</a>
+    </div>
+</body>
+</html>
+"""
+
+@app.get("/terms", response_class=HTMLResponse)
+async def terms_page():
+    return legal_page(
+        "📜", "ข้อกำหนดและเงื่อนไขการใช้งาน", "K-School Enterprise — ระบบบริหารจัดการเวลาเรียนระดับองค์กร",
+        [
+            ("1. การใช้งานระบบ", "ระบบนี้จัดทำขึ้นเพื่อใช้ในการบันทึกและบริหารจัดการเวลาเรียนของนักเรียนภายในสถาบันเท่านั้น ผู้ใช้งานต้องเป็นบุคลากร ครู หรือผู้ที่ได้รับสิทธิ์จากสถาบันเท่านั้น"),
+            ("2. บัญชีผู้ใช้งาน", "ผู้ใช้งานมีหน้าที่รักษาความปลอดภัยของชื่อผู้ใช้และรหัสผ่านของตนเอง และรับผิดชอบต่อกิจกรรมทั้งหมดที่เกิดขึ้นภายใต้บัญชีของตน"),
+            ("3. ความถูกต้องของข้อมูล", "ผู้ใช้งานต้องกรอกและบันทึกข้อมูลด้วยความสุจริตและถูกต้องตามความเป็นจริง ห้ามบันทึกข้อมูลอันเป็นเท็จหรือแก้ไขข้อมูลโดยไม่ได้รับอนุญาต"),
+            ("4. การเปลี่ยนแปลงเงื่อนไข", "สถาบันขอสงวนสิทธิ์ในการปรับปรุงหรือเปลี่ยนแปลงข้อกำหนดนี้ได้ตามความเหมาะสม โดยจะแจ้งให้ผู้ใช้งานทราบผ่านระบบ"),
+        ]
+    )
+
+@app.get("/privacy", response_class=HTMLResponse)
+async def privacy_page():
+    return legal_page(
+        "🔒", "นโยบายความเป็นส่วนตัว", "เราให้ความสำคัญกับความปลอดภัยของข้อมูลนักเรียนและบุคลากร",
+        [
+            ("1. ข้อมูลที่จัดเก็บ", "ระบบจัดเก็บข้อมูลเท่าที่จำเป็นต่อการบริหารจัดการเวลาเรียน ได้แก่ ชื่อ-นามสกุล เลขที่ ชั้นเรียน สถานะการเข้าเรียน และข้อมูลบัญชีผู้ใช้งาน"),
+            ("2. วัตถุประสงค์การใช้ข้อมูล", "ข้อมูลจะถูกใช้เพื่อการเช็กชื่อ ติดตามสถิติการเข้าเรียน และการบริหารจัดการภายในสถาบันเท่านั้น จะไม่ถูกนำไปใช้เพื่อวัตถุประสงค์ทางการค้า"),
+            ("3. การเข้าถึงข้อมูล", "เฉพาะครูและผู้ดูแลระบบที่ได้รับสิทธิ์เท่านั้นที่สามารถเข้าถึงข้อมูลได้ ระบบมีการควบคุมสิทธิ์การเข้าถึงตามบทบาทของผู้ใช้งาน"),
+            ("4. ความปลอดภัยของข้อมูล", "รหัสผ่านของผู้ใช้งานจะถูกเข้ารหัสก่อนจัดเก็บ และมีมาตรการป้องกันการเข้าถึงข้อมูลโดยไม่ได้รับอนุญาต"),
+            ("5. สิทธิ์ของเจ้าของข้อมูล", "ผู้ใช้งานสามารถติดต่อผู้ดูแลระบบเพื่อขอตรวจสอบหรือแก้ไขข้อมูลส่วนตัวของตนเองได้ตลอดเวลา"),
+        ]
+    )
+
+# ==========================================
+# 🌟 WHY CHOOSE US — LANDING PAGE
+# ==========================================
+@app.get("/why-us", response_class=HTMLResponse)
+async def why_us_page():
+    return """
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>ทำไมต้องเลือก K-School? | KK Studio Group</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Sarabun:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root{
+            --gold:#b8860b; --gold2:#d4af37; --blue:#2563eb; --blue2:#1d4ed8; --violet:#7c3aed;
+            --bg:#eef4fc; --glass:rgba(255,255,255,0.6); --glass-brd:rgba(37,99,235,0.14);
+            --ink:#0f172a; --sub:#475569; --mute:#64748b;
+        }
+        *{ margin:0; padding:0; box-sizing:border-box; }
+        html{ scroll-behavior:smooth; scroll-padding-top:70px; }
+        body{
+            font-family:'Inter','Sarabun',sans-serif; background:var(--bg); color:var(--ink);
+            overflow-x:hidden; position:relative;
+        }
+        /* ─── AMBIENT BACKGROUND ─── */
+        .bg-mesh{ position:fixed; inset:0; z-index:-2; background:
+            radial-gradient(ellipse 60% 40% at 15% 10%, #bfdbfe80 0%, transparent 60%),
+            radial-gradient(ellipse 50% 50% at 85% 25%, #dbeafe90 0%, transparent 60%),
+            radial-gradient(ellipse 60% 40% at 50% 80%, #e0e7ff60 0%, transparent 65%),
+            linear-gradient(180deg,#f4f8ff 0%, #eaf2fd 50%, #eef4fc 100%); }
+        .bg-grid{ position:fixed; inset:0; z-index:-1; pointer-events:none; opacity:.5;
+            background-image:linear-gradient(rgba(30,64,175,0.035) 1px, transparent 1px),
+                              linear-gradient(90deg, rgba(30,64,175,0.035) 1px, transparent 1px);
+            background-size:46px 46px; mask-image:radial-gradient(ellipse 80% 60% at 50% 20%, #000 10%, transparent 75%); }
+        .orb{ position:fixed; border-radius:50%; filter:blur(90px); pointer-events:none; z-index:-1; }
+        .orb-a{ width:380px; height:380px; background:radial-gradient(circle,#2563eb50,transparent 70%); top:-100px; left:-100px; animation:drift1 14s ease-in-out infinite; }
+        .orb-b{ width:320px; height:320px; background:radial-gradient(circle,#d4af3733,transparent 70%); top:40%; right:-120px; animation:drift2 16s ease-in-out infinite; }
+        .orb-c{ width:260px; height:260px; background:radial-gradient(circle,#7c3aed28,transparent 70%); bottom:5%; left:10%; animation:drift1 18s ease-in-out infinite reverse; }
+        @keyframes drift1{ 0%,100%{transform:translate(0,0)} 50%{transform:translate(30px,25px)} }
+        @keyframes drift2{ 0%,100%{transform:translate(0,0)} 50%{transform:translate(-25px,20px)} }
+
+        /* ─── GLASS PRIMITIVE ─── */
+        .glass{ background:var(--glass); border:1px solid var(--glass-brd); backdrop-filter:blur(18px) saturate(140%); -webkit-backdrop-filter:blur(18px) saturate(140%); }
+
+        /* ─── NAVBAR ─── */
+        .navbar{ position:sticky; top:0; z-index:50; padding:calc(env(safe-area-inset-top,0px) + 12px) 20px 12px;
+            display:flex; align-items:center; justify-content:space-between;
+            background:rgba(255,255,255,0.55); backdrop-filter:blur(16px) saturate(160%); -webkit-backdrop-filter:blur(16px) saturate(160%);
+            border-bottom:1px solid rgba(37,99,235,0.1); }
+        .nav-brand{ display:flex; align-items:center; gap:8px; font-weight:800; font-size:16px; letter-spacing:.3px; }
+        .nav-brand .dot{ width:9px; height:9px; border-radius:50%; background:linear-gradient(135deg,var(--gold),var(--blue2)); box-shadow:0 0 12px #d4af3790; animation:blink 2.4s ease-in-out infinite; }
+        @keyframes blink{ 0%,100%{opacity:1} 50%{opacity:.4} }
+        .nav-brand .k{ background:linear-gradient(135deg,var(--gold2),var(--blue2)); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+        .nav-cta{ font-size:12.5px; font-weight:700; padding:8px 16px; border-radius:100px; text-decoration:none; color:#fff;
+            background:linear-gradient(135deg,var(--gold2),var(--gold)); box-shadow:0 4px 16px #d4af3740; }
+
+        /* ─── HERO ─── */
+        .hero{ min-height:92vh; display:flex; flex-direction:column; align-items:center; justify-content:center;
+            text-align:center; padding:50px 22px 36px; position:relative; }
+        .badge-top{ display:inline-flex; align-items:center; gap:8px; padding:7px 16px 7px 12px; border-radius:100px;
+            color:#92650e; font-size:11.5px; font-weight:700; letter-spacing:1.2px; margin-bottom:30px;
+            animation:fadeDown .7s ease both; }
+        .badge-top .pulse{ width:7px; height:7px; border-radius:50%; background:var(--gold2); box-shadow:0 0 10px #f4d35ea0; animation:blink 2s infinite; }
+        .hero h1{ font-size:clamp(30px,8.5vw,54px); font-weight:900; line-height:1.14; letter-spacing:-0.6px; margin-bottom:18px;
+            animation:fadeUp .8s ease .1s both; }
+        .hero h1 .grad{ background:linear-gradient(100deg,var(--gold2) 0%, var(--gold) 35%, var(--blue2) 70%, var(--violet) 100%);
+            background-size:200% auto; -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent;
+            animation:shine 6s linear infinite; }
+        @keyframes shine{ to{ background-position:200% center; } }
+        .hero-sub{ font-size:15px; color:var(--sub); max-width:480px; line-height:1.75; margin-bottom:34px; animation:fadeUp .8s ease .2s both; }
+        .hero-cta-row{ display:flex; flex-wrap:wrap; gap:12px; justify-content:center; animation:fadeUp .8s ease .3s both; }
+        .btn-primary{ background:linear-gradient(135deg,#2563eb,#4f46e5); color:#fff; text-decoration:none;
+            padding:15px 30px; border-radius:14px; font-size:15px; font-weight:700; display:inline-flex; align-items:center; gap:8px;
+            box-shadow:0 10px 30px #2563eb40; border:1px solid rgba(255,255,255,0.12); transition:transform .15s, box-shadow .15s; }
+        .btn-primary:active{ transform:translateY(2px) scale(.98); }
+        .btn-outline{ color:#1e3a8a; text-decoration:none; padding:15px 28px; border-radius:14px; font-size:15px; font-weight:700;
+            display:inline-flex; align-items:center; transition:all .15s; }
+        .btn-outline:active{ background:rgba(37,99,235,0.1); }
+
+        /* ─── STATS (glass pill bar) ─── */
+        .stats-wrap{ padding:0 18px 56px; }
+        .stats-band{ max-width:720px; margin:0 auto; border-radius:22px; padding:22px 10px; display:flex; flex-wrap:wrap; }
+        .stat-item{ flex:1; min-width:110px; text-align:center; padding:12px 8px; position:relative; }
+        .stat-item:not(:last-child)::after{ content:''; position:absolute; right:0; top:15%; bottom:15%; width:1px; background:rgba(255,255,255,0.08); }
+        .stat-num{ font-size:28px; font-weight:800; line-height:1; margin-bottom:6px;
+            background:linear-gradient(135deg,var(--gold2),var(--gold)); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+        .stat-label{ font-size:11.5px; color:var(--mute); font-weight:600; line-height:1.4; }
+
+        /* ─── SECTION SHELL ─── */
+        .section{ padding:58px 22px; max-width:760px; margin:0 auto; position:relative; }
+        .section-label{ font-size:11px; font-weight:800; letter-spacing:2.2px; text-transform:uppercase; text-align:center; margin-bottom:12px;
+            background:linear-gradient(135deg,var(--gold2),var(--blue2)); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+        .section-title{ font-size:clamp(22px,5vw,32px); font-weight:800; text-align:center; margin-bottom:10px; line-height:1.3; }
+        .section-sub{ font-size:13.5px; color:var(--sub); text-align:center; margin-bottom:38px; max-width:460px; margin-left:auto; margin-right:auto; line-height:1.7; }
+
+        /* ─── GLASS FEATURE CARDS ─── */
+        .features-grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:16px; }
+        .feat-card{ border-radius:20px; padding:26px 22px; position:relative; overflow:hidden; transition:transform .25s, border-color .25s, background .25s; }
+        .feat-card::after{ content:''; position:absolute; inset:0; border-radius:20px; background:linear-gradient(145deg, rgba(255,255,255,0.06), transparent 40%); pointer-events:none; }
+        .feat-card:hover{ transform:translateY(-5px); background:rgba(255,255,255,0.85); box-shadow:0 12px 30px -10px rgba(37,99,235,0.2); }
+        .feat-icon{ width:50px; height:50px; border-radius:14px; display:flex; align-items:center; justify-content:center; font-size:24px; margin-bottom:16px;
+            border:1px solid rgba(37,99,235,0.14); }
+        .feat-card h3{ font-size:15.5px; font-weight:700; margin-bottom:8px; color:#0f172a; }
+        .feat-card p{ font-size:13px; color:var(--sub); line-height:1.65; }
+        .feat-tag{ display:inline-block; margin-top:14px; font-size:10.5px; font-weight:700; padding:4px 11px; border-radius:100px; letter-spacing:.4px;
+            border:1px solid rgba(37,99,235,0.16); }
+
+        /* ─── TIMELINE ─── */
+        .steps-wrap{ display:flex; flex-direction:column; position:relative; }
+        .steps-wrap::before{ content:''; position:absolute; left:23px; top:26px; bottom:26px; width:1px;
+            background:linear-gradient(to bottom, var(--blue2), var(--violet), var(--gold)); opacity:.35; }
+        .step-row{ display:flex; gap:20px; align-items:flex-start; padding:18px 0; }
+        .step-num{ width:48px; height:48px; border-radius:16px; flex-shrink:0; display:flex; align-items:center; justify-content:center;
+            font-size:17px; font-weight:800; position:relative; z-index:1; border:1px solid rgba(37,99,235,0.18); }
+        .step-body{ padding-top:8px; }
+        .step-body h4{ font-size:15px; font-weight:700; color:#0f172a; margin-bottom:5px; }
+        .step-body p{ font-size:13px; color:var(--sub); line-height:1.65; }
+
+        /* ─── COMPARE TABLE (glass) ─── */
+        .compare-wrap{ border-radius:20px; overflow:hidden; }
+        .compare-table{ width:100%; border-collapse:collapse; }
+        .compare-table th{ padding:16px 12px; font-size:13px; font-weight:700; }
+        .compare-table td{ padding:14px 12px; font-size:12.5px; border-top:1px solid rgba(255,255,255,0.06); color:var(--sub); }
+        .compare-table tr:nth-child(even) td{ background:rgba(37,99,235,0.035); }
+        .th-us{ background:linear-gradient(135deg,#1e3a8a,#2563eb); color:#fff; }
+        .th-old{ background:rgba(37,99,235,0.05); color:var(--mute); }
+        .th-feat{ background:rgba(37,99,235,0.03); color:var(--mute); }
+        .check{ color:#059669; font-size:17px; }
+        .cross{ color:#dc2626; font-size:17px; }
+
+        /* ─── ADMIN HIGHLIGHT GLASS BOX ─── */
+        .admin-box{ margin-top:30px; border-radius:20px; padding:30px 24px; text-align:center; }
+
+        /* ─── TIPS GLASS BOX ─── */
+        .tips-box{ margin-top:30px; border-radius:20px; padding:26px; }
+
+        /* ─── CTA BOTTOM ─── */
+        .cta-bottom{ text-align:center; padding:70px 24px; max-width:620px; margin:0 auto; }
+        .cta-bottom h2{ font-size:clamp(22px,5vw,32px); font-weight:800; line-height:1.3; margin-bottom:12px; }
+        .cta-bottom > p{ color:var(--sub); font-size:14px; }
+        .cta-pill{ display:inline-flex; align-items:center; gap:8px; text-decoration:none; color:#fff;
+            padding:16px 34px; border-radius:100px; font-size:14.5px; font-weight:800; letter-spacing:.3px;
+            background:linear-gradient(135deg,var(--gold2),var(--gold)); box-shadow:0 10px 30px #d4af3745; }
+        .ig-pill{ display:inline-flex; align-items:center; gap:10px; text-decoration:none; color:#fff;
+            padding:16px 28px; border-radius:100px; font-size:14.5px; font-weight:800; letter-spacing:.2px;
+            background:linear-gradient(135deg,#833ab4,#fd1d1d,#fcb045); box-shadow:0 10px 28px rgba(253,29,29,0.3); }
+
+        /* ─── FOOTER ─── */
+        .footer{ border-top:1px solid rgba(255,255,255,0.06); padding:30px 24px; text-align:center; }
+        .footer-ig{ display:inline-flex; align-items:center; gap:10px; text-decoration:none; margin-bottom:16px; }
+        .footer-brand{ font-size:13px; font-weight:800; letter-spacing:1.4px;
+            background:linear-gradient(135deg,var(--gold2),var(--blue2)); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+        .footer-sub{ font-size:11px; color:var(--mute); margin-top:5px; }
+
+        /* ─── ANIMATIONS / REVEAL ─── */
+        @keyframes fadeUp{ from{opacity:0; transform:translateY(26px);} to{opacity:1; transform:translateY(0);} }
+        @keyframes fadeDown{ from{opacity:0; transform:translateY(-14px);} to{opacity:1; transform:translateY(0);} }
+        .reveal{ opacity:0; transform:translateY(26px); transition:opacity .7s ease, transform .7s ease; }
+        .revealed{ opacity:1; transform:translateY(0); }
+    </style>
+</head>
+<body>
+<div class="bg-mesh"></div>
+<div class="bg-grid"></div>
+<div class="orb orb-a"></div>
+<div class="orb orb-b"></div>
+<div class="orb orb-c"></div>
+
+<!-- ─── NAVBAR ─── -->
+<div class="navbar">
+    <div class="nav-brand"><span class="dot"></span><span class="k">K-School</span></div>
+    <a href="/login" class="nav-cta">เข้าสู่ระบบ</a>
+</div>
+
+<!-- ─── HERO ─── -->
+<section class="hero">
+    <div class="badge-top glass"><span class="pulse"></span>K-SCHOOL PLATFORM &nbsp;·&nbsp; BY KK STUDIO GROUP</div>
+    <h1>ทำไมต้องเลือก<br><span class="grad">K-School</span>?</h1>
+    <p class="hero-sub">ระบบเช็กชื่อดิจิทัลที่ออกแบบมาเพื่อห้องเรียนยุคใหม่ ครบ เร็ว แม่น และสวยกว่าที่เคยมีมา</p>
+    <div class="hero-cta-row">
+        <a href="/login" class="btn-primary">🚀 เข้าใช้งานระบบ</a>
+        <a href="#features" class="btn-outline glass">ดูฟีเจอร์ทั้งหมด ↓</a>
+    </div>
+</section>
+
+<!-- ─── STATS ─── -->
+<div class="stats-wrap">
+    <div class="stats-band glass">
+        <div class="stat-item">
+            <div class="stat-num">⚡</div>
+            <div class="stat-label">Real-time<br>WebSocket</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-num">100%</div>
+            <div class="stat-label">บน Mobile<br>ใช้งานได้เลย</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-num">∞</div>
+            <div class="stat-label">ไม่จำกัด<br>จำนวนนักเรียน</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-num">0s</div>
+            <div class="stat-label">หน่วงเวลา<br>อัปเดตสถานะ</div>
+        </div>
+    </div>
+</div>
+
+<!-- ─── FEATURES ─── -->
+<div id="features">
+<div class="section">
+    <p class="section-label reveal">ฟีเจอร์เด่น</p>
+    <h2 class="section-title reveal">ทุกอย่างที่ครูต้องการ<br>อยู่ในที่เดียว</h2>
+    <p class="section-sub reveal">ออกแบบมาเพื่อลดขั้นตอน ลดกระดาษ และทำให้การเช็กชื่อง่ายกว่าที่เคย</p>
+
+    <div class="features-grid">
+        <div class="feat-card glass reveal">
+            <div class="feat-icon" style="background:linear-gradient(135deg,#1e3a8a33,#2563eb22);">📡</div>
+            <h3>Real-time Sync ทันทีทุก Device</h3>
+            <p>ใช้ WebSocket ส่งสัญญาณทุก client พร้อมกัน ครูกด เปลี่ยนสถานะปุ๊บ นักเรียนเห็นปั๊บ ไม่ต้อง refresh</p>
+            <span class="feat-tag" style="color:#2563eb;">WebSocket Live</span>
+        </div>
+        <div class="feat-card glass reveal">
+            <div class="feat-icon" style="background:linear-gradient(135deg,#d4af3733,#b8962e22);">🏆</div>
+            <h3>บันทึก มา / สาย / ลา / ขาด ครบจบ</h3>
+            <p>เลือกสถานะได้ง่ายด้วยปุ่มสีสวย กดทีเดียว ระบบบันทึกพร้อมวันที่ เวลา และชื่อครูผู้บันทึกอัตโนมัติ</p>
+            <span class="feat-tag" style="color:#d4af37;">4 Status Types</span>
+        </div>
+        <div class="feat-card glass reveal">
+            <div class="feat-icon" style="background:linear-gradient(135deg,#7c3aed33,#6d28d922);">📊</div>
+            <h3>ดูประวัติย้อนหลังได้ทุกรอบ</h3>
+            <p>คลังบันทึกเรียงตามวัน กรองตามวิชา เปิดดูได้ทั้งครูและแอดมิน แก้ไขหรือลบรายการซ้ำได้ทันที</p>
+            <span class="feat-tag" style="color:#7c3aed;">Full History</span>
+        </div>
+        <div class="feat-card glass reveal">
+            <div class="feat-icon" style="background:linear-gradient(135deg,#05966933,#04785222);">📱</div>
+            <h3>Mobile-First ใช้บนมือถือลื่นมาก</h3>
+            <p>ออกแบบมาให้ทำงานบนสมาร์ตโฟนเป็นหลัก ฟอนต์ใหญ่ ปุ่มกดง่าย รองรับทุกขนาดหน้าจอ</p>
+            <span class="feat-tag" style="color:#059669;">Mobile-First</span>
+        </div>
+        <div class="feat-card glass reveal">
+            <div class="feat-icon" style="background:linear-gradient(135deg,#dc262633,#b91c1c22);">🛡️</div>
+            <h3>ระบบ Admin ควบคุมได้ทุกอย่าง</h3>
+            <p>จัดการครู วิชา นักเรียน และสถานะเว็บผ่าน Discord Bot ได้เลย ไม่ต้องเปิดคอมพิวเตอร์</p>
+            <span class="feat-tag" style="color:#dc2626;">Admin Control</span>
+        </div>
+        <div class="feat-card glass reveal">
+            <div class="feat-icon" style="background:linear-gradient(135deg,#0284c733,#0369a122);">🤖</div>
+            <h3>Discord Bot ผูกติดตัวเว็บ</h3>
+            <p>กดปุ่มบน Discord เปลี่ยน Maintenance Mode ได้เลย แจ้งเตือน Log ทุกครั้งที่มีการเช็กชื่อแบบ Real-time</p>
+            <span class="feat-tag" style="color:#0284c7;">Discord Integrated</span>
+        </div>
+    </div>
+</div>
+</div>
+
+<!-- ─── HOW IT WORKS ─── -->
+<div class="section">
+    <p class="section-label reveal">ขั้นตอนการใช้งาน</p>
+    <h2 class="section-title reveal">เริ่มใช้ได้ใน<br><span style="color:#2563eb;">3 ขั้นตอนง่ายๆ</span></h2>
+    <p class="section-sub reveal">ไม่ต้องฝึกอบรม ไม่ต้องอ่านคู่มือ ครูคนใหม่ก็ใช้ได้เลย</p>
+
+    <div class="steps-wrap">
+        <div class="step-row reveal">
+            <div class="step-num glass" style="color:#2563eb;">1</div>
+            <div class="step-body">
+                <h4>แอดมินสร้างบัญชีครูและตั้งวิชา</h4>
+                <p>เพิ่มรายชื่อครู กำหนดกลุ่มวิชา และจัดนักเรียนเข้าวิชาผ่านหน้า Admin Dashboard ได้ภายใน 2 นาที</p>
+            </div>
+        </div>
+        <div class="step-row reveal">
+            <div class="step-num glass" style="color:#7c3aed;">2</div>
+            <div class="step-body">
+                <h4>ครู Login และเปิดคลาสวิชาของตัวเอง</h4>
+                <p>ล็อกอินด้วย Username/Password บนมือถือ เห็นรายการวิชาทันที กดเปิดห้องเช็กชื่อได้เลย</p>
+            </div>
+        </div>
+        <div class="step-row reveal">
+            <div class="step-num glass" style="color:#d4af37;">3</div>
+            <div class="step-body">
+                <h4>กดเช็กชื่อ บันทึก ระบบส่ง Log อัตโนมัติ</h4>
+                <p>เลือกสถานะแต่ละคน กดยืนยัน ระบบบันทึกลง SQLite และส่ง Log แจ้ง Discord พร้อมกันทันที</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ─── COMPARE ─── -->
+<div class="section">
+    <p class="section-label reveal">เปรียบเทียบ</p>
+    <h2 class="section-title reveal">K-School vs<br><span style="color:#64748b;">วิธีเดิมที่เคยใช้</span></h2>
+    <p class="section-sub reveal">ลองเทียบกันแบบตรงๆ แล้วตัดสินใจเอง — ไม่ต้องคิดนาน</p>
+    <div class="compare-wrap glass reveal">
+        <table class="compare-table">
+            <thead>
+                <tr>
+                    <th class="th-feat" style="text-align:left; padding-left:18px;">ฟีเจอร์</th>
+                    <th class="th-us">⚡ K-School</th>
+                    <th class="th-old">📄 กระดาษ / Excel</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td style="color:#1e293b;font-weight:600;padding-left:18px;">เช็กชื่อแบบ Real-time</td>
+                    <td style="text-align:center;" class="check">✓</td>
+                    <td style="text-align:center;" class="cross">✗</td>
+                </tr>
+                <tr>
+                    <td style="color:#1e293b;font-weight:600;padding-left:18px;">ดูประวัติย้อนหลัง</td>
+                    <td style="text-align:center;" class="check">✓</td>
+                    <td style="text-align:center;color:#f59e0b;">△ ยุ่งยาก</td>
+                </tr>
+                <tr>
+                    <td style="color:#1e293b;font-weight:600;padding-left:18px;">ใช้งานบนมือถือ</td>
+                    <td style="text-align:center;" class="check">✓</td>
+                    <td style="text-align:center;" class="cross">✗</td>
+                </tr>
+                <tr>
+                    <td style="color:#1e293b;font-weight:600;padding-left:18px;">บันทึกเป็นไฟล์เองอัตโนมัติ</td>
+                    <td style="text-align:center;" class="check">✓</td>
+                    <td style="text-align:center;" class="cross">✗</td>
+                </tr>
+                <tr>
+                    <td style="color:#1e293b;font-weight:600;padding-left:18px;">หลายครู หลายวิชา</td>
+                    <td style="text-align:center;" class="check">✓</td>
+                    <td style="text-align:center;color:#f59e0b;">△ ยุ่งมาก</td>
+                </tr>
+                <tr>
+                    <td style="color:#1e293b;font-weight:600;padding-left:18px;">Admin ดูแลและควบคุมได้</td>
+                    <td style="text-align:center;" class="check">✓</td>
+                    <td style="text-align:center;" class="cross">✗</td>
+                </tr>
+                <tr>
+                    <td style="color:#1e293b;font-weight:600;padding-left:18px;">ไม่ต้องพิมพ์เอกสาร</td>
+                    <td style="text-align:center;" class="check">✓</td>
+                    <td style="text-align:center;" class="cross">✗</td>
+                </tr>
+                <tr>
+                    <td style="color:#1e293b;font-weight:600;padding-left:18px;">ข้อมูลปลอดภัยไม่สูญหาย</td>
+                    <td style="text-align:center;" class="check">✓</td>
+                    <td style="text-align:center;color:#f59e0b;">△ เสี่ยงสูง</td>
+                </tr>
+                <tr>
+                    <td style="color:#1e293b;font-weight:600;padding-left:18px;">ค้นหาชื่อนักเรียนได้ทันที</td>
+                    <td style="text-align:center;" class="check">✓</td>
+                    <td style="text-align:center;" class="cross">✗</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+    <p class="reveal" style="text-align:center; margin-top:20px; font-size:12.5px; color:var(--mute); font-style:italic;">* ทุกฟีเจอร์ใช้งานได้ทันทีโดยไม่ต้องติดตั้งซอฟต์แวร์เพิ่มเติม</p>
+</div>
+
+<!-- ─── ADMIN SECTION ─── -->
+<div class="section">
+    <p class="section-label reveal">ทีมดูแลระบบ</p>
+    <h2 class="section-title reveal">มีแอดมินดูแล<br><span style="color:#d4af37;">ตลอด 24 ชั่วโมง</span></h2>
+    <p class="section-sub reveal">ไม่ใช่แค่ระบบอัตโนมัติ — มีคนคอยดูแลจริงๆ ตอบทุกปัญหา แก้ทุกบั๊ก</p>
+
+    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:16px; margin-top:8px;">
+        <div class="feat-card glass reveal" style="text-align:center;">
+            <div style="font-size:44px; margin-bottom:12px;">👑</div>
+            <h3 style="color:#d4af37;">แอดมินหลัก</h3>
+            <p>ควบคุมระบบทั้งหมด เพิ่ม-ลบครู วิชา นักเรียน ผ่านหน้า Dashboard และ Discord Bot ได้ตลอดเวลา</p>
+        </div>
+        <div class="feat-card glass reveal" style="text-align:center;">
+            <div style="font-size:44px; margin-bottom:12px;">🛡️</div>
+            <h3 style="color:#2563eb;">ตรวจสอบได้ทุกรอบ</h3>
+            <p>แอดมินเห็น Log การเช็กชื่อทุกรอบ สามารถลบรายการซ้ำ แก้ไขข้อผิดพลาด และยืนยันข้อมูลได้ทันที</p>
+        </div>
+        <div class="feat-card glass reveal" style="text-align:center;">
+            <div style="font-size:44px; margin-bottom:12px;">⚡</div>
+            <h3 style="color:#059669;">ตอบสนองไว</h3>
+            <p>มีปัญหาส่ง DM มาได้เลย ไม่ว่าจะลืมรหัส เพิ่มนักเรียนใหม่ หรือต้องการสร้างวิชาเพิ่ม แอดมินพร้อมช่วย</p>
+        </div>
+        <div class="feat-card glass reveal" style="text-align:center;">
+            <div style="font-size:44px; margin-bottom:12px;">📋</div>
+            <h3 style="color:#7c3aed;">ข้อมูลปลอดภัย</h3>
+            <p>ข้อมูลนักเรียนและประวัติเช็กชื่อทุกรอบถูกเก็บในฐานข้อมูล SQLite ที่แอดมินดูแลอยู่ ไม่มีสูญหายแน่นอน</p>
+        </div>
+        <div class="feat-card glass reveal" style="text-align:center;">
+            <div style="font-size:44px; margin-bottom:12px;">🔧</div>
+            <h3 style="color:#ea580c;">อัปเดตระบบต่อเนื่อง</h3>
+            <p>แอดมินพัฒนาฟีเจอร์ใหม่และแก้ไขปัญหาอย่างต่อเนื่อง ระบบจะดีขึ้นเรื่อยๆ โดยไม่มีค่าใช้จ่ายเพิ่ม</p>
+        </div>
+        <div class="feat-card glass reveal" style="text-align:center;">
+            <div style="font-size:44px; margin-bottom:12px;">📊</div>
+            <h3 style="color:#db2777;">รายงานสรุปตามขอ</h3>
+            <p>ต้องการสรุปข้อมูลการเข้าเรียนเป็นรายเดือนหรือรายวิชา? ติดต่อแอดมินได้เลย จัดให้ได้ตามต้องการ</p>
+        </div>
+    </div>
+
+    <div class="admin-box glass reveal">
+        <div style="font-size:34px; margin-bottom:10px;">💬</div>
+        <h3 style="color:#d4af37; font-size:17px; margin-bottom:8px;">ติดต่อแอดมินได้โดยตรง</h3>
+        <p style="color:var(--sub); font-size:13.5px; line-height:1.7; margin-bottom:20px;">มีปัญหาการใช้งาน ต้องการเพิ่มข้อมูล หรืออยากสอบถามเรื่องระบบ<br>ส่ง DM มาได้เลยที่ Instagram ของแอดมิน ตอบเร็ว ไม่ทิ้ง</p>
+        <a href="https://www.instagram.com/krit_kkstudio?igsh=aXJxdjF1NzdjMTFq" target="_blank" class="ig-pill">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="white" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/>
+            </svg>
+            @krit_kkstudio — DM ได้เลย!
+        </a>
+    </div>
+</div>
+
+<!-- ─── HOW IT WORKS (EXPANDED) ─── -->
+<div class="section">
+    <p class="section-label reveal">วิธีการใช้งาน</p>
+    <h2 class="section-title reveal">เริ่มได้ใน<br><span style="color:#2563eb;">4 ขั้นตอน ไม่ยุ่งยาก</span></h2>
+    <p class="section-sub reveal">ออกแบบให้ใช้งานง่ายสุดๆ ครูใหม่ก็ไม่ต้องฝึกอบรม เปิดมาก็ใช้ได้เลย</p>
+
+    <div class="steps-wrap">
+        <div class="step-row reveal">
+            <div class="step-num glass" style="color:#2563eb;">1</div>
+            <div class="step-body">
+                <h4>ติดต่อแอดมินเพื่อขอเข้าระบบ</h4>
+                <p>ส่ง DM ไปที่ Instagram <strong style="color:#d4af37;">@krit_kkstudio</strong> แจ้งชื่อสถาบัน ชื่อครู และวิชาที่ต้องการ แอดมินจะสร้างบัญชีและตั้งค่าระบบให้ภายในไม่กี่นาที ไม่ต้องสมัครเองให้วุ่นวาย</p>
+            </div>
+        </div>
+        <div class="step-row reveal">
+            <div class="step-num glass" style="color:#7c3aed;">2</div>
+            <div class="step-body">
+                <h4>แอดมินเซ็ตอัพวิชาและนักเรียนให้</h4>
+                <p>เจ้าหน้าที่ดูแลระบบจะดำเนินการนำเข้าข้อมูลนักเรียน สร้างกลุ่มวิชา และจัดนักเรียนเข้าวิชาให้เสร็จสรรพ เพื่ออำนวยความสะดวกแก่บุคลากรทางการศึกษาในขั้นตอนนี้ รอรับ Username / Password แล้วเข้าใช้ได้เลย</p>
+            </div>
+        </div>
+        <div class="step-row reveal">
+            <div class="step-num glass" style="color:#059669;">3</div>
+            <div class="step-body">
+                <h4>ครู Login และเช็กชื่อบนมือถือ</h4>
+                <p>เปิดเว็บบนมือถือ ล็อกอินด้วย Username / Password ที่ได้รับ กดเลือกวิชา เห็นรายชื่อนักเรียนพร้อมกัน เลือกสถานะ มา / สาย / ลา / ขาด กดยืนยันก็เสร็จ ทั้งหมดใช้เวลาไม่ถึง 2 นาที</p>
+            </div>
+        </div>
+        <div class="step-row reveal">
+            <div class="step-num glass" style="color:#d4af37;">4</div>
+            <div class="step-body">
+                <h4>ระบบบันทึกอัตโนมัติ ดูย้อนหลังได้ทุกเมื่อ</h4>
+                <p>ทุกครั้งที่กดยืนยัน ระบบจะบันทึกข้อมูลลงฐานข้อมูลทันที พร้อมวันที่ เวลา และชื่อครูผู้บันทึก สามารถเปิดดูประวัติย้อนหลังได้ทุกรอบ และแอดมินสามารถลบรายการซ้ำหรือแก้ไขได้ตามต้องการ</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="tips-box glass reveal">
+        <h3 style="font-size:14.5px; font-weight:700; color:#0f172a; margin-bottom:16px;">💡 เคล็ดลับการใช้งาน</h3>
+        <div style="display:flex; flex-direction:column; gap:12px;">
+            <div style="display:flex; gap:12px; align-items:flex-start;">
+                <span style="color:#d4af37; font-size:17px; flex-shrink:0;">→</span>
+                <p style="font-size:13px; color:var(--sub); line-height:1.6; margin:0;">เช็กชื่อได้จากมือถือทุกเครื่อง ไม่จำกัดอุปกรณ์ เปิดเว็บบนมือถือก็ใช้ได้เลยทันที</p>
+            </div>
+            <div style="display:flex; gap:12px; align-items:flex-start;">
+                <span style="color:#d4af37; font-size:17px; flex-shrink:0;">→</span>
+                <p style="font-size:13px; color:var(--sub); line-height:1.6; margin:0;">ถ้ากดผิดสถานะ แจ้งแอดมินได้เลย สามารถลบและเช็กชื่อใหม่ได้ไม่มีปัญหา</p>
+            </div>
+            <div style="display:flex; gap:12px; align-items:flex-start;">
+                <span style="color:#d4af37; font-size:17px; flex-shrink:0;">→</span>
+                <p style="font-size:13px; color:var(--sub); line-height:1.6; margin:0;">ไม่ต้องกังวลเรื่องอินเทอร์เน็ตหลุด ระบบจะ reconnect อัตโนมัติ ข้อมูลไม่หาย</p>
+            </div>
+            <div style="display:flex; gap:12px; align-items:flex-start;">
+                <span style="color:#d4af37; font-size:17px; flex-shrink:0;">→</span>
+                <p style="font-size:13px; color:var(--sub); line-height:1.6; margin:0;">ต้องการเพิ่มนักเรียนใหม่หรือเพิ่มวิชา ติดต่อแอดมินผ่าน Instagram ได้เลย จัดให้ภายใน 5 นาที</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ─── CTA BOTTOM ─── -->
+<div class="cta-bottom">
+    <h2>พร้อมยกระดับ<br><span style="color:#d4af37;">การเช็กชื่อของคุณหรือยัง?</span></h2>
+    <p style="margin-bottom:28px;">เริ่มใช้งานได้เลยวันนี้ ติดต่อแอดมินเพื่อเริ่มต้น</p>
+    <div style="display:flex; flex-wrap:wrap; gap:14px; justify-content:center; margin-bottom:28px;">
+        <a href="/login" class="cta-pill">🚀 เข้าสู่ระบบ K-School</a>
+        <a href="https://www.instagram.com/krit_kkstudio?igsh=aXJxdjF1NzdjMTFq" target="_blank" class="ig-pill">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="white" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/>
+            </svg>
+            ติดต่อแอดมิน IG
+        </a>
+    </div>
+    <p style="font-size:11.5px; color:var(--mute); margin:0;">📩 ส่ง DM มาที่ <strong style="color:#8793a6;">@krit_kkstudio</strong> — ตอบเร็ว ไม่ทิ้ง</p>
+</div>
+
+<!-- ─── FOOTER ─── -->
+<div class="footer">
+    <a href="https://www.instagram.com/krit_kkstudio?igsh=aXJxdjF1NzdjMTFq" target="_blank" class="footer-ig">
+        <svg width="26" height="26" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+                <linearGradient id="ig-grad" x1="0%" y1="100%" x2="100%" y2="0%">
+                    <stop offset="0%" style="stop-color:#fcb045"/>
+                    <stop offset="50%" style="stop-color:#fd1d1d"/>
+                    <stop offset="100%" style="stop-color:#833ab4"/>
+                </linearGradient>
+            </defs>
+            <path fill="url(#ig-grad)" d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/>
+        </svg>
+        <span style="font-size:14px; font-weight:800; letter-spacing:.4px; color:#cbd5e1;">@krit_kkstudio</span>
+    </a>
+    <div class="footer-brand">KK STUDIO GROUP</div>
+    <div class="footer-sub">K-School Platform · ระบบเช็กชื่อดิจิทัลยุคใหม่</div>
+    <div class="footer-sub" style="font-size:10px;">© 2025 KK Studio Group · All rights reserved</div>
+</div>
+
+<script>
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach(el => {
+            if (el.isIntersecting) el.target.classList.add('revealed');
+        });
+    }, { threshold: 0.12 });
+    document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+
+    document.querySelectorAll('a[href^="#"]').forEach(a => {
+        a.addEventListener('click', e => {
+            e.preventDefault();
+            const target = document.querySelector(a.getAttribute('href'));
+            if (target) target.scrollIntoView({ behavior: 'smooth' });
+        });
+    });
+</script>
+</body>
+</html>
+"""
+# ==========================================
+# 🔐 LOGIN GATEWAY & LOGOUT (WITH COOKIES)
+# ==========================================
+
+# 📱 หน้าล็อกอินสไตล์แอปมือถือ (hero ด้านบน + bottom sheet) — ดีไซน์แยกจาก STYLE_HEADER
+# หมายเหตุ: เป็น string ธรรมดา (ไม่ใช่ f-string) เพื่อไม่ให้ { } ของ CSS/JS ชนกับการ interpolate ของ Python
+LOGIN_STYLE = """
+<link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+    html { -webkit-text-size-adjust: 100%; }
+    body.lv-body {
+        margin: 0; padding: 0;
+        min-height: 100vh; min-height: 100dvh;
+        display: block;
+        background: #ececef;
+        font-family: 'Prompt', 'Sarabun', 'Inter', sans-serif;
+        color: #111827;
+        overflow-x: hidden; overflow-y: auto;
+        -webkit-tap-highlight-color: transparent;
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+    }
+
+    /* ─── BACKGROUND: เทาอ่อน + ลายเส้นเฉียง + สามเหลี่ยมสีน้ำเงิน ─── */
+    .lv-bg {
+        position: fixed; inset: 0; z-index: -2;
+        background:
+            repeating-linear-gradient(118deg, rgba(255,255,255,0) 0 22px, rgba(255,255,255,0.75) 22px 24px),
+            linear-gradient(180deg, #e9e9ec 0%, #f4f4f6 55%, #eeeef1 100%);
+        -webkit-mask-image: none;
+    }
+    .lv-tri-bl { position: fixed; left: 0; bottom: 0; width: min(78vw, 340px); z-index: -1; pointer-events: none; }
+    .lv-tri-tr { position: fixed; right: 0; top: 0; width: min(46vw, 190px); z-index: -1; pointer-events: none; }
+
+    .lv-shell {
+        position: relative;
+        max-width: 440px; margin: 0 auto;
+        padding: 0 22px calc(env(safe-area-inset-bottom, 0px) + 32px);
+    }
+
+    /* ─── TOP BAR ─── */
+    .lv-topbar {
+        display: flex; align-items: center; justify-content: space-between;
+        padding-top: calc(env(safe-area-inset-top, 0px) + 16px);
+        height: calc(env(safe-area-inset-top, 0px) + 74px);
+    }
+    .lv-back {
+        width: 40px; height: 40px; border: 0; background: transparent; padding: 0;
+        display: flex; align-items: center; justify-content: center; cursor: pointer; color: #6b7280;
+    }
+    .lv-back svg { width: 26px; height: 26px; }
+    .lv-lang {
+        width: 46px; height: 46px; border-radius: 50%; border: 0;
+        background: rgba(255,255,255,0.85); color: #374151;
+        font-family: inherit; font-size: 15px; font-weight: 600; cursor: pointer;
+        box-shadow: 0 2px 10px rgba(15,23,42,0.08);
+    }
+
+    /* ─── LOGO ─── */
+    .lv-logo-block { display: flex; flex-direction: column; align-items: center; margin: 2px 0 20px; }
+    .lv-logo { height: 108px; width: auto; object-fit: contain; }
+    .lv-logo-name { margin-top: 6px; font-size: 12.5px; font-weight: 500; color: #1f6b3a; }
+
+    /* ─── CARD ─── */
+    .lv-card {
+        background: rgba(255,255,255,0.97);
+        border-radius: 28px;
+        padding: 26px 20px 22px;
+        box-shadow: 0 18px 40px -22px rgba(15,23,42,0.28);
+    }
+    .lv-title { margin: 0 0 18px; text-align: center; font-size: 21px; font-weight: 700; color: #0b0f19; }
+
+    /* ─── TABS ─── */
+    .lv-tabs { display: flex; background: #e4e4e8; border-radius: 100px; margin-bottom: 18px; }
+    .lv-tab {
+        flex: 1; height: 46px; border: 0; background: transparent; border-radius: 100px;
+        font-family: inherit; font-size: 15px; font-weight: 600; color: #1f2937; cursor: pointer;
+        transition: background .2s, color .2s;
+    }
+    .lv-tab.active { background: #0a7cff; color: #fff; }
+
+    /* ─── FIELDS (กรอบนอกคงที่ — ช่อง input ข้างในล่องหน ไม่มีกรอบ/โฟกัสริง/เงา) ─── */
+    .lv-field {
+        display: flex; align-items: center; gap: 12px;
+        height: 54px; padding: 0 16px; margin: 0 0 14px;
+        background: #fff; border: 1.5px solid #d3d6dc; border-radius: 16px;
+    }
+    .lv-ico { flex-shrink: 0; width: 22px; height: 22px; color: #0b0f19; display: block; }
+
+    .lv-field input.lv-input,
+    .lv-field input.lv-input:hover,
+    .lv-field input.lv-input:focus,
+    .lv-field input.lv-input:active,
+    .lv-field input.lv-input:focus-visible {
+        flex: 1; min-width: 0; width: auto !important; height: 100%;
+        margin: 0 !important; padding: 0 !important;
+        border: 0 !important; border-radius: 0 !important;
+        outline: none !important; box-shadow: none !important;
+        background: transparent !important;
+        -webkit-appearance: none; appearance: none;
+        font-family: inherit; font-size: 16px; font-weight: 400; color: #111827;
+        caret-color: #0a7cff; letter-spacing: 0;
+    }
+    .lv-field input.lv-input::placeholder { color: #9ca3af; font-weight: 400; }
+
+    /* กันกล่อง autofill ของ Chrome (สีเหลือง/ฟ้า) ที่ทำให้เห็นเป็นกรอบ */
+    .lv-field input.lv-input:-webkit-autofill,
+    .lv-field input.lv-input:-webkit-autofill:hover,
+    .lv-field input.lv-input:-webkit-autofill:focus,
+    .lv-field input.lv-input:-webkit-autofill:active {
+        -webkit-box-shadow: 0 0 0 1000px #ffffff inset !important;
+        box-shadow: 0 0 0 1000px #ffffff inset !important;
+        -webkit-text-fill-color: #111827 !important;
+        caret-color: #0a7cff;
+        transition: background-color 99999s ease-out 0s;
+    }
+
+    .lv-eye {
+        flex-shrink: 0; height: 26px; border: 0; background: transparent; cursor: pointer;
+        padding: 0 0 0 12px; margin-left: 2px; border-left: 1.5px solid #6b7280;
+        display: flex; align-items: center; color: #0b0f19;
+    }
+    .lv-eye svg { width: 24px; height: 24px; }
+
+    /* ─── SELECT สถาบัน ─── */
+    .lv-field select.lv-select,
+    .lv-field select.lv-select:focus,
+    .lv-field select.lv-select:active {
+        flex: 1; min-width: 0; width: auto !important; height: 100%;
+        margin: 0 !important; padding: 0 !important;
+        border: 0 !important; outline: none !important; box-shadow: none !important;
+        background: transparent !important;
+        -webkit-appearance: none; appearance: none;
+        font-family: inherit; font-size: 16px; font-weight: 400; color: #111827;
+    }
+    .lv-chev { flex-shrink: 0; width: 22px; height: 22px; color: #6b7280; display: block; pointer-events: none; }
+
+    /* ─── CHECKBOX ─── */
+    .lv-check { display: flex; align-items: center; gap: 10px; margin: 4px 0 16px; padding: 0 4px; font-size: 12.5px; color: #1998b8; line-height: 1.5; cursor: pointer; }
+    .lv-check input[type="checkbox"] {
+        -webkit-appearance: none; appearance: none;
+        flex-shrink: 0; width: 24px; height: 24px; margin: 0;
+        border: 2px solid #6b7280; border-radius: 6px; background: #fff; cursor: pointer;
+        outline: none; transition: background .15s, border-color .15s;
+    }
+    .lv-check input[type="checkbox"]:checked {
+        background-color: #0a7cff; border-color: #0a7cff;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='5 12.5 10 17.5 19 7'/%3E%3C/svg%3E");
+        background-size: 82% 82%; background-position: center; background-repeat: no-repeat;
+    }
+    .lv-check a { color: #1998b8; font-weight: 700; text-decoration: none; }
+
+    /* ─── SUBMIT ─── */
+    .lv-submit {
+        display: block; margin: 6px auto 0; min-width: 62%; height: 52px; padding: 0 36px;
+        border: 0; border-radius: 100px;
+        font-family: inherit; font-size: 17px; font-weight: 700; color: #fff;
+        background: #0a7cff; box-shadow: 0 10px 22px -10px rgba(10,124,255,0.65);
+        cursor: pointer; transition: transform .12s, background .2s;
+    }
+    .lv-submit:disabled { background: #a9a9ae; box-shadow: none; cursor: not-allowed; }
+    .lv-submit:active:not(:disabled) { transform: scale(0.97); }
+
+    /* ─── LINKS ─── */
+    .lv-link { display: block; text-align: center; margin-top: 14px; font-size: 15px; font-weight: 700; color: #1998b8; text-decoration: none; cursor: pointer; background: none; border: 0; width: 100%; font-family: inherit; padding: 0; }
+    .lv-link.soft { font-weight: 500; margin-top: 10px; }
+    .lv-why { display: block; text-align: center; margin-top: 18px; font-size: 12.5px; font-weight: 600; color: #6b7280; text-decoration: none; }
+    .lv-footer { text-align: center; margin-top: 18px; font-size: 10px; letter-spacing: 1px; color: #9ca3af; font-weight: 600; }
+
+    @media (max-height: 700px) {
+        .lv-logo { height: 84px; }
+        .lv-logo-block { margin-bottom: 14px; }
+    }
+</style>
+"""
+
+# 🔷 พื้นหลังสามเหลี่ยมสีน้ำเงิน (SVG วาดเอง ไม่ใช้รูป/อีโมจิ)
+LOGIN_BG_SVG = """
+<svg class="lv-tri-bl" viewBox="0 0 300 380" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <defs>
+        <linearGradient id="lvg1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3aa0ff"/><stop offset="1" stop-color="#0a55d6"/></linearGradient>
+        <linearGradient id="lvg2" x1="1" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8fd0ff"/><stop offset="1" stop-color="#1b7cf0"/></linearGradient>
+        <linearGradient id="lvg3" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#0b3fb8"/><stop offset="1" stop-color="#2d8cff"/></linearGradient>
+    </defs>
+    <polygon points="0,110 96,160 18,250" fill="url(#lvg2)" opacity="0.85"/>
+    <polygon points="18,250 96,160 128,226" fill="url(#lvg1)" opacity="0.95"/>
+    <polygon points="0,250 18,250 0,300" fill="url(#lvg3)"/>
+    <polygon points="18,250 128,226 112,320" fill="url(#lvg3)" opacity="0.92"/>
+    <polygon points="0,300 112,320 0,380" fill="url(#lvg1)"/>
+    <polygon points="112,320 210,350 150,380 60,380" fill="url(#lvg2)" opacity="0.8"/>
+    <polygon points="128,226 196,290 112,320" fill="url(#lvg2)" opacity="0.7"/>
+    <polygon points="196,290 270,330 210,350" fill="url(#lvg1)" opacity="0.75"/>
+    <polygon points="60,140 90,110 100,160" fill="#9fd8ff" opacity="0.55"/>
+    <polygon points="150,260 176,240 186,272" fill="#bfe6ff" opacity="0.5"/>
+</svg>
+<svg class="lv-tri-tr" viewBox="0 0 160 150" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <defs>
+        <linearGradient id="lvg4" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4aa8ff"/><stop offset="1" stop-color="#0a5bdc"/></linearGradient>
+        <linearGradient id="lvg5" x1="1" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#9ad6ff"/><stop offset="1" stop-color="#2a86f2"/></linearGradient>
+    </defs>
+    <polygon points="160,0 160,70 104,38" fill="url(#lvg4)" opacity="0.9"/>
+    <polygon points="160,0 104,38 126,0" fill="url(#lvg5)" opacity="0.85"/>
+    <polygon points="104,38 160,70 118,92" fill="url(#lvg5)" opacity="0.7"/>
+    <polygon points="126,0 150,0 138,14" fill="#bfe6ff" opacity="0.8"/>
+    <polygon points="96,66 112,52 118,76" fill="#7cc4ff" opacity="0.6"/>
+</svg>
+"""
+
+LOGIN_SCRIPT = """
+<script>
+    var lvMode = 'user';
+
+    function lvSyncEye() {
+        var p = document.getElementById('lvPass');
+        var hidden = (p.type === 'password');
+        document.getElementById('lvEyeOff').style.display = hidden ? 'block' : 'none';
+        document.getElementById('lvEyeOn').style.display = hidden ? 'none' : 'block';
+    }
+
+    // แท็บ "ชื่อผู้ใช้"  : ช่อง 1 = รหัสประจำตัว/ชื่อผู้ใช้ , ช่อง 2 = รหัสผ่าน/เบอร์โทร (name เดิม)
+    // แท็บ "เบอร์โทรศัพท์": ช่อง 1 = เบอร์โทร , ช่อง 2 = รหัสประจำตัว — สลับ name ให้หลังบ้านรับค่าถูกฝั่งเดิม
+    function lvSetMode(mode) {
+        lvMode = mode;
+        document.querySelectorAll('.lv-tab').forEach(function(b){ b.classList.remove('active'); });
+        document.querySelector('.lv-tab[data-mode="' + mode + '"]').classList.add('active');
+        var u = document.getElementById('lvUserInput');
+        var p = document.getElementById('lvPass');
+        u.value = ''; p.value = '';
+        if (mode === 'phone') {
+            u.placeholder = 'เบอร์โทรศัพท์';
+            u.type = 'tel'; u.setAttribute('inputmode', 'numeric'); u.name = 'password'; u.setAttribute('autocomplete', 'tel');
+            p.placeholder = 'รหัสประจำตัวนักเรียน';
+            p.type = 'text'; p.name = 'username'; p.setAttribute('autocomplete', 'off');
+        } else {
+            u.placeholder = 'รหัสประจำตัว หรือ ชื่อผู้ใช้งาน';
+            u.type = 'text'; u.removeAttribute('inputmode'); u.name = 'username'; u.setAttribute('autocomplete', 'username');
+            p.placeholder = 'รหัสผ่าน';
+            p.type = 'password'; p.name = 'password'; p.setAttribute('autocomplete', 'current-password');
+        }
+        lvSyncEye();
+    }
+
+    function lvTogglePw() {
+        var p = document.getElementById('lvPass');
+        p.type = (p.type === 'password') ? 'text' : 'password';
+        lvSyncEye();
+    }
+
+    function lvValidate() {
+        document.getElementById('lvSubmit').disabled = !document.getElementById('lvTerms').checked;
+    }
+
+    function lvToast() {
+        smartAlert({
+            title: 'เร็วๆ นี้',
+            message: 'ระบบภาษาอังกฤษ (English version) กำลังจะเปิดให้ใช้งานเร็วๆ นี้',
+            type: 'info'
+        });
+    }
+
+    function lvComingSoon(featureName) {
+        smartAlert({
+            title: 'เร็วๆ นี้',
+            message: featureName + ' กำลังอยู่ระหว่างการพัฒนา เร็วๆ นี้จะเปิดให้ใช้งานครับ',
+            type: 'info'
+        });
+    }
+
+    function lvGuide() {
+        smartAlert({
+            title: 'คำแนะนำการเข้าสู่ระบบ',
+            message: '<b>นักเรียน:</b> กรอกรหัสประจำตัว และเบอร์โทรศัพท์ที่ลงทะเบียนไว้ (แท็บ "เบอร์โทรศัพท์" ให้กรอกเบอร์ก่อน แล้วตามด้วยรหัสประจำตัว)<br><br><b>ครู / แอดมิน:</b> กรอกชื่อผู้ใช้งานและรหัสผ่านตามปกติ',
+            type: 'info'
+        });
+    }
+
+    window.addEventListener('pageshow', function() { lvValidate(); lvSyncEye(); });
+</script>
+"""
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(user_session: Optional[str] = Cookie(None)):
+    if user_session == "admin":
+        return RedirectResponse(url="/admin/dashboard", status_code=303)
+
+    m_cfg = get_maintenance_status()
+    if m_cfg["is_active"] == 1:
+        return generate_maintenance_html(m_cfg["mode_type"])
+
+    if user_session and user_session.startswith("teacher_"):
+        teacher_username = user_session.replace("teacher_", "")
+        return RedirectResponse(url=f"/app/dashboard?user={teacher_username}", status_code=303)
+
+    if user_session and user_session.startswith("student_"):
+        return RedirectResponse(url="/student/dashboard", status_code=303)
+
+    return f"""
+    <html lang="th">{STYLE_HEADER}
+    {LOGIN_STYLE}
+    <body class="lv-body">
+        <div class="lv-bg"></div>
+        {LOGIN_BG_SVG}
+
+        <div class="lv-shell">
+
+            <div class="lv-topbar">
+                <button type="button" class="lv-back" onclick="history.length>1?history.back():location.href='/'" aria-label="ย้อนกลับ">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3.5 6.5 12 15 20.5"/></svg>
+                </button>
+                <button type="button" class="lv-lang" onclick="lvToast()">EN</button>
+            </div>
+
+            <div class="lv-logo-block">
+                <img src="{LOGO_URL}" class="lv-logo" alt="K-School">
+                <div class="lv-logo-name">วิทยาลัยนาฏศิลป</div>
+            </div>
+
+            <div class="lv-card">
+                <h1 class="lv-title">ยินดีต้อนรับ</h1>
+
+                <div class="lv-tabs">
+                    <button type="button" class="lv-tab active" data-mode="user" onclick="lvSetMode('user')">ชื่อผู้ใช้</button>
+                    <button type="button" class="lv-tab" data-mode="phone" onclick="lvSetMode('phone')">เบอร์โทรศัพท์</button>
+                </div>
+
+                <form action="/login" method="post" id="lvForm">
+                    <div class="lv-field">
+                        <svg class="lv-ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm0 4.1a3.4 3.4 0 110 6.8 3.4 3.4 0 010-6.8zm0 13.3a8 8 0 01-6.2-2.9c.2-2.1 4.1-3.2 6.2-3.2s6 1.1 6.2 3.2a8 8 0 01-6.2 2.9z"/></svg>
+                        <input class="lv-input" type="text" name="username" id="lvUserInput" placeholder="รหัสประจำตัว หรือ ชื่อผู้ใช้งาน" required autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false">
+                    </div>
+
+                    <div class="lv-field">
+                        <svg class="lv-ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M8 6.5a5.5 5.5 0 015.3 4H23v4.6h-3.2v2.6h-3.6v-2.6h-2.9A5.5 5.5 0 118 6.5zm0 3.2a2.3 2.3 0 100 4.6 2.3 2.3 0 000-4.6z"/></svg>
+                        <input class="lv-input" type="password" name="password" id="lvPass" placeholder="รหัสผ่าน" required autocomplete="current-password" autocapitalize="off" autocorrect="off" spellcheck="false">
+                        <button type="button" class="lv-eye" onclick="lvTogglePw()" aria-label="แสดง/ซ่อนรหัสผ่าน">
+                            <svg id="lvEyeOff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 12S5.5 5 12 5s10.5 7 10.5 7-4 7-10.5 7S1.5 12 1.5 12z"/><circle cx="12" cy="12" r="3"/><line x1="3.5" y1="3.5" x2="20.5" y2="20.5"/></svg>
+                            <svg id="lvEyeOn" style="display:none;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 12S5.5 5 12 5s10.5 7 10.5 7-4 7-10.5 7S1.5 12 1.5 12z"/><circle cx="12" cy="12" r="3"/></svg>
+                        </button>
+                    </div>
+
+                    <div class="lv-field">
+                        <svg class="lv-ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9 3h6a1 1 0 011 1v2h4a2 2 0 012 2v3H2V8a2 2 0 012-2h4V4a1 1 0 011-1zm1.5 2v1h3V5h-3zM2 13h8v1.6h4V13h8v6a2 2 0 01-2 2H4a2 2 0 01-2-2v-6z"/></svg>
+                        <select class="lv-select" aria-label="สถาบัน">
+                            <option>วิทยาลัยนาฏศิลป</option>
+                        </select>
+                        <svg class="lv-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+                    </div>
+
+                    <label class="lv-check">
+                        <input type="checkbox" id="lvTerms" onchange="lvValidate()">
+                        <span>ยอมรับ <a href="/terms" target="_blank">ข้อกำหนดและเงื่อนไข</a> และ <a href="/privacy" target="_blank">นโยบายความเป็นส่วนตัว</a></span>
+                    </label>
+
+                    <button type="submit" class="lv-submit" id="lvSubmit" disabled>เข้าสู่ระบบ</button>
+                </form>
+
+                <button type="button" class="lv-link soft" onclick="lvComingSoon('ระบบลืมรหัสผ่าน')">ลืมรหัสผ่าน</button>
+                <button type="button" class="lv-link" onclick="lvComingSoon('ระบบลงทะเบียนสำหรับผู้ปกครอง')">ลงทะเบียนเข้าใช้งานสำหรับผู้ปกครอง</button>
+                <button type="button" class="lv-link" onclick="lvGuide()">คำแนะนำการเข้าสู่ระบบ</button>
+            </div>
+
+            <a href="/why-us" class="lv-why">ทำไมต้องเลือก K-School</a>
+            <div class="lv-footer">KK STUDIO GROUP</div>
+        </div>
+        {LOGIN_SCRIPT}
+    </body></html>
+    """
+
+@app.post("/login")
+async def process_login(response: Response, username: str = Form(...), password: str = Form(...)):
+    username = username.strip()
+    password = password.strip()
+
+    if username == ADMIN_USER and password == ADMIN_PASS:
+        add_log(f"Admin เข้าสู่ระบบสำเร็จ")
+        resp = RedirectResponse(url="/admin/dashboard", status_code=303)
+        resp.set_cookie(key="user_session", value="admin", max_age=COOKIE_MAX_AGE, httponly=True)
+        return resp
+        
+    m_cfg = get_maintenance_status()
+    if m_cfg["is_active"] == 1:
+        return HTMLResponse(generate_maintenance_html(m_cfg["mode_type"]))
+
+    try:
+        conn = sqlite3.connect('attendance_pro.db')
+        cursor = conn.cursor()
+        cursor.execute("SELECT username FROM teachers WHERE username = ? AND password = ?", (username, password))
+        teacher = cursor.fetchone()
+
+        student_row = None
+        if not teacher:
+            # 🎒 ลองเทียบเป็นบัญชีนักเรียน (รหัสประจำตัว + เบอร์โทร) — ใช้ช่องกรอกเดียวกับด้านบน
+            cursor.execute("SELECT uid FROM student_accounts WHERE student_id = ? AND phone = ?", (username, password))
+            student_row = cursor.fetchone()
+        conn.close()
+    except sqlite3.OperationalError as e:
+        print(f"❌ Login DB Error: {e}")
+        return alert_redirect("ระบบฐานข้อมูลยังไม่พร้อมใช้งาน กรุณาลองใหม่อีกครั้ง หรือติดต่อผู้ดูแลระบบ (แนะนำให้รีสตาร์ทเซิร์ฟเวอร์)", type="error")
+
+    if teacher:
+        add_log(f"ครู {teacher[0]} เข้าสู่ระบบสำเร็จ")
+        resp = RedirectResponse(url=f"/app/dashboard?user={urllib.parse.quote(teacher[0])}", status_code=303)
+        resp.set_cookie(key="user_session", value=f"teacher_{urllib.parse.quote(teacher[0])}", max_age=COOKIE_MAX_AGE, httponly=True)
+        return resp
+
+    if student_row:
+        uid = student_row[0]
+        all_students = get_sorted_master_students()
+        target = next((s for s in all_students if s['uid'] == uid), None)
+        if not target:
+            return alert_redirect("ไม่พบข้อมูลนักเรียนในทะเบียนหลัก กรุณาติดต่อผู้ดูแลระบบ", type="error")
+        add_log(f"นักเรียน {target['name']} ({target['class']}) เข้าสู่ระบบสำเร็จ")
+        resp = RedirectResponse(url="/student/dashboard", status_code=303)
+        resp.set_cookie(key="user_session", value=f"student_{urllib.parse.quote(uid)}", max_age=COOKIE_MAX_AGE, httponly=True)
+        return resp
+
+    return alert_redirect("ชื่อผู้ใช้งานหรือรหัสผ่านไม่ถูกต้อง กรุณาตรวจสอบอีกครั้ง", type="error")
+
+@app.get("/logout")
+async def logout(response: Response):
+    resp = RedirectResponse(url="/login", status_code=303)
+    resp.delete_cookie(key="user_session")
+    return resp
+
+# ==========================================
+# 🎒 [STUDENT LOGIN — รหัสประจำตัว + เบอร์โทร ไม่ใช้รหัสผ่าน]
+# ==========================================
+# 🎒 [STUDENT LOGIN — รวมเข้ากับหน้า /login หลักแล้ว]
+# ==========================================
+# หมายเหตุ: นักเรียนล็อกอินผ่านฟอร์มเดียวกับครู/แอดมินที่ /login แล้ว
+# (กรอกรหัสประจำตัวในช่อง "ชื่อผู้ใช้งาน" และเบอร์โทรในช่อง "รหัสผ่าน")
+# route นี้เก็บไว้เผื่อมีลิงก์เก่าค้าง จะ redirect ไปหน้า /login ให้อัตโนมัติ
+
+@app.get("/student/login")
+async def student_login_page(user_session: Optional[str] = Cookie(None)):
+    if user_session and user_session.startswith("student_"):
+        return RedirectResponse(url="/student/dashboard", status_code=303)
+    return RedirectResponse(url="/login", status_code=303)
+
+@app.get("/student/dashboard", response_class=HTMLResponse)
+async def student_dashboard(user_session: Optional[str] = Cookie(None)):
+    if not user_session or not user_session.startswith("student_"):
+        return RedirectResponse(url="/login", status_code=303)
+    m_cfg = get_maintenance_status()
+    if m_cfg["is_active"] == 1:
+        return generate_maintenance_html(m_cfg["mode_type"])
+
+    uid = urllib.parse.unquote(user_session.replace("student_", "", 1))
+    all_students = get_sorted_master_students()
+    me = next((s for s in all_students if s['uid'] == uid), None)
+    if not me:
+        resp = RedirectResponse(url="/login", status_code=303)
+        resp.delete_cookie(key="user_session")
+        return resp
+
+    # 🖼️ รูปโปรไฟล์ (แอดมิน/หัวหน้าระดับ/ฝ่ายกิจการ เป็นผู้ตั้งให้)
+    conn0 = sqlite3.connect('attendance_pro.db')
+    cursor0 = conn0.cursor()
+    cursor0.execute("SELECT photo_url FROM student_accounts WHERE uid = ?", (uid,))
+    photo_row = cursor0.fetchone()
+    conn0.close()
+    my_photo_url = photo_row[0] if photo_row and photo_row[0] else ""
+    avatar_html = f'<img src="{my_photo_url}" style="width:56px;height:56px;border-radius:50%;object-fit:cover;border:2px solid rgba(255,255,255,0.5);">' if my_photo_url else '<div class="ah-avatar">🎒</div>'
+
+    # 🎖️ คะแนนความประพฤติ
+    summary = next((s for s in get_conduct_summary() if s['uid'] == uid), None)
+    score_now = summary['score'] if summary else CONDUCT_START_SCORE
+    history = get_conduct_history(uid)[:5]
+    history_rows = "".join([
+        f"""<tr><td style="font-size:11.5px;color:#64748b;white-space:nowrap;">{h['created_at']}</td>
+            <td style="text-align:left;">{h['reason']}<br><span style="font-size:10px;color:#94a3b8;">โดย: {h['recorded_by']}</span></td>
+            <td style="color:{'#15803d' if h['points']>=0 else '#b91c1c'};font-weight:800;">{'+' if h['points']>=0 else ''}{h['points']}</td></tr>"""
+        for h in history
+    ])
+
+    # 🗓️ ประวัติการเช็กชื่อล่าสุด
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("""SELECT group_name, status, date FROM attendance_logs
+        WHERE student_name = ? AND classroom = ? ORDER BY log_id DESC LIMIT 8""", (me['name'], me['class']))
+    attendance_rows_raw = cursor.fetchall()
+    # 📋 คำร้องขอลาของฉัน
+    cursor.execute("""SELECT group_name, leave_date, status, reason FROM leave_requests
+        WHERE student_name = ? AND student_no = ? ORDER BY req_id DESC LIMIT 5""", (me['name'], me['no']))
+    leave_rows_raw = cursor.fetchall()
+    conn.close()
+
+    status_color = {"มา": "#15803d", "สาย": "#d97706", "ขาด": "#b91c1c", "ลา": "#2563eb"}
+    attendance_rows = "".join([
+        f"""<tr><td style="text-align:left;">{r[0]}</td>
+            <td style="color:{status_color.get(r[1], '#334155')};font-weight:800;">{r[1]}</td>
+            <td style="font-size:12px;color:#64748b;">{r[2]}</td></tr>"""
+        for r in attendance_rows_raw
+    ])
+
+    leave_badge = {"pending": "⏳ รออนุมัติ", "approved": "✅ อนุมัติแล้ว", "rejected": "❌ ปฏิเสธ"}
+    leave_rows = "".join([
+        f"""<tr><td style="text-align:left;">{r[0]}<br><span style="font-size:11px;color:#94a3b8;">{r[1]}</span></td>
+            <td style="font-size:12px;">{leave_badge.get(r[2], r[2])}</td></tr>"""
+        for r in leave_rows_raw
+    ])
+
+    fg, bg, border = ("#10b981", "#f0fdf4", "#bbf7d0") if score_now >= 80 else ("#d97706", "#fffbeb", "#fde68a") if score_now >= 50 else ("#ef4444", "#fef2f2", "#fecaca")
+
+    conn2 = sqlite3.connect('attendance_pro.db')
+    cursor2 = conn2.cursor()
+    cursor2.execute("SELECT COUNT(*) FROM announcements WHERE is_active=1")
+    active_announcements = cursor2.fetchone()[0]
+    conn2.close()
+
+    def badge(n):
+        return f'<span class="ah-badge">{n}</span>' if n > 0 else ""
+
+    # SVG Icons สำหรับ menu grid
+    def svg_icon(path_d, color="#4f46e5", bg="#eef2ff"):
+        return f'<div class="ah-cell-icon-wrap" style="background:{bg}; color:{color};"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{path_d}</svg></div>'
+
+    icon_activity = svg_icon('<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>', "#7c3aed", "#f5f3ff")
+    icon_classroom = svg_icon('<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9,22 9,12 15,12 15,22"/>', "#0369a1", "#e0f2fe")
+    icon_homework = svg_icon('<path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>', "#0f766e", "#f0fdfa")
+    icon_care = svg_icon('<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>', "#b45309", "#fffbeb")
+    icon_payment = svg_icon('<rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/>', "#0369a1", "#dbeafe")
+    icon_grades = svg_icon('<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>', "#15803d", "#f0fdf4")
+    icon_health = svg_icon('<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>', "#dc2626", "#fef2f2")
+    icon_timetable = svg_icon('<rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>', "#7c3aed", "#f5f3ff")
+    icon_report = svg_icon('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>', "#0369a1", "#dbeafe")
+    icon_news_big = '<svg viewBox="0 0 24 24" width="52" height="52" fill="none" stroke="rgba(255,255,255,0.9)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2"/><path d="M18 14h-8"/><path d="M15 18h-5"/><path d="M10 6h8v4h-8z"/></svg>'
+    icon_calendar_sm = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="#1d4ed8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>'
+    icon_checkin_big = '<svg viewBox="0 0 24 24" width="52" height="52" fill="none" stroke="rgba(255,255,255,0.9)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>'
+    icon_leave_sm = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="#0369a1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>'
+
+    # score ring color
+    score_ring_style = f"background:{bg};color:{fg};border:3px solid {border};"
+    score_label = "ดีเยี่ยม" if score_now >= 80 else "พอใช้" if score_now >= 50 else "ต้องปรับปรุง"
+
+    return f"""
+    <html>{STYLE_HEADER}
+    {ADMIN_HOME_STYLE}
+    <body class="ah-body">
+        <!-- ── Profile Hero ── -->
+        <div class="ah-profile">
+            <div class="ah-top-row">
+                <div class="ah-brand">K-School</div>
+                <div class="ah-top-icons">
+                    <a href="/student/profile" class="ah-icon-btn" aria-label="โปรไฟล์">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                    </a>
+                    <a href="/app/notifications" class="ah-icon-btn" aria-label="แจ้งเตือน">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+                        {badge(active_announcements)}
+                    </a>
+                </div>
+            </div>
+            <div class="ah-who">
+                {avatar_html}
+                <div>
+                    <h1>สวัสดี, {me['name']}</h1>
+                    <p>{me['class']} · เลขที่ {me['no']}</p>
+                </div>
+            </div>
+            <div class="ah-inst">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9,22 9,12 15,12 15,22"/></svg>
+                วิทยาลัยนาฏศิลป
+            </div>
+        </div>
+
+        <div class="ah-wrap">
+            <!-- ── ประกาศ ── -->
+            <div id="announcement-section" style="margin-bottom:16px; display:none;">
+                <div id="announcement-list"></div>
+            </div>
+            <script>
+                async function loadAnnouncements() {{
+                    try {{
+                        const resp = await fetch('/api/announcements');
+                        const data = await resp.json();
+                        if (data && data.length > 0) {{
+                            document.getElementById('announcement-section').style.display = 'block';
+                            const list = document.getElementById('announcement-list');
+                            const cfg = {{normal:{{cls:'normal',ic:'📣',tc:'#1e40af'}}, important:{{cls:'important',ic:'⚠️',tc:'#92400e'}}, urgent:{{cls:'urgent',ic:'🚨',tc:'#991b1b'}}}};
+                            data.forEach(a => {{
+                                const c = cfg[a.level] || cfg.normal;
+                                const div = document.createElement('div');
+                                div.className = `ah-announce ${{c.cls}}`;
+                                div.innerHTML = `<div class="ah-announce-title" style="color:${{c.tc}}">${{c.ic}} ${{a.title}}</div><div class="ah-announce-body">${{a.body}}</div>`;
+                                list.appendChild(div);
+                            }});
+                        }}
+                    }} catch (e) {{}}
+                }}
+                loadAnnouncements();
+            </script>
+
+            <!-- ── Big Tiles: ข่าวสาร + ปฏิทิน ── -->
+            <div class="ah-row2">
+                <a href="/app/notifications" class="ah-tile-big">
+                    <div class="ah-tile-bg-icon">{icon_news_big}</div>
+                    <div class="ah-tile-pill">ประกาศล่าสุด</div>
+                    <span class="ah-tile-label">ข่าวสาร<br>และประกาศ</span>
+                </a>
+                <a href="/coming_soon?back=/student/dashboard" class="ah-tile">
+                    <div class="ah-tile-icon-wrap" style="background:#dbeafe;">{icon_calendar_sm}</div>
+                    <span class="ah-tile-label">ปฏิทิน</span>
+                </a>
+            </div>
+
+            <!-- ── คะแนนความประพฤติ ── -->
+            <div class="ah-score-card">
+                <div class="ah-score-ring" style="{score_ring_style}"><span data-live-score>{score_now}</span></div>
+                <div class="ah-score-info">
+                    <div class="lbl">คะแนนความประพฤติ</div>
+                    <div class="val" style="color:{fg};">{score_now} <span style="font-size:14px;color:#94a3b8;">/ 100</span></div>
+                    <div class="sub">สถานะ: <strong style="color:{fg};">{score_label}</strong></div>
+                </div>
+            </div>
+
+            <!-- ── เมนูหลัก 3x3 ── -->
+            <div class="ah-section-label">เมนูหลัก</div>
+            <div class="ah-grid3">
+                <a href="/coming_soon?back=/student/dashboard" class="ah-cell">
+                    {icon_activity}<span class="ah-cell-label">กิจกรรม</span>
+                </a>
+                <a href="/coming_soon?back=/student/dashboard" class="ah-cell">
+                    {icon_classroom}<span class="ah-cell-label">ห้องเรียน</span>
+                </a>
+                <a href="/student/homework" class="ah-cell">
+                    {icon_homework}<span class="ah-cell-label">การบ้าน</span>
+                </a>
+                <a href="/student/care" class="ah-cell">
+                    {icon_care}<span class="ah-cell-label">ดูแลนักเรียน</span>
+                </a>
+                <a href="/student/payments" class="ah-cell">
+                    {icon_payment}<span class="ah-cell-label">ชำระเงิน</span>
+                </a>
+                <a href="/student/grades" class="ah-cell">
+                    {icon_grades}<span class="ah-cell-label">ผลการเรียน</span>
+                </a>
+                <a href="/coming_soon?back=/student/dashboard" class="ah-cell">
+                    {icon_health}<span class="ah-cell-label">ข้อมูลสุขภาพ</span>
+                </a>
+                <a href="/student/timetable" class="ah-cell">
+                    {icon_timetable}<span class="ah-cell-label">ตารางเรียน</span>
+                </a>
+                <a href="/student/grades" class="ah-cell">
+                    {icon_report}<span class="ah-cell-label">รายงานคะแนนเก็บ</span>
+                </a>
+            </div>
+
+            <!-- ── Big Tiles: เช็กชื่อ + ยื่นคำร้อง ── -->
+            <div class="ah-section-label">การเข้าเรียน</div>
+            <div class="ah-row2">
+                <a href="/checkin" class="ah-tile-big" style="background:linear-gradient(135deg,#0f766e,#0d9488);">
+                    <div class="ah-tile-bg-icon">{icon_checkin_big}</div>
+                    <div class="ah-tile-pill">OTP ใช้ครั้งเดียว</div>
+                    <span class="ah-tile-label">เช็กชื่อ<br>ด้วย OTP</span>
+                </a>
+                <a href="/leave" class="ah-tile">
+                    <div class="ah-tile-icon-wrap" style="background:#dbeafe;">{icon_leave_sm}</div>
+                    <span class="ah-tile-label">ยื่นคำร้องลา</span>
+                </a>
+            </div>
+
+            <!-- ── ประวัติเช็กชื่อ ── -->
+            <div class="ah-section-title">ประวัติการเช็กชื่อล่าสุด</div>
+            <div class="ah-table-wrap" style="overflow-x:auto;">
+                <table><thead><tr><th style="text-align:left;">วิชา</th><th>สถานะ</th><th>วันที่</th></tr></thead>
+                <tbody>{attendance_rows if attendance_rows else "<tr><td colspan='3' style='color:#94a3b8;text-align:center;padding:16px 0;'>ยังไม่มีประวัติ</td></tr>"}</tbody></table>
+            </div>
+
+            <!-- ── คำร้องลา ── -->
+            <div class="ah-section-title">คำร้องลาของฉัน</div>
+            <div class="ah-table-wrap" style="overflow-x:auto;">
+                <table><thead><tr><th style="text-align:left;">รายการ</th><th>สถานะ</th></tr></thead>
+                <tbody>{leave_rows if leave_rows else "<tr><td colspan='2' style='color:#94a3b8;text-align:center;padding:16px 0;'>ยังไม่มีคำร้อง</td></tr>"}</tbody></table>
+            </div>
+
+            <!-- ── ประวัติความประพฤติ ── -->
+            <div class="ah-section-title">ประวัติคะแนนความประพฤติ</div>
+            <div class="ah-table-wrap" style="overflow-x:auto;">
+                <table><thead><tr><th>วันที่</th><th style="text-align:left;">เหตุผล</th><th>คะแนน</th></tr></thead>
+                <tbody>{history_rows if history_rows else "<tr><td colspan='3' style='color:#94a3b8;text-align:center;padding:16px 0;'>ยังไม่มีประวัติ</td></tr>"}</tbody></table>
+            </div>
+
+            <div class="ah-footer">powered by <span>K-Techinteractive</span></div>
+        </div>
+
+        {render_bottom_nav("home", "student")}
+        {realtime_notify_script(uid)}
+    </body></html>
+    """
+
+@app.get("/student/profile", response_class=HTMLResponse)
+async def student_profile_page(user_session: Optional[str] = Cookie(None)):
+    """👤 หน้าโปรไฟล์นักเรียน — ข้อมูลส่วนตัว + ทางลัดที่เกี่ยวข้อง + ออกจากระบบ"""
+    if not user_session or not user_session.startswith("student_"):
+        return RedirectResponse(url="/login", status_code=303)
+    uid = urllib.parse.unquote(user_session.replace("student_", "", 1))
+    all_students = get_sorted_master_students()
+    me = next((s for s in all_students if s['uid'] == uid), None)
+    if not me:
+        resp = RedirectResponse(url="/login", status_code=303)
+        resp.delete_cookie(key="user_session")
+        return resp
+
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT photo_url FROM student_accounts WHERE uid = ?", (uid,))
+    photo_row = cursor.fetchone()
+    conn.close()
+    my_photo_url = photo_row[0] if photo_row and photo_row[0] else ""
+    avatar_html = f'<img src="{my_photo_url}" style="width:76px;height:76px;border-radius:50%;object-fit:cover;border:3px solid rgba(255,255,255,0.5);">' if my_photo_url else '<div class="ah-avatar" style="width:76px;height:76px;font-size:32px;">🎒</div>'
+
+    summary = next((s for s in get_conduct_summary() if s['uid'] == uid), None)
+    score_now = summary['score'] if summary else CONDUCT_START_SCORE
+    fg_p, bg_p, border_p = ("#10b981", "#f0fdf4", "#bbf7d0") if score_now >= 80 else ("#d97706", "#fffbeb", "#fde68a") if score_now >= 50 else ("#ef4444", "#fef2f2", "#fecaca")
+    score_label_p = "ดีเยี่ยม" if score_now >= 80 else "พอใช้" if score_now >= 50 else "ต้องปรับปรุง"
+
+    return f"""
+    <html>{STYLE_HEADER}
+    {ADMIN_HOME_STYLE}
+    <body class="ah-body">
+        <div class="ah-profile" style="text-align:center;">
+            <div class="ah-top-row"><div class="ah-brand">K-School</div><div></div></div>
+            <div style="display:flex;flex-direction:column;align-items:center;gap:10px;position:relative;">
+                {avatar_html}
+                <div>
+                    <h1 style="margin:0;font-size:17px;font-weight:800;">{me['name']}</h1>
+                    <p style="margin:4px 0 0;font-size:12.5px;color:rgba(255,255,255,0.65);">{me['class']} · เลขที่ {me['no']}</p>
+                </div>
+            </div>
+            <div class="ah-inst" style="justify-content:center;margin-top:14px;">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9,22 9,12 15,12 15,22"/></svg>
+                วิทยาลัยนาฏศิลป
+            </div>
+        </div>
+        <div class="ah-wrap">
+            <div class="ah-score-card" style="margin-bottom:14px;">
+                <div class="ah-score-ring" style="background:{bg_p};color:{fg_p};border:3px solid {border_p};font-size:18px;font-weight:800;"><span data-live-score>{score_now}</span></div>
+                <div class="ah-score-info">
+                    <div class="lbl">คะแนนความประพฤติ</div>
+                    <div class="val" style="color:{fg_p};">{score_now}<span style="font-size:14px;color:#94a3b8;font-weight:500;"> / 100</span></div>
+                    <div class="sub">สถานะ: <strong style="color:{fg_p};">{score_label_p}</strong></div>
+                </div>
+            </div>
+
+            <div class="ah-section-label">บัญชีของฉัน</div>
+            <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:12px;">
+                <a href="/student/grades" class="ah-cell" style="flex-direction:row;justify-content:flex-start;text-align:left;padding:14px;gap:14px;">
+                    <div class="ah-cell-icon-wrap" style="background:#f0fdf4;color:#15803d;flex-shrink:0;">
+                        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+                    </div>
+                    <span class="ah-cell-label" style="font-size:13px;">ผลการเรียน</span>
+                </a>
+                <a href="/leave" class="ah-cell" style="flex-direction:row;justify-content:flex-start;text-align:left;padding:14px;gap:14px;">
+                    <div class="ah-cell-icon-wrap" style="background:#dbeafe;color:#1d4ed8;flex-shrink:0;">
+                        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                    </div>
+                    <span class="ah-cell-label" style="font-size:13px;">คำร้องขอลาของฉัน</span>
+                </a>
+                <a href="/app/notifications" class="ah-cell" style="flex-direction:row;justify-content:flex-start;text-align:left;padding:14px;gap:14px;">
+                    <div class="ah-cell-icon-wrap" style="background:#fffbeb;color:#a16207;flex-shrink:0;">
+                        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+                    </div>
+                    <span class="ah-cell-label" style="font-size:13px;">แจ้งเตือน</span>
+                </a>
+                <a href="/logout" class="ah-cell" style="flex-direction:row;justify-content:flex-start;text-align:left;padding:14px;gap:14px;border-color:#fecaca;">
+                    <div class="ah-cell-icon-wrap" style="background:#fef2f2;color:#b91c1c;flex-shrink:0;">
+                        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16,17 21,12 16,7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                    </div>
+                    <span class="ah-cell-label" style="font-size:13px;color:#b91c1c;">ออกจากระบบ</span>
+                </a>
+            </div>
+            <div class="ah-footer">powered by <span>K-Techinteractive</span></div>
+        </div>
+        {render_bottom_nav("profile", "student")}
+        {realtime_notify_script(uid)}
+    </body></html>
+    """
+
+# ==========================================
+# 🎖️ [STUDENT] ดูแลนักเรียน + คะแนนความประพฤติและเกียรติคุณ — ตามดีไซน์ที่กำหนด
+# ==========================================
+CARE_PAGE_STYLE = """
+<style>
+    body { background: var(--surface-muted); }
+    .cr-header {
+        display:flex; align-items:center; gap:12px; padding: calc(env(safe-area-inset-top,0px) + 16px) 16px 16px;
+        background: var(--surface); border-bottom: 1px solid var(--border);
+    }
+    .cr-header a { font-size:20px; color: var(--navy-800); text-decoration:none; }
+    .cr-header h1 { margin:0; font-size:16.5px; font-weight:800; color: var(--navy-800); flex:1; }
+    .cr-profile {
+        background: linear-gradient(135deg, #38bdf8, #2563eb);
+        color:#fff; padding:20px 18px; display:flex; align-items:center; gap:14px;
+    }
+    .cr-profile img, .cr-profile .cr-avatar {
+        width:64px; height:64px; border-radius:50%; object-fit:cover; border:2px solid rgba(255,255,255,0.6);
+        display:flex; align-items:center; justify-content:center; font-size:26px; background:rgba(255,255,255,0.25); flex-shrink:0;
+    }
+    .cr-profile h2 { margin:0; font-size:15.5px; font-weight:800; }
+    .cr-profile p { margin:5px 0 0; font-size:12.5px; opacity:0.95; }
+    .cr-profile .cr-inst { margin-top:6px; font-size:12px; opacity:0.9; border-top:1px solid rgba(255,255,255,0.3); padding-top:6px; }
+    .cr-menu { max-width:640px; margin:0 auto; padding:16px; display:flex; flex-direction:column; gap:14px; }
+    .cr-btn {
+        background: linear-gradient(135deg, #38bdf8, #1d4ed8);
+        color:#fff; text-decoration:none; border-radius:16px; padding:20px 18px;
+        display:flex; align-items:center; gap:16px; font-size:15px; font-weight:800;
+        box-shadow: 0 8px 18px -8px rgba(37,99,235,0.5);
+    }
+    .cr-btn .cr-btn-icon { font-size:26px; flex-shrink:0; }
+</style>
+"""
+
+@app.get("/student/care", response_class=HTMLResponse)
+async def student_care_page(user_session: Optional[str] = Cookie(None)):
+    """👨‍👩‍👧 หน้า 'ดูแลนักเรียน' มุมมองนักเรียนดูข้อมูลของตัวเอง — เมนู 3 การ์ดไล่สีฟ้า ตามดีไซน์ต้นแบบ"""
+    if not user_session or not user_session.startswith("student_"):
+        return RedirectResponse(url="/login", status_code=303)
+    uid = urllib.parse.unquote(user_session.replace("student_", "", 1))
+    me = next((s for s in get_sorted_master_students() if s['uid'] == uid), None)
+    if not me:
+        resp = RedirectResponse(url="/login", status_code=303)
+        resp.delete_cookie(key="user_session")
+        return resp
+
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT photo_url FROM student_accounts WHERE uid = ?", (uid,))
+    photo_row = cursor.fetchone()
+    conn.close()
+    my_photo_url = photo_row[0] if photo_row and photo_row[0] else ""
+    avatar_html = f'<img src="{my_photo_url}">' if my_photo_url else '<div class="cr-avatar">🎒</div>'
+
+    return f"""
+    <html>{STYLE_HEADER}
+    {CARE_PAGE_STYLE}
+    <body>
+        <div class="cr-header">
+            <a href="/student/dashboard">‹</a>
+            <h1>ดูแลนักเรียน</h1>
+        </div>
+        <div class="cr-profile">
+            {avatar_html}
+            <div>
+                <h2>{me['name']}</h2>
+                <p>ระดับชั้น {me['class']}</p>
+                <div class="cr-inst">🏫 วิทยาลัยนาฏศิลป</div>
+            </div>
+        </div>
+        <div class="cr-menu">
+            <a href="/coming_soon?back=/student/care" class="cr-btn">
+                <span class="cr-btn-icon">🚪</span> เช็คชื่อเข้า-ออกโรงเรียน
+            </a>
+            <a href="/coming_soon?back=/student/care" class="cr-btn">
+                <span class="cr-btn-icon">👥</span> กิจกรรมโฮมรูม
+            </a>
+            <a href="/student/conduct" class="cr-btn">
+                <span class="cr-btn-icon">🏅</span> คะแนนความประพฤติและเกียรติคุณ
+            </a>
+        </div>
+        {realtime_notify_script(uid)}
+    </body></html>
+    """
+
+CONDUCT_STUDENT_STYLE = """
+<style>
+    body { background: var(--surface-muted); }
+    .cd2-header {
+        display:flex; align-items:center; gap:12px; padding: calc(env(safe-area-inset-top,0px) + 16px) 16px 16px;
+        background: var(--surface); border-bottom: 1px solid var(--border);
+    }
+    .cd2-header a { font-size:20px; color: var(--navy-800); text-decoration:none; }
+    .cd2-header h1 { margin:0; font-size:15.5px; font-weight:800; color: var(--navy-800); flex:1; }
+    .cd2-profile {
+        background: linear-gradient(135deg, #38bdf8, #2563eb);
+        color:#fff; padding:20px 18px; display:flex; align-items:center; gap:14px;
+    }
+    .cd2-profile img, .cd2-profile .cd2-avatar {
+        width:64px; height:64px; border-radius:50%; object-fit:cover; border:2px solid rgba(255,255,255,0.6);
+        display:flex; align-items:center; justify-content:center; font-size:26px; background:rgba(255,255,255,0.25); flex-shrink:0;
+    }
+    .cd2-profile h2 { margin:0; font-size:15.5px; font-weight:800; }
+    .cd2-profile p { margin:5px 0 0; font-size:12.5px; opacity:0.95; }
+    .cd2-profile .cd2-inst { margin-top:6px; font-size:12px; opacity:0.9; border-top:1px solid rgba(255,255,255,0.3); padding-top:6px; }
+    .cd2-wrap { max-width:640px; margin:0 auto; padding:16px; }
+    .cd2-total {
+        border:1.5px solid #93c5fd; border-radius:14px; padding:14px 16px; margin-bottom:18px;
+        display:flex; align-items:center; gap:12px; background:#fff;
+    }
+    .cd2-total-icon { font-size:26px; flex-shrink:0; }
+    .cd2-total-label { font-size:13px; font-weight:700; color:#1d4ed8; }
+    .cd2-total-sub { font-size:11.5px; color:#94a3b8; margin-top:2px; }
+    .cd2-total-value { margin-left:auto; font-size:19px; font-weight:800; color:#1d4ed8; white-space:nowrap; }
+    .cd2-date-sep { background:#f1f5f9; color:#64748b; font-size:12.5px; font-weight:700; padding:8px 12px; border-radius:8px; margin: 14px 0 8px; }
+    .cd2-entry { display:flex; align-items:flex-start; gap:10px; padding:12px 4px; border-bottom:1px solid var(--border); }
+    .cd2-entry-body { flex:1; min-width:0; }
+    .cd2-entry-reason { font-size:13.5px; font-weight:700; color:#2563eb; margin-bottom:4px; }
+    .cd2-entry-meta { font-size:11.5px; color:#64748b; margin-bottom:2px; }
+    .cd2-entry-time { font-size:11.5px; color:#94a3b8; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    .cd2-pill-wrap { display:flex; align-items:center; gap:4px; flex-shrink:0; }
+    .cd2-pill { border:1.5px solid; border-radius:8px; padding:4px 10px; font-weight:800; font-size:13px; text-align:center; min-width:44px; }
+    .cd2-pill-sub { font-size:9px; font-weight:700; text-align:center; margin-top:1px; }
+    .cd2-chevron { font-size:14px; color:#94a3b8; }
+</style>
+"""
+
+@app.get("/student/conduct", response_class=HTMLResponse)
+async def student_conduct_page(user_session: Optional[str] = Cookie(None)):
+    """🏅 หน้าคะแนนความประพฤติและเกียรติคุณของนักเรียน (มุมมองอ่านอย่างเดียว) — จัดกลุ่มตามวันที่ พร้อมชื่อผู้บันทึกทุกรายการ"""
+    if not user_session or not user_session.startswith("student_"):
+        return RedirectResponse(url="/login", status_code=303)
+    uid = urllib.parse.unquote(user_session.replace("student_", "", 1))
+    me = next((s for s in get_sorted_master_students() if s['uid'] == uid), None)
+    if not me:
+        resp = RedirectResponse(url="/login", status_code=303)
+        resp.delete_cookie(key="user_session")
+        return resp
+
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT photo_url FROM student_accounts WHERE uid = ?", (uid,))
+    photo_row = cursor.fetchone()
+    conn.close()
+    my_photo_url = photo_row[0] if photo_row and photo_row[0] else ""
+    avatar_html = f'<img src="{my_photo_url}">' if my_photo_url else '<div class="cd2-avatar">🎒</div>'
+
+    summary = next((s for s in get_conduct_summary() if s['uid'] == uid), None)
+    score_now = summary['score'] if summary else CONDUCT_START_SCORE
+    history = get_conduct_history(uid)
+
+    # 🗓️ จัดกลุ่มรายการตามวันที่ (created_at รูปแบบ "YYYY-MM-DD HH:MM:SS")
+    entries_html = ""
+    last_date = None
+    for h in history:
+        raw = h['created_at'] or ""
+        date_part, _, time_part = raw.partition(" ")
+        time_display = time_part[:5] if time_part else "-"
+        if date_part and date_part != last_date:
+            try:
+                d = datetime.strptime(date_part, "%Y-%m-%d")
+                date_label = d.strftime("%d/%m/") + str(d.year + 543)  # แสดงเป็น พ.ศ. ให้ตรงกับดีไซน์ต้นแบบ
+            except ValueError:
+                date_label = date_part
+            entries_html += f'<div class="cd2-date-sep">{date_label}</div>'
+            last_date = date_part
+
+        is_plus = h['points'] >= 0
+        pill_color = "#15803d" if is_plus else "#b91c1c"
+        pill_bg = "#f0fdf4" if is_plus else "#fef2f2"
+        sign = "+" if is_plus else ""
+        entries_html += f"""
+        <div class="cd2-entry">
+            <div class="cd2-entry-body">
+                <div class="cd2-entry-reason">{h['reason']}</div>
+                <div class="cd2-entry-meta">โดย : {h['recorded_by']}</div>
+                <div class="cd2-entry-time">🕐 {time_display} น. 📍 -</div>
+            </div>
+            <div class="cd2-pill-wrap">
+                <div>
+                    <div class="cd2-pill" style="color:{pill_color};background:{pill_bg};border-color:{pill_color};">{sign}{h['points']}</div>
+                    <div class="cd2-pill-sub" style="color:{pill_color};">คะแนน</div>
+                </div>
+                <span class="cd2-chevron">⌄</span>
+            </div>
+        </div>"""
+
+    return f"""
+    <html>{STYLE_HEADER}
+    {CONDUCT_STUDENT_STYLE}
+    <body>
+        <div class="cd2-header">
+            <a href="/student/care">‹</a>
+            <h1>คะแนนความประพฤติและเกียรติคุณ</h1>
+        </div>
+        <div class="cd2-profile">
+            {avatar_html}
+            <div>
+                <h2>{me['name']}</h2>
+                <p>ระดับชั้น {me['class']}</p>
+                <div class="cd2-inst">🏫 วิทยาลัยนาฏศิลป</div>
+            </div>
+        </div>
+        <div class="cd2-wrap">
+            <div class="cd2-total">
+                <span class="cd2-total-icon">🧑‍🤝‍🧑</span>
+                <div>
+                    <div class="cd2-total-label">คะแนนความประพฤติรวม</div>
+                    <div class="cd2-total-sub">ภาคเรียนที่ 1</div>
+                </div>
+                <div class="cd2-total-value"><span data-live-score>{score_now}</span> คะแนน</div>
+            </div>
+            {entries_html if entries_html else "<p style='color:#94a3b8;text-align:center;padding:30px 0;'>ยังไม่มีประวัติคะแนนความประพฤติ</p>"}
+        </div>
+        {realtime_notify_script(uid)}
+    </body></html>
+    """
+
+# ==========================================
+# 🧭 BOTTOM NAV — 4 แท็บมาตรฐาน (โฮม / คำร้อง / ลงเวลา / โปรไฟล์) ปรับตามบทบาทผู้ใช้
+# ==========================================
+def render_bottom_nav(active: str, role: str, user: Optional[str] = None) -> str:
+    """สร้างแถบเมนูล่างแบบ 4 แท็บ SVG icons — dashboard style"""
+    uq = urllib.parse.quote(user) if user else ""
+    # SVG icons สำหรับแต่ละ tab
+    _icons = {
+        "home": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9,22 9,12 15,12 15,22"/></svg>',
+        "request": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10,9 9,9 8,9"/></svg>',
+        "checkin": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12,6 12,12 16,14"/></svg>',
+        "profile": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
+    }
+    if role == "student":
+        tabs = [
+            ("home",    "โฮม",     "home",    "/student/dashboard"),
+            ("request", "คำร้อง",  "request", "/leave"),
+            ("checkin", "ลงเวลา",  "checkin", "/checkin"),
+            ("profile", "โปรไฟล์", "profile", "/student/profile"),
+        ]
+    else:  # teacher
+        tabs = [
+            ("home",    "โฮม",     "home",    f"/app/dashboard?user={uq}"),
+            ("request", "คำร้อง",  "request", "/leave"),
+            ("checkin", "ลงเวลา",  "checkin", f"/app/history?user={uq}"),
+            ("profile", "โปรไฟล์", "profile", f"/teacher/profile?user={uq}"),
+        ]
+    items = "".join(
+        f'<a href="{url}" class="ah-nav-item{" active" if key == active else ""}">'
+        f'<span class="ah-nav-icon">{_icons.get(icon_key, "")}</span>'
+        f'{label}<span class="ah-nav-active-dot"></span></a>'
+        for key, label, icon_key, url in tabs
+    )
+    return f'<div class="ah-bottomnav">{items}</div>'
+
+# ==========================================
+# 👑 [ADMIN MAIN DASHBOARD & MAINTENANCE CONTROL]
+# ==========================================
+ADMIN_HOME_STYLE = """
+<style>
+    /* ============================================================
+       DASHBOARD STYLE v2 — K-Techinteractive
+       Clean sidebar-style dashboard adapted for mobile
+    ============================================================ */
+    * { box-sizing: border-box; }
+
+    body.ah-body {
+        background: #f0f4f8;
+        padding-bottom: 90px;
+        font-family: 'Sarabun', 'Noto Sans Thai', sans-serif;
+    }
+
+    /* ── Profile Hero ── */
+    .ah-profile {
+        background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 50%, #1d4ed8 100%);
+        color: #fff;
+        padding: calc(env(safe-area-inset-top, 0px) + 20px) 20px 28px;
+        position: relative; overflow: hidden;
+    }
+    .ah-profile::before {
+        content: ""; position: absolute; inset: 0;
+        background:
+            radial-gradient(circle at 90% 20%, rgba(96,165,250,0.25) 0%, transparent 50%),
+            radial-gradient(circle at 10% 80%, rgba(212,175,55,0.15) 0%, transparent 45%);
+        pointer-events: none;
+    }
+    .ah-profile::after {
+        content: ""; position: absolute; bottom: -1px; left: 0; right: 0; height: 24px;
+        background: #f0f4f8;
+        clip-path: ellipse(55% 100% at 50% 100%);
+    }
+    .ah-top-row {
+        display: flex; justify-content: space-between; align-items: center;
+        position: relative; margin-bottom: 18px;
+    }
+    .ah-brand { font-size: 11px; font-weight: 800; letter-spacing: 1.5px; color: rgba(255,255,255,0.55); text-transform: uppercase; }
+    .ah-top-icons { display: flex; gap: 8px; }
+    .ah-icon-btn {
+        width: 36px; height: 36px; border-radius: 10px;
+        background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.18);
+        backdrop-filter: blur(8px);
+        display: flex; align-items: center; justify-content: center;
+        color: #fff; text-decoration: none; font-size: 15px; position: relative;
+        transition: background .2s;
+    }
+    .ah-icon-btn:hover { background: rgba(255,255,255,0.2); }
+    .ah-icon-btn .ah-badge {
+        position: absolute; top: -4px; right: -4px; background: #ef4444; color: #fff;
+        font-size: 9px; font-weight: 800; border-radius: 100px; padding: 1px 4px; min-width: 14px; text-align: center;
+        border: 1.5px solid #1e3a8a; line-height: 1.3;
+    }
+    .ah-who { display: flex; align-items: center; gap: 14px; position: relative; }
+    .ah-avatar {
+        width: 56px; height: 56px; border-radius: 16px;
+        background: linear-gradient(135deg, #fbbf24, #f59e0b);
+        display: flex; align-items: center; justify-content: center;
+        font-size: 26px; flex-shrink: 0;
+        box-shadow: 0 6px 20px rgba(0,0,0,0.3), 0 0 0 2px rgba(255,255,255,0.15);
+    }
+    .ah-who h1 { margin: 0; font-size: 17px; font-weight: 800; letter-spacing: -0.2px; }
+    .ah-who p { margin: 4px 0 0; font-size: 12px; color: rgba(255,255,255,0.65); font-weight: 500; }
+    .ah-inst {
+        margin-top: 14px; font-size: 11.5px; color: rgba(255,255,255,0.55);
+        font-weight: 600; display: flex; align-items: center; gap: 5px; position: relative;
+    }
+
+    /* ── Main Wrap ── */
+    .ah-wrap { max-width: 640px; margin: 0 auto; padding: 20px 15px 0; }
+
+    /* ── Stats Row ── */
+    .ah-stats-row {
+        display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;
+        margin-bottom: 18px;
+    }
+    .ah-stat-card {
+        background: #fff; border-radius: 14px; padding: 14px 10px;
+        text-align: center; border: 1px solid rgba(0,0,0,0.06);
+        box-shadow: 0 1px 6px rgba(0,0,0,0.05);
+    }
+    .ah-stat-card .stat-val { font-size: 20px; font-weight: 800; color: #1e3a8a; line-height: 1; }
+    .ah-stat-card .stat-lbl { font-size: 10.5px; color: #64748b; font-weight: 600; margin-top: 5px; }
+
+    /* ── Big Tiles Row ── */
+    .ah-row2 { display: flex; gap: 12px; margin-bottom: 14px; }
+    .ah-tile-big {
+        border-radius: 18px; text-decoration: none; display: flex; flex-direction: column;
+        justify-content: flex-end; padding: 18px; position: relative; overflow: hidden;
+        background: linear-gradient(135deg, #1d4ed8, #1e3a8a);
+        color: #fff; min-height: 115px; flex: 1.4 1 0; min-width: 0;
+        box-shadow: 0 6px 20px rgba(29,78,216,0.35);
+        border: none;
+    }
+    .ah-tile-big .ah-tile-bg-icon {
+        position: absolute; top: 8px; right: 10px;
+        width: 52px; height: 52px; opacity: 0.18;
+    }
+    .ah-tile-big .ah-tile-label { font-size: 15px; font-weight: 800; line-height: 1.35; position: relative; }
+    .ah-tile-big .ah-tile-pill {
+        display: inline-block; background: rgba(255,255,255,0.18); border-radius: 100px;
+        font-size: 10px; font-weight: 700; padding: 2px 10px; margin-bottom: 8px;
+        position: relative; letter-spacing: 0.3px;
+    }
+    .ah-tile {
+        border-radius: 18px; text-decoration: none; display: flex; flex-direction: column;
+        justify-content: space-between; padding: 14px; position: relative; overflow: hidden;
+        background: #fff; color: #1e293b; min-height: 115px; flex: 1 1 0; min-width: 0;
+        box-shadow: 0 1px 6px rgba(0,0,0,0.07); border: 1px solid rgba(0,0,0,0.06);
+        transition: transform .15s, box-shadow .15s;
+    }
+    .ah-tile:active { transform: scale(0.97); box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+    .ah-tile .ah-tile-icon-wrap {
+        width: 42px; height: 42px; border-radius: 13px;
+        display: flex; align-items: center; justify-content: center;
+    }
+    .ah-tile .ah-tile-label { font-size: 12.5px; font-weight: 800; line-height: 1.3; color: #1e293b; }
+    .ah-tile .ah-badge-count {
+        position: absolute; top: 10px; right: 10px; background: #ef4444; color: #fff;
+        font-size: 10px; font-weight: 800; border-radius: 100px; padding: 1.5px 7px;
+    }
+
+    /* ── 3-col Menu Grid ── */
+    .ah-section-label {
+        font-size: 11px; font-weight: 800; color: #94a3b8; letter-spacing: 1.2px;
+        text-transform: uppercase; margin: 20px 2px 10px;
+    }
+    .ah-grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 14px; }
+    .ah-cell {
+        background: #fff; border: 1px solid rgba(0,0,0,0.06); border-radius: 16px;
+        padding: 16px 8px 14px; text-align: center; text-decoration: none; color: #1e293b;
+        display: flex; flex-direction: column; align-items: center; gap: 9px;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+        transition: transform .15s ease, box-shadow .15s;
+        position: relative; overflow: hidden;
+    }
+    .ah-cell:active { transform: scale(0.95); }
+    .ah-cell .ah-cell-icon-wrap {
+        width: 48px; height: 48px; border-radius: 14px;
+        display: flex; align-items: center; justify-content: center;
+        transition: transform .2s;
+    }
+    .ah-cell:active .ah-cell-icon-wrap { transform: scale(0.9); }
+    .ah-cell .ah-cell-label { font-size: 11px; font-weight: 700; line-height: 1.35; color: #334155; }
+
+    /* ── Score Card ── */
+    .ah-score-card {
+        background: #fff; border-radius: 18px; padding: 18px 20px;
+        margin-bottom: 14px; border: 1px solid rgba(0,0,0,0.06);
+        box-shadow: 0 1px 6px rgba(0,0,0,0.05);
+        display: flex; align-items: center; gap: 16px;
+    }
+    .ah-score-ring {
+        width: 64px; height: 64px; border-radius: 50%; flex-shrink: 0;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 20px; font-weight: 800;
+    }
+    .ah-score-info .lbl { font-size: 11.5px; color: #64748b; font-weight: 600; }
+    .ah-score-info .val { font-size: 24px; font-weight: 800; line-height: 1.1; margin: 2px 0; }
+    .ah-score-info .sub { font-size: 10.5px; color: #94a3b8; }
+
+    /* ── Section Title ── */
+    .ah-section-title {
+        font-size: 12px; font-weight: 800; color: #64748b;
+        margin: 20px 2px 10px; letter-spacing: 0.5px; display: flex;
+        align-items: center; gap: 7px;
+    }
+    .ah-section-title::after {
+        content: ""; flex: 1; height: 1px; background: #e2e8f0;
+    }
+
+    /* ── Tables ── */
+    .ah-table-wrap {
+        background: #fff; border-radius: 16px; overflow: hidden;
+        border: 1px solid rgba(0,0,0,0.06); box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+        margin-bottom: 14px;
+    }
+
+    /* ── Bottom Nav ── */
+    .ah-bottomnav {
+        position: fixed; bottom: 0; left: 0; right: 0; z-index: 50;
+        background: rgba(255,255,255,0.97); backdrop-filter: blur(16px) saturate(180%);
+        border-top: 1px solid rgba(0,0,0,0.08);
+        display: flex; justify-content: space-around;
+        padding: 10px 6px calc(env(safe-area-inset-bottom, 0px) + 10px);
+        box-shadow: 0 -4px 24px rgba(15,23,42,0.08);
+    }
+    .ah-nav-item {
+        display: flex; flex-direction: column; align-items: center; gap: 4px;
+        text-decoration: none; color: #94a3b8; font-size: 10px; font-weight: 700;
+        flex: 1; padding: 2px 0; transition: color .2s;
+    }
+    .ah-nav-item .ah-nav-icon { width: 24px; height: 24px; }
+    .ah-nav-item.active { color: #1d4ed8; }
+    .ah-nav-item.active .ah-nav-active-dot {
+        display: block; width: 4px; height: 4px; background: #1d4ed8;
+        border-radius: 50%; margin: 0 auto; margin-top: 2px;
+    }
+    .ah-nav-active-dot { display: none; }
+
+    /* ── Footer ── */
+    .ah-footer {
+        text-align: center; color: #cbd5e1; font-size: 10.5px; font-weight: 600;
+        margin: 24px 0 8px; letter-spacing: 0.3px;
+    }
+    .ah-footer span { color: #93c5fd; }
+
+    /* ── Announcement Card ── */
+    .ah-announce {
+        border-radius: 14px; padding: 13px 15px; margin-bottom: 10px;
+        border-left: 3px solid;
+    }
+    .ah-announce.normal { background: #eff6ff; border-color: #3b82f6; }
+    .ah-announce.important { background: #fffbeb; border-color: #f59e0b; }
+    .ah-announce.urgent { background: #fef2f2; border-color: #ef4444; }
+    .ah-announce-title { font-size: 13px; font-weight: 800; margin-bottom: 4px; }
+    .ah-announce-body { font-size: 12px; color: #475569; line-height: 1.55; }
+</style>
+"""
+
+@app.get("/admin/dashboard", response_class=HTMLResponse)
+async def admin_dashboard(user_session: Optional[str] = Cookie(None)):
+    if user_session != "admin": 
+        return RedirectResponse(url="/login", status_code=303)
+
+    conn_tmp = sqlite3.connect('attendance_pro.db')
+    cur_tmp = conn_tmp.cursor()
+    cur_tmp.execute("SELECT COUNT(*) FROM leave_requests WHERE status='pending'")
+    pending_leave = cur_tmp.fetchone()[0]
+    cur_tmp.execute("SELECT COUNT(*) FROM announcements WHERE is_active=1")
+    active_announcements = cur_tmp.fetchone()[0]
+    conn_tmp.close()
+
+    def badge(n):
+        return f'<span class="ah-badge">{n}</span>' if n > 0 else ""
+
+    def count_badge(n):
+        return f'<span class="ah-badge-count">{n}</span>' if n > 0 else ""
+
+    # SVG helper สำหรับ admin cells
+    def adm_cell(href, svg_path, bg, color, label):
+        return f'''<a href="{href}" class="ah-cell">
+            <div class="ah-cell-icon-wrap" style="background:{bg};color:{color};">
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{svg_path}</svg>
+            </div>
+            <span class="ah-cell-label">{label}</span>
+        </a>'''
+
+    # SVG icon สำหรับ big tiles
+    icon_announce_big = '<svg viewBox="0 0 24 24" width="52" height="52" fill="none" stroke="rgba(255,255,255,0.9)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>'
+    icon_leave_big = '<svg viewBox="0 0 24 24" width="42" height="42" fill="none" stroke="#1d4ed8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>'
+
+    return f"""
+    <html>{STYLE_HEADER}
+    {ADMIN_HOME_STYLE}
+    <body class="ah-body">
+        <!-- ── Admin Profile Hero ── -->
+        <div class="ah-profile">
+            <div class="ah-top-row">
+                <div class="ah-brand">K-School Admin</div>
+                <div class="ah-top-icons">
+                    <a href="/admin/announcements" class="ah-icon-btn" aria-label="ประกาศ">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+                        {badge(active_announcements)}
+                    </a>
+                    <a href="/logout" class="ah-icon-btn" aria-label="ออกจากระบบ">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16,17 21,12 16,7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                    </a>
+                </div>
+            </div>
+            <div class="ah-who">
+                <div class="ah-avatar" style="background:linear-gradient(135deg,#ef4444,#b91c1c);">
+                    <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                </div>
+                <div>
+                    <h1>สวัสดี, ผู้ดูแลระบบ</h1>
+                    <p>Admin · K-School Enterprise</p>
+                </div>
+            </div>
+            <div class="ah-inst">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9,22 9,12 15,12 15,22"/></svg>
+                วิทยาลัยนาฏศิลป
+            </div>
+        </div>
+
+        <div class="ah-wrap">
+            <!-- ── Big Tiles: ประกาศ + คำร้อง ── -->
+            <div class="ah-row2">
+                <a href="/admin/announcements" class="ah-tile-big">
+                    <div class="ah-tile-bg-icon">{icon_announce_big}</div>
+                    <div class="ah-tile-pill">จัดการประกาศ</div>
+                    <span class="ah-tile-label">ข่าวสาร<br>และประกาศ</span>
+                </a>
+                <a href="/admin/leave_requests" class="ah-tile" style="position:relative;">
+                    {count_badge(pending_leave)}
+                    <div class="ah-tile-icon-wrap" style="background:#dbeafe;">{icon_leave_big}</div>
+                    <span class="ah-tile-label">คำร้องขอลา</span>
+                </a>
+            </div>
+
+            <!-- ── เมนูจัดการระบบ ── -->
+            <div class="ah-section-label">การจัดการระบบ</div>
+            <div class="ah-grid3">
+                {adm_cell("/admin/students", '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>', "#dbeafe", "#1d4ed8", "จัดการนักเรียน")}
+                {adm_cell("/admin/student_accounts", '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>', "#f5f3ff", "#6d28d9", "บัญชีล็อกอิน")}
+                {adm_cell("/admin/teachers", '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>', "#f0fdf4", "#15803d", "จัดการครู")}
+                {adm_cell("/admin/view_classes", '<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9,22 9,12 15,12 15,22"/>', "#fef9c3", "#a16207", "ห้องเรียน/วิชา")}
+                {adm_cell("/admin/assign_groups", '<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/>', "#fae8ff", "#a21caf", "จัดสรรกลุ่มเรียน")}
+                {adm_cell("/admin/conduct", '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>', "#fff1f2", "#be123c", "คะแนนประพฤติ")}
+                {adm_cell("/admin/history", '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/>', "#fff7ed", "#c2410c", "ประวัติเช็กชื่อ")}
+                {adm_cell("/admin/payments", '<rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/>', "#eef2ff", "#4338ca", "ชำระเงิน")}
+                {adm_cell("/admin/grades_visibility", '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>', "#ecfeff", "#0e7490", "การมองเห็นคะแนน")}
+            </div>
+
+            <!-- ── เมนูอื่นๆ ── -->
+            <div class="ah-section-label">เครื่องมือ</div>
+            <div class="ah-grid3">
+                {adm_cell("/admin/add_student", '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>', "#ecfeff", "#0e7490", "เพิ่มนักเรียน")}
+                {adm_cell("/api/admin/export_excel", '<polyline points="6,9 12,15 18,9"/><line x1="12" y1="3" x2="12" y2="15"/><path d="M5 20h14"/>', "#f0fdf4", "#047857", "Export Excel")}
+                {adm_cell("/admin/system_status", '<circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/>', "#f8fafc", "#334155", "ระบบ/เซิร์ฟเวอร์")}
+                {adm_cell("/admin/analytics", '<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>', "#eef2ff", "#4338ca", "แดชบอร์ดสถิติ")}
+                {adm_cell("/admin/permissions", '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/>', "#fdf4ff", "#a21caf", "จัดการสิทธิ์")}
+            </div>
+
+            <div class="ah-footer">powered by <span>K-Techinteractive</span></div>
+        </div>
+
+        <!-- Admin Bottom Nav -->
+        <div class="ah-bottomnav">
+            <a href="/admin/dashboard" class="ah-nav-item active">
+                <span class="ah-nav-icon"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9,22 9,12 15,12 15,22"/></svg></span>โฮม<span class="ah-nav-active-dot"></span>
+            </a>
+            <a href="/admin/announcements" class="ah-nav-item">
+                <span class="ah-nav-icon"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></span>ประกาศ<span class="ah-nav-active-dot"></span>
+            </a>
+            <a href="/admin/history" class="ah-nav-item">
+                <span class="ah-nav-icon"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/></svg></span>ประวัติ<span class="ah-nav-active-dot"></span>
+            </a>
+            <a href="/admin/system_status" class="ah-nav-item">
+                <span class="ah-nav-icon"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg></span>ตั้งค่า<span class="ah-nav-active-dot"></span>
+            </a>
+        </div>
+    </body></html>
+    """
+
+@app.get("/admin/students", response_class=HTMLResponse)
+async def admin_students_page(class_filter: Optional[str] = None, user_session: Optional[str] = Cookie(None)):
+    if user_session != "admin":
+        return RedirectResponse(url="/login", status_code=303)
+
+    master_students = get_sorted_master_students()
+    all_classes = sorted(list(set(s['class'] for s in master_students)))
+    class_options = '<option value="">-- แสดงทั้งหมด --</option>'
+    for c in all_classes:
+        sel = 'selected' if class_filter == c else ''
+        class_options += f'<option value="{c}" {sel}>ชั้น {c}</option>'
+    if class_filter:
+        master_students = [s for s in master_students if s['class'] == class_filter]
+    all_risk_tags = get_all_students_risk_tags()
+    student_table_rows = ""
+    for s in master_students:
+        tags = all_risk_tags.get(s['name'], [])
+        tag_html = "".join([
+            f'<span style="background:{t[1]};color:{t[2]};border:1px solid {t[3]};padding:2px 7px;border-radius:20px;font-size:11px;font-weight:700;white-space:nowrap;">{t[0]}</span>'
+            for t in tags
+        ])
+        student_table_rows += f"""
+        <tr>
+            <td><span class="badge">{s['class']}</span></td>
+            <td><b>{s['no']}</b></td>
+            <td style="text-align:left;">
+                <div style="font-weight:600; color:#0f172a;">{s['name']}</div>
+                {f'<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;">{tag_html}</div>' if tag_html else ''}
+            </td>
+            <td><span style="color:#475569; font-size:12.5px;">{s['branch']}</span></td>
+            <td>
+                <div style="display:flex; gap:6px; justify-content:center;">
+                    <a href="/admin/edit_student?uid={s['uid']}" class="btn btn-warning" style="padding:5px 10px; font-size:11.5px;">📝 แก้ไข</a>
+                    <a href="/api/admin/delete_student?uid={s['uid']}" class="btn btn-danger" style="padding:5px 10px; font-size:11.5px;" onclick="return confirm('ยืนยันที่จะลบข้อมูลนักเรียนคนนี้ออกจากทะเบียนหลัก?')">🛑 ลบ</a>
+                </div>
+            </td>
+        </tr>
+        """
+    return f"""
+    <html>{STYLE_HEADER}
+    <body>
+        <div class="navbar">
+            <h1><img src="{LOGO_URL}" class="nav-logo"> จัดการนักเรียน</h1>
+            <a href="/admin/dashboard" class="btn btn-secondary">⬅ กลับหน้าควบคุม</a>
+        </div>
+        <div class="main-container">
+            <a href="/admin/add_student" class="btn btn-warning" style="width:100%; padding:14px; margin-bottom:12px; box-sizing:border-box; font-weight:700; border-radius:10px; background: linear-gradient(135deg, #10b981, #047857); border:none; text-align:center; color:white;">📥 เพิ่มรายชื่อนักเรียนใหม่</a>
+            <a href="/admin/student_accounts" class="btn btn-warning" style="width:100%; padding:14px; margin-bottom:16px; box-sizing:border-box; font-weight:700; border-radius:10px; background: linear-gradient(135deg, #7c3aed, #5b21b6); border:none; text-align:center; color:white;">🔑 ตั้งค่ารหัสประจำตัว/เบอร์โทร สำหรับเข้าสู่ระบบนักเรียน</a>
+            <div class="card">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; flex-wrap:wrap; gap:10px;">
+                    <h2 style="margin:0;">📁 ฐานข้อมูลทะเบียนนักเรียนส่วนกลาง</h2>
+                    <div style="display:flex; align-items:center; gap:8px; background:#f1f5f9; padding:8px 12px; border-radius:10px; border:1px solid #e2e8f0;">
+                        <span style="font-size:13px; font-weight:700; color:#475569;">🔍 กรองตามห้อง:</span>
+                        <select onchange="location.href='/admin/students?class_filter='+this.value;" style="padding:5px; border-radius:6px; border:1px solid #cbd5e1; font-family:'Sarabun'; font-size:13px; font-weight:600;">
+                            {class_options}
+                        </select>
+                    </div>
+                </div>
+                <div style="overflow-x:auto; border-radius:8px; border:1px solid #e2e8f0;">
+                    <table>
+                        <thead><tr><th>ชั้นเรียน</th><th>เลขที่</th><th>ชื่อ-นามสกุล</th><th>สาขาวิชาเอก</th><th>การจัดการระบบ</th></tr></thead>
+                        <tbody>{student_table_rows if student_table_rows else "<tr><td colspan='5'>ไม่พบข้อมูล</td></tr>"}</tbody>
+                    </table>
+                </div>
+            </div>
+            <div style="text-align:center; color:#94a3b8; font-size:12px; font-weight:600; margin-top:20px;">KK STUDIO GROUP APPLICATION MANAGEMENT</div>
+        </div>
+    </body></html>
+    """
+
+@app.get("/admin/student_accounts", response_class=HTMLResponse)
+async def admin_student_accounts_page(class_filter: Optional[str] = None, user_session: Optional[str] = Cookie(None)):
+    access = get_access(user_session)
+    if not access["authenticated"] or not can_manage_student_profiles(access):
+        return RedirectResponse(url="/login", status_code=303)
+    back_url = "/admin/dashboard" if access["role"] == "admin" else f"/app/dashboard?user={urllib.parse.quote(access['username'])}"
+
+    master_students = get_sorted_master_students()
+    # 🎓 หัวหน้าระดับ: เห็น/แก้ไขได้เฉพาะนักเรียนในระดับชั้นที่รับผิดชอบ
+    if access["role"] == "level_head":
+        if not access["level_scope"]:
+            return alert_redirect("บัญชีของคุณยังไม่ถูกกำหนดระดับชั้นที่รับผิดชอบ กรุณาติดต่อผู้ดูแลระบบ", type="error", url=back_url)
+        master_students = [s for s in master_students if get_grade_level(s['class']) == access["level_scope"]]
+
+    all_classes = sorted(list(set(s['class'] for s in master_students)))
+    class_options = '<option value="">-- แสดงทั้งหมด --</option>'
+    for c in all_classes:
+        sel = 'selected' if class_filter == c else ''
+        class_options += f'<option value="{c}" {sel}>ชั้น {c}</option>'
+    if class_filter:
+        master_students = [s for s in master_students if s['class'] == class_filter]
+
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT uid, student_id, phone, photo_url FROM student_accounts")
+    accounts = {r[0]: {"student_id": r[1], "phone": r[2], "photo_url": r[3]} for r in cursor.fetchall()}
+    conn.close()
+
+    scope_note = ""
+    if access["role"] == "level_head":
+        scope_note = f'<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:10px 16px;margin-bottom:12px;font-size:12.5px;color:#1e40af;">🎓 คุณกำลังดูเฉพาะนักเรียนระดับชั้น <b>{access["level_scope"]}</b></div>'
+
+    rows = ""
+    for s in master_students:
+        acc = accounts.get(s['uid'], {"student_id": "", "phone": "", "photo_url": ""})
+        status_badge = ('<span style="background:#f0fdf4;color:#166534;border:1px solid #86efac;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:700;">✅ ตั้งค่าแล้ว</span>'
+                         if acc["student_id"] and acc["phone"] else
+                         '<span style="background:#fef2f2;color:#991b1b;border:1px solid #fecaca;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:700;">⚠️ ยังไม่ได้ตั้งค่า</span>')
+        avatar_html = (f'<img src="{acc["photo_url"]}" style="width:44px;height:44px;border-radius:50%;object-fit:cover;border:2px solid #e2e8f0;">'
+                        if acc["photo_url"] else
+                        '<div style="width:44px;height:44px;border-radius:50%;background:#f1f5f9;display:flex;align-items:center;justify-content:center;font-size:20px;border:2px solid #e2e8f0;">🎒</div>')
+        rows += f"""
+        <tr>
+            <td style="text-align:left;">
+                <div style="display:flex;align-items:center;gap:10px;">
+                    {avatar_html}
+                    <div>
+                        <div style="font-weight:700;color:#0f172a;">{s['name']}</div>
+                        <div style="font-size:11.5px;color:#94a3b8;">{s['class']} · เลขที่ {s['no']}</div>
+                    </div>
+                </div>
+            </td>
+            <td>{status_badge}</td>
+            <td colspan="2">
+                <form action="/api/admin/student_account/set" method="post" enctype="multipart/form-data" style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; justify-content:center;">
+                    <input type="hidden" name="uid" value="{s['uid']}">
+                    <input type="text" name="student_id" value="{acc['student_id'] or ''}" placeholder="รหัสประจำตัว" required style="width:110px; margin:0; padding:6px 8px; font-size:12.5px;">
+                    <input type="text" name="phone" value="{acc['phone'] or ''}" placeholder="เบอร์โทร" required style="width:110px; margin:0; padding:6px 8px; font-size:12.5px;">
+                    <input type="file" name="photo" accept="image/png,image/jpeg,image/webp" style="width:130px; margin:0; padding:4px; font-size:11px;">
+                    <button type="submit" class="btn btn-warning" style="padding:6px 12px; font-size:11.5px;">💾 บันทึก</button>
+                </form>
+            </td>
+        </tr>
+        """
+
+    return f"""
+    <html>{STYLE_HEADER}
+    <body>
+        <div class="navbar">
+            <h1><img src="{LOGO_URL}" class="nav-logo"> 🔑 โปรไฟล์บัญชีนักเรียน</h1>
+            <a href="{back_url}" class="btn btn-secondary">⬅ กลับ</a>
+        </div>
+        <div class="main-container">
+            <div class="card" style="background:#eff6ff; border:1px solid #bfdbfe;">
+                <p style="margin:0; font-size:13px; color:#1e40af; line-height:1.7;">
+                    📌 นักเรียนจะล็อกอินเข้าระบบด้วย <b>รหัสประจำตัว + เบอร์โทรศัพท์</b> (ไม่ต้องตั้งรหัสผ่าน) และสามารถ <b>แนบรูปโปรไฟล์</b> ให้นักเรียนแต่ละคนได้จากตารางด้านล่าง (รองรับ .jpg .png .webp ไม่เกิน 3MB)
+                </p>
+            </div>
+            {scope_note}
+            <div class="card">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; flex-wrap:wrap; gap:10px;">
+                    <h2 style="margin:0;">รายชื่อนักเรียน</h2>
+                    <div style="display:flex; align-items:center; gap:8px; background:#f1f5f9; padding:8px 12px; border-radius:10px; border:1px solid #e2e8f0;">
+                        <span style="font-size:13px; font-weight:700; color:#475569;">🔍 กรองตามห้อง:</span>
+                        <select onchange="location.href='/admin/student_accounts?class_filter='+this.value;" style="padding:5px; border-radius:6px; border:1px solid #cbd5e1; font-family:'Sarabun'; font-size:13px; font-weight:600;">
+                            {class_options}
+                        </select>
+                    </div>
+                </div>
+                <div style="overflow-x:auto; border-radius:8px; border:1px solid #e2e8f0;">
+                    <table>
+                        <thead><tr><th style="text-align:left;">นักเรียน</th><th>สถานะ</th><th colspan="2">รหัสประจำตัว / เบอร์โทร / รูป</th></tr></thead>
+                        <tbody>{rows if rows else "<tr><td colspan='3'>ไม่พบข้อมูล</td></tr>"}</tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </body></html>
+    """
+
+@app.post("/api/admin/student_account/set")
+async def api_set_student_account(uid: str = Form(...), student_id: str = Form(...), phone: str = Form(...), photo: Optional[UploadFile] = File(None), user_session: Optional[str] = Cookie(None)):
+    access = get_access(user_session)
+    if not access["authenticated"] or not can_manage_student_profiles(access):
+        return HTMLResponse("Unauthorized", status_code=401)
+
+    # 🎓 หัวหน้าระดับ: ยืนยันว่านักเรียนคนนี้อยู่ในระดับชั้นที่ตนรับผิดชอบจริง
+    if access["role"] == "level_head":
+        all_students = get_sorted_master_students()
+        target = next((s for s in all_students if s['uid'] == uid), None)
+        if not target or not in_discipline_scope(access, target['class']):
+            return alert_redirect("คุณไม่มีสิทธิ์แก้ไขโปรไฟล์ของนักเรียนนอกระดับชั้นที่รับผิดชอบ", type="error", url="/admin/student_accounts")
+
+    student_id = student_id.strip()
+    phone = phone.strip()
+
+    photo_url = None  # None = ไม่แตะรูปเดิม
+    if photo is not None and photo.filename:
+        if photo.content_type not in ALLOWED_PHOTO_TYPES:
+            return alert_redirect("รองรับเฉพาะไฟล์รูปภาพ .jpg .png .webp เท่านั้น", type="error", url="/admin/student_accounts")
+        file_bytes = await photo.read()
+        if len(file_bytes) > MAX_PHOTO_SIZE_BYTES:
+            return alert_redirect("ไฟล์รูปภาพต้องมีขนาดไม่เกิน 3MB", type="error", url="/admin/student_accounts")
+        ext = ALLOWED_PHOTO_TYPES[photo.content_type]
+        safe_name = hashlib.md5(uid.encode("utf-8")).hexdigest() + ext
+        file_path = os.path.join(PROFILE_PHOTO_DIR, safe_name)
+        with open(file_path, "wb") as f:
+            f.write(file_bytes)
+        photo_url = f"/static/profiles/{safe_name}"
+
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    try:
+        if photo_url is not None:
+            cursor.execute("""INSERT INTO student_accounts (uid, student_id, phone, photo_url) VALUES (?, ?, ?, ?)
+                ON CONFLICT(uid) DO UPDATE SET student_id=excluded.student_id, phone=excluded.phone, photo_url=excluded.photo_url""",
+                (uid, student_id, phone, photo_url))
+        else:
+            cursor.execute("""INSERT INTO student_accounts (uid, student_id, phone) VALUES (?, ?, ?)
+                ON CONFLICT(uid) DO UPDATE SET student_id=excluded.student_id, phone=excluded.phone""",
+                (uid, student_id, phone))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.close()
+        return alert_redirect("รหัสประจำตัวนี้ถูกใช้กับนักเรียนคนอื่นแล้ว กรุณาตรวจสอบอีกครั้ง", type="error", url="/admin/student_accounts")
+    conn.close()
+    return alert_redirect("บันทึกโปรไฟล์นักเรียนเรียบร้อยแล้ว", type="success", url="/admin/student_accounts")
+
+@app.post("/api/admin/update_maintenance")
+async def api_update_maintenance(mode_type: str = Form(...), admin_pass: str = Form(...), user_session: Optional[str] = Cookie(None)):
+    if user_session != "admin": return HTMLResponse("Unauthorized", status_code=401)
+    if admin_pass != ADMIN_PASS:
+        return HTMLResponse(f"""<html>{STYLE_HEADER}<body><script>smartAlert({{title: 'ปฏิเสธการเข้าถึง!', message: 'รหัสผ่านผู้ดูแลระบบไม่ถูกต้อง!', type: 'error', callback: () => {{ history.back(); }} }});</script></body></html>""")
+        
+    is_active = 0 if mode_type == "off" else 1
+    
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("UPDATE maintenance_settings SET is_active = ?, mode_type = ? WHERE id = 1", (is_active, mode_type))
+    conn.commit()
+    conn.close()
+    
+    # ⚡ ดีดสั่งพ่นสัญญาณหาหน้าบ้านทุกคนพร้อมกันให้เปลี่ยนหน้าในเสี้ยววิ!
+    await manager.broadcast("STATUS_CHANGED")
+    
+    return HTMLResponse(f"""<html>{STYLE_HEADER}<body><script>smartAlert({{title: 'ดำเนินการเสร็จสิ้น!', message: 'ปรับปรุงสถานะระบบเรียบร้อยแล้ว', type: 'success', callback: () => {{ window.location.href='/admin/dashboard'; }} }});</script></body></html>""")
+
+# ==========================================
+# 🩺 SYSTEM STATUS — สถานะ IT ทั้งหมดของระบบ
+# ==========================================
+@app.get("/admin/system_status", response_class=HTMLResponse)
+async def admin_system_status(user_session: Optional[str] = Cookie(None)):
+    if user_session != "admin":
+        return RedirectResponse(url="/login", status_code=303)
+
+    import platform
+
+    # ── ทรัพยากรเครื่อง (CPU/RAM) ถ้ามี psutil ติดตั้งไว้ ──
+    try:
+        import psutil
+        cpu_percent = psutil.cpu_percent(interval=0.3)
+        mem = psutil.virtual_memory()
+        ram_percent = mem.percent
+        ram_used_gb = round(mem.used / (1024 ** 3), 2)
+        ram_total_gb = round(mem.total / (1024 ** 3), 2)
+        disk = psutil.disk_usage('.')
+        disk_percent = disk.percent
+        psutil_available = True
+    except Exception:
+        psutil_available = False
+
+    # ── Uptime ของ Web Server ──
+    uptime_delta = datetime.now() - SERVER_START_TIME
+    days = uptime_delta.days
+    hours, rem = divmod(uptime_delta.seconds, 3600)
+    minutes, seconds = divmod(rem, 60)
+    uptime_str = (f"{days} วัน {hours} ชม. {minutes} นาที" if days else f"{hours} ชม. {minutes} นาที {seconds} วิ")
+
+    # ── สถานะ Discord Bot ──
+    bot_online = bot.is_ready()
+    bot_latency_ms = round(bot.latency * 1000) if bot_online and bot.latency == bot.latency else None
+    guild_count = len(bot.guilds) if bot_online else 0
+    bot_user = str(bot.user) if bot.user else "ยังไม่ล็อกอิน"
+
+    # ── สถานะ Database ──
+    db_path = 'attendance_pro.db'
+    db_ok = True
+    db_size_mb = 0
+    table_counts = {}
+    try:
+        db_size_mb = round(os.path.getsize(db_path) / (1024 * 1024), 3) if os.path.exists(db_path) else 0
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        for table in ["teachers", "course_groups", "group_assignments", "attendance_logs", "leave_requests", "announcements"]:
+            try:
+                cursor.execute(f"SELECT COUNT(*) FROM {table}")
+                table_counts[table] = cursor.fetchone()[0]
+            except Exception:
+                table_counts[table] = "-"
+        conn.close()
+    except Exception:
+        db_ok = False
+
+    # ── WebSocket Realtime ──
+    ws_count = len(manager.active_connections)
+
+    # ── Maintenance Mode ──
+    m_cfg = get_maintenance_status()
+
+    def dot(ok):
+        c = "#10b981" if ok else "#ef4444"
+        return f'<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:{c};box-shadow:0 0 6px {c};margin-right:6px;"></span>'
+
+    def stat_card(icon, title, status_html, detail_html):
+        return f"""
+        <div style="background:white;border:1px solid #e6eaf1;border-radius:14px;padding:18px;box-shadow:0 1px 3px rgba(15,23,42,0.06);margin-bottom:14px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:6px;">
+                <div style="font-weight:700;font-size:14px;color:#0f172a;display:flex;align-items:center;gap:8px;">{icon} {title}</div>
+                {status_html}
+            </div>
+            <div style="font-size:12.5px;color:#64748b;line-height:1.8;">{detail_html}</div>
+        </div>
+        """
+
+    server_card = stat_card(
+        "🖥️", "Web Server (FastAPI / Uvicorn)",
+        f'{dot(True)}<span style="font-size:12px;font-weight:700;color:#10b981;">ONLINE</span>',
+        f"Uptime: <b>{uptime_str}</b><br>เริ่มทำงานเมื่อ: {SERVER_START_TIME.strftime('%d/%m/%Y %H:%M:%S')}<br>Python: {platform.python_version()} · {platform.system()} {platform.release()}"
+    )
+
+    bot_card = stat_card(
+        "🤖", "Discord Bot",
+        f'{dot(bot_online)}<span style="font-size:12px;font-weight:700;color:{"#10b981" if bot_online else "#ef4444"};">{"ONLINE" if bot_online else "OFFLINE"}</span>',
+        f"บัญชี: <b>{bot_user}</b><br>Latency: {bot_latency_ms if bot_latency_ms is not None else 'N/A'} ms<br>เชื่อมต่ออยู่: {guild_count} เซิร์ฟเวอร์ (guild)"
+    )
+
+    db_rows = " · ".join([f"{k}: <b>{v}</b>" for k, v in table_counts.items()])
+    db_card = stat_card(
+        "🗄️", "Database (SQLite)",
+        f'{dot(db_ok)}<span style="font-size:12px;font-weight:700;color:{"#10b981" if db_ok else "#ef4444"};">{"CONNECTED" if db_ok else "ERROR"}</span>',
+        f"ขนาดไฟล์: <b>{db_size_mb} MB</b><br>{db_rows}"
+    )
+
+    ws_card = stat_card(
+        "🔌", "WebSocket Realtime",
+        f'{dot(True)}<span style="font-size:12px;font-weight:700;color:#10b981;">ACTIVE</span>',
+        f"Client ที่เชื่อมต่ออยู่ตอนนี้: <b>{ws_count}</b> การเชื่อมต่อ"
+    )
+
+    maint_ok = m_cfg["is_active"] == 0
+    maintenance_card = stat_card(
+        "⚙️", "Maintenance Mode",
+        f'{dot(maint_ok)}<span style="font-size:12px;font-weight:700;color:{"#10b981" if maint_ok else "#f59e0b"};">{"เปิดใช้งานปกติ" if maint_ok else "ปิดกั้นอยู่"}</span>',
+        f"โหมดปัจจุบัน: <b>{m_cfg['mode_type']}</b>"
+    )
+
+    if psutil_available:
+        resource_card = stat_card(
+            "📊", "CPU / RAM / Disk",
+            "",
+            f"CPU: <b>{cpu_percent}%</b><br>RAM: <b>{ram_percent}%</b> ({ram_used_gb} / {ram_total_gb} GB)<br>Disk: <b>{disk_percent}%</b> ใช้งานแล้ว"
+        )
+    else:
+        resource_card = stat_card(
+            "📊", "CPU / RAM / Disk",
+            "",
+            "ไม่พบไลบรารี <code>psutil</code> ในเครื่อง — ติดตั้งด้วยคำสั่ง <code>pip install psutil</code> เพื่อดูข้อมูลนี้"
+        )
+
+    # ── System Logs Section ──
+    log_rows = "".join([f'<div style="font-family:monospace; font-size:11px; padding:4px 8px; border-bottom:1px solid #f1f5f9; color:#334155;">{log}</div>' for log in SYSTEM_LOGS])
+    log_card = f"""
+    <div class="card">
+        <h2>📜 ระบบบันทึกเหตุการณ์ (System Logs)</h2>
+        <div style="background:#f8fafc; border-radius:8px; max-height:200px; overflow-y:auto; border:1px solid #e2e8f0;">
+            {log_rows if log_rows else '<div style="padding:20px; text-align:center; color:#94a3b8;">ยังไม่มีบันทึกเหตุการณ์</div>'}
+        </div>
+    </div>
+    """
+
+    
+
+    maintenance_control_card = f"""
+    <div class="card" style="border: 2px dashed #f59e0b; background: #fffdf5;">
+        <h2 style="color:#d97706;">⚙️ ควบคุมโหมดสถานะเว็บไซต์ (Maintenance Mode)</h2>
+        <p style="font-size:13.5px; margin: 0 0 12px 0;"><b>สถานะปัจจุบัน:</b> <span style="font-weight:700;">{"🔴 ระบบกำลังเปิดออนไลน์ปกติ" if m_cfg["is_active"] == 0 else f"🟢 เปิดระบบป้องกันปิดปรับปรุงอยู่ ({m_cfg['mode_type']})"}</span></p>
+        <form action="/api/admin/update_maintenance" method="post" style="margin:0;">
+            <label style="font-size:12.5px; font-weight:700; color:#475569;">เลือกโหมดจำลองเปิดฉากกั้นเว็บ:</label>
+            <select name="mode_type" required>
+                <option value="off" {"selected" if m_cfg['is_active']==0 else ""}>🟢 [ปิดระบบคัดกรอง] เปิดเว็บออนไลน์ปกติให้ใช้งาน</option>
+                <option value="maintenance" {"selected" if m_cfg['is_active']==1 and m_cfg['mode_type']=='maintenance' else ""}>🏗️ กำลังแก้ไขเว็บไซต์</option>
+                <option value="updating" {"selected" if m_cfg['is_active']==1 and m_cfg['mode_type']=='updating' else ""}>🚀 กำลังอัปเดตระบบ</option>
+                <option value="testing" {"selected" if m_cfg['is_active']==1 and m_cfg['mode_type']=='testing' else ""}>🧪 กำลังอยู่ในช่วงทดลอง</option>
+                <option value="disabled" {"selected" if m_cfg['is_active']==1 and m_cfg['mode_type']=='disabled' else ""}>🔒 ปิดระบบชั่วคราว</option>
+                <option value="ip_error" {"selected" if m_cfg['is_active']==1 and m_cfg['mode_type']=='ip_error' else ""}>🚫 ไม่มีการจัดสรร IP ERROR 404</option>
+            </select>
+            <input type="password" name="admin_pass" placeholder="กรอกรหัสผ่านเจ้าของเว็บเพื่ออนุมัติคำสั่ง" required>
+            <button type="submit" class="btn-submit" style="background:linear-gradient(135deg, #d97706, #b45309); border-bottom-color:#78350f;">⚡ ยืนยันการเปลี่ยนแปลงโหมดเว็บ</button>
+        </form>
+    </div>
+    """
+
+    return f"""
+    <html>{STYLE_HEADER}
+    <body>
+        <div class="navbar">
+            <h1><img src="{LOGO_URL}" class="nav-logo"> 🏢 Enterprise System Infrastructure</h1>
+            <a href="/admin/dashboard" class="btn btn-secondary">⬅ กลับหน้าควบคุม</a>
+        </div>
+        <div class="main-container" style="max-width: 900px;">
+            <div style="background: linear-gradient(135deg, #0f172a, #1e293b); color:white; padding:30px; border-radius:16px; margin-bottom:24px; box-shadow: 0 10px 25px rgba(0,0,0,0.2); border-left: 6px solid #d4af37;">
+                <h1 style="margin:0; font-size:24px; letter-spacing:1px;">ศูนย์ควบคุมโครงสร้างพื้นฐาน</h1>
+                <p style="margin:8px 0 0 0; opacity:0.8; font-size:14px;">K-School Enterprise Edition · Monitoring & Security Audit</p>
+            </div>
+
+            {maintenance_control_card}
+
+            <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap:16px; margin-bottom:24px;">
+                {server_card}
+                {resource_card}
+                {bot_card}
+                {db_card}
+                {ws_card}
+                {maintenance_card}
+            </div>
+
+            {log_card}
+            
+
+            <div style="text-align:center;color:#94a3b8;font-size:11.5px;margin-top:24px; padding-bottom:40px;">
+                <div style="margin-bottom:8px;">ใบรับรองความปลอดภัยระดับองค์กร · เข้ารหัสข้อมูลแบบ End-to-End</div>
+                อัปเดตสถานะล่าสุด: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')} &nbsp;·&nbsp;
+                <a href="/admin/system_status" style="color:#1e3a8a;font-weight:700;text-decoration:none; background:#e2e8f0; padding:4px 12px; border-radius:20px;">🔄 รีเฟรชข้อมูลเรียลไทม์</a>
+            </div>
+        </div>
+    </body></html>
+    """
+
+# ==========================================
+# 👤 [INSTRUCTOR VIEW WITH MAINTENANCE BLOCK]
+# ==========================================
+@app.get("/app/dashboard", response_class=HTMLResponse)
+async def app_dashboard(user: str, user_session: Optional[str] = Cookie(None)):
+    if not user_session or user_session != f"teacher_{urllib.parse.quote(user)}":
+        return RedirectResponse(url="/login", status_code=303)
+        
+    m_cfg = get_maintenance_status()
+    if m_cfg["is_active"] == 1:
+        return generate_maintenance_html(m_cfg["mode_type"])
+        
+    access = get_access(user_session)
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT fullname FROM teachers WHERE username = ?", (user,))
+    t_info = cursor.fetchone()
+    display_name = t_info[0] if t_info else user
+    cursor.execute("SELECT group_id, group_name FROM course_groups WHERE teacher_username = ?", (user,))
+    my_groups = cursor.fetchall()
+    cursor.execute("SELECT COUNT(*) FROM announcements WHERE is_active=1")
+    active_announcements = cursor.fetchone()[0]
+    pending_leave = 0
+    if can_manage_discipline(access):
+        if access["role"] == "level_head" and access["level_scope"]:
+            cursor.execute("SELECT classroom, status FROM leave_requests WHERE status='pending'")
+            pending_leave = sum(1 for r in cursor.fetchall() if get_grade_level(r[0]) == access["level_scope"])
+        else:
+            cursor.execute("SELECT COUNT(*) FROM leave_requests WHERE status='pending'")
+            pending_leave = cursor.fetchone()[0]
+    conn.close()
+
+    def badge(n):
+        return f'<span class="ah-badge">{n}</span>' if n > 0 else ""
+    def count_badge(n):
+        return f'<span class="ah-badge-count">{n}</span>' if n > 0 else ""
+
+    # 🎓📍 แผ่นเช็กชื่อคลาสวิชาภายใต้การกำกับดูแล (SVG icons)
+    room_cells = ""
+    for g in my_groups:
+        target_url = f"/app/classroom/{g[0]}?user={user}"
+        room_cells += f"""
+        <a href="{target_url}" class="ah-cell">
+            <div class="ah-cell-icon-wrap" style="background:#dbeafe;color:#1d4ed8;">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            </div>
+            <span class="ah-cell-label">{g[1]}</span>
+        </a>"""
+
+    # 🔐 เมนูสิทธิ์พิเศษ: หัวหน้าระดับ / ฝ่ายกิจการ (SVG icons)
+    discipline_cells = ""
+    if can_manage_discipline(access):
+        discipline_cells += f"""
+        <a href="/admin/leave_requests" class="ah-cell" style="position:relative;">
+            {count_badge(pending_leave)}
+            <div class="ah-cell-icon-wrap" style="background:#eef2ff;color:#4338ca;">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+            </div>
+            <span class="ah-cell-label">อนุมัติคำร้องลา</span>
+        </a>
+        <a href="/admin/conduct" class="ah-cell">
+            <div class="ah-cell-icon-wrap" style="background:#fff1f2;color:#be123c;">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            </div>
+            <span class="ah-cell-label">คะแนนประพฤติ</span>
+        </a>"""
+    if can_view_analytics(access):
+        discipline_cells += f"""
+        <a href="/admin/analytics" class="ah-cell">
+            <div class="ah-cell-icon-wrap" style="background:#eef2ff;color:#4338ca;">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+            </div>
+            <span class="ah-cell-label">แดชบอร์ดสถิติ</span>
+        </a>"""
+    if can_manage_teacher_accounts(access):
+        discipline_cells += f"""
+        <a href="/admin/teachers" class="ah-cell">
+            <div class="ah-cell-icon-wrap" style="background:#f0fdf4;color:#15803d;">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            </div>
+            <span class="ah-cell-label">จัดการบัญชีครู</span>
+        </a>"""
+    if can_manage_student_profiles(access):
+        discipline_cells += f"""
+        <a href="/admin/student_accounts" class="ah-cell">
+            <div class="ah-cell-icon-wrap" style="background:#f5f3ff;color:#6d28d9;">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            </div>
+            <span class="ah-cell-label">โปรไฟล์นักเรียน</span>
+        </a>"""
+    discipline_section = ""
+    if discipline_cells:
+        scope_tag = f" ({access['level_scope']})" if access["role"] == "level_head" and access["level_scope"] else ""
+        discipline_section = f"""
+        <div class="ah-section-label">{access['role_label']}{scope_tag} · สิทธิ์พิเศษ</div>
+        <div class="ah-grid3">{discipline_cells}</div>
+        """
+
+    return f"""
+    <html>{STYLE_HEADER}
+    {ADMIN_HOME_STYLE}
+    <body class="ah-body">
+        <!-- ── Teacher Profile Hero ── -->
+        <div class="ah-profile">
+            <div class="ah-top-row">
+                <div class="ah-brand">K-School</div>
+                <div class="ah-top-icons">
+                    <a href="/app/notifications" class="ah-icon-btn" aria-label="ประกาศ">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+                        {badge(active_announcements)}
+                    </a>
+                    <a href="/logout" class="ah-icon-btn" aria-label="ออกจากระบบ">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16,17 21,12 16,7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                    </a>
+                </div>
+            </div>
+            <div class="ah-who">
+                <div class="ah-avatar" style="background:linear-gradient(135deg,#0f766e,#0d9488);">
+                    <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                </div>
+                <div>
+                    <h1>สวัสดี, {display_name}</h1>
+                    <p>{access['role_label']} · K-School</p>
+                </div>
+            </div>
+            <div class="ah-inst">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9,22 9,12 15,12 15,22"/></svg>
+                วิทยาลัยนาฏศิลป
+            </div>
+        </div>
+
+        <div class="ah-wrap">
+            <!-- ── ประกาศ ── -->
+            <div id="announcement-section" style="margin-bottom:16px; display:none;">
+                <div id="announcement-list"></div>
+            </div>
+            <script>
+                async function loadAnnouncements() {{
+                    try {{
+                        const resp = await fetch('/api/announcements');
+                        const data = await resp.json();
+                        if (data && data.length > 0) {{
+                            document.getElementById('announcement-section').style.display = 'block';
+                            const list = document.getElementById('announcement-list');
+                            const cfg = {{normal:{{cls:'normal',ic:'📣',tc:'#1e40af'}}, important:{{cls:'important',ic:'⚠️',tc:'#92400e'}}, urgent:{{cls:'urgent',ic:'🚨',tc:'#991b1b'}}}};
+                            data.forEach(a => {{
+                                const c = cfg[a.level] || cfg.normal;
+                                const div = document.createElement('div');
+                                div.className = `ah-announce ${{c.cls}}`;
+                                div.innerHTML = `<div class="ah-announce-title" style="color:${{c.tc}}">${{c.ic}} ${{a.title}}</div><div class="ah-announce-body">${{a.body}}</div>`;
+                                list.appendChild(div);
+                            }});
+                        }}
+                    }} catch (e) {{}}
+                }}
+                loadAnnouncements();
+            </script>
+
+            <!-- ── Big Tiles: ประวัติ + คำร้อง ── -->
+            <div class="ah-row2">
+                <a href="/app/history?user={user}" class="ah-tile-big" style="background:linear-gradient(135deg,#0f766e,#0d9488);">
+                    <div class="ah-tile-bg-icon">
+                        <svg viewBox="0 0 24 24" width="52" height="52" fill="none" stroke="rgba(255,255,255,0.9)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10,9 9,9 8,9"/></svg>
+                    </div>
+                    <div class="ah-tile-pill">ดูประวัติทั้งหมด</div>
+                    <span class="ah-tile-label">คลังประวัติ<br>ใบเช็กชื่อ</span>
+                </a>
+                <a href="/leave" class="ah-tile">
+                    <div class="ah-tile-icon-wrap" style="background:#dbeafe;">
+                        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="#1d4ed8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                    </div>
+                    <span class="ah-tile-label">ยื่นคำร้องลา <span style="font-size:10px;color:#94a3b8;display:block;font-weight:500;">(สำหรับนักเรียน)</span></span>
+                </a>
+            </div>
+
+            {discipline_section}
+
+            <div class="ah-section-title">คลาสวิชาภายใต้การกำกับดูแล</div>
+            <div class="ah-grid3">
+                {room_cells if room_cells else '<div style="grid-column:1/-1;padding:20px;text-align:center;background:#fff;border-radius:16px;border:1px solid #fecaca;color:#b91c1c;font-weight:700;font-size:13px;">⚠️ ยังไม่มีกลุ่มวิชาที่ได้รับมอบหมาย</div>'}
+            </div>
+
+            <div class="ah-footer">powered by <span>K-Techinteractive</span></div>
+        </div>
+
+        {render_bottom_nav("home", "teacher", user)}
+    </body></html>
+    """
+
+@app.get("/teacher/profile", response_class=HTMLResponse)
+async def teacher_profile_page(user: str, user_session: Optional[str] = Cookie(None)):
+    """👤 หน้าโปรไฟล์ครู — ข้อมูลส่วนตัว + สิทธิ์การใช้งาน + ออกจากระบบ"""
+    if not user_session or user_session != f"teacher_{urllib.parse.quote(user)}":
+        return RedirectResponse(url="/login", status_code=303)
+
+    access = get_access(user_session)
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT fullname FROM teachers WHERE username = ?", (user,))
+    t_info = cursor.fetchone()
+    display_name = t_info[0] if t_info else user
+    cursor.execute("SELECT COUNT(*) FROM course_groups WHERE teacher_username = ?", (user,))
+    group_count = cursor.fetchone()[0]
+    conn.close()
+    uq = urllib.parse.quote(user)
+
+    return f"""
+    <html>{STYLE_HEADER}
+    {ADMIN_HOME_STYLE}
+    <body class="ah-body">
+        <div class="ah-profile" style="text-align:center;">
+            <div class="ah-top-row"><div class="ah-brand">K-School</div><div></div></div>
+            <div style="display:flex;flex-direction:column;align-items:center;gap:10px;position:relative;">
+                <div class="ah-avatar" style="width:76px;height:76px;border-radius:20px;background:linear-gradient(135deg,#0f766e,#0d9488);">
+                    <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                </div>
+                <div>
+                    <h1 style="margin:0;font-size:17px;font-weight:800;">{display_name}</h1>
+                    <p style="margin:4px 0 0;font-size:12.5px;color:rgba(255,255,255,0.65);">{access['role_label']} · {group_count} กลุ่มวิชาที่ดูแล</p>
+                </div>
+            </div>
+            <div class="ah-inst" style="justify-content:center;margin-top:14px;">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9,22 9,12 15,12 15,22"/></svg>
+                วิทยาลัยนาฏศิลป
+            </div>
+        </div>
+        <div class="ah-wrap">
+            <div class="ah-section-label">บัญชีของฉัน</div>
+            <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:12px;">
+                <a href="/app/history?user={uq}" class="ah-cell" style="flex-direction:row;justify-content:flex-start;text-align:left;padding:14px;gap:14px;">
+                    <div class="ah-cell-icon-wrap" style="background:#fff7ed;color:#c2410c;flex-shrink:0;">
+                        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/></svg>
+                    </div>
+                    <span class="ah-cell-label" style="font-size:13px;text-align:left;">คลังประวัติใบเช็กชื่อ</span>
+                </a>
+                <a href="/leave" class="ah-cell" style="flex-direction:row;justify-content:flex-start;text-align:left;padding:14px;gap:14px;">
+                    <div class="ah-cell-icon-wrap" style="background:#dbeafe;color:#1d4ed8;flex-shrink:0;">
+                        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                    </div>
+                    <span class="ah-cell-label" style="font-size:13px;text-align:left;">ยื่นคำร้องลา</span>
+                </a>
+                <a href="/app/notifications" class="ah-cell" style="flex-direction:row;justify-content:flex-start;text-align:left;padding:14px;gap:14px;">
+                    <div class="ah-cell-icon-wrap" style="background:#fffbeb;color:#a16207;flex-shrink:0;">
+                        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+                    </div>
+                    <span class="ah-cell-label" style="font-size:13px;text-align:left;">แจ้งเตือน</span>
+                </a>
+                <a href="/logout" class="ah-cell" style="flex-direction:row;justify-content:flex-start;text-align:left;padding:14px;gap:14px;border-color:#fecaca;">
+                    <div class="ah-cell-icon-wrap" style="background:#fef2f2;color:#b91c1c;flex-shrink:0;">
+                        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16,17 21,12 16,7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                    </div>
+                    <span class="ah-cell-label" style="font-size:13px;color:#b91c1c;text-align:left;">ออกจากระบบ</span>
+                </a>
+            </div>
+            <div class="ah-footer">powered by <span>K-Techinteractive</span></div>
+        </div>
+        {render_bottom_nav("profile", "teacher", user)}
+    </body></html>
+    """
+
+# ==========================================
+# 📊 [ADMIN HISTORY SYSTEM & LOG DELETION]
+# ==========================================
+@app.get("/admin/history", response_class=HTMLResponse)
+async def admin_history_page(group_id: Optional[str] = None, user_session: Optional[str] = Cookie(None)):
+    if user_session != "admin": return RedirectResponse(url="/login", status_code=303)
+    
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    all_groups = []
+    distinct_dates = []
+    selected_group_name = ""
+    
+    try:
+        cursor.execute("SELECT group_id, group_name FROM course_groups")
+        all_groups = cursor.fetchall()
+        if group_id:
+            cursor.execute("SELECT group_name FROM course_groups WHERE group_id = ?", (group_id,))
+            g_res = cursor.fetchone()
+            if g_res:
+                selected_group_name = g_res[0]
+                cursor.execute("SELECT DISTINCT date FROM attendance_logs WHERE group_name = ? ORDER BY log_id DESC", (selected_group_name,))
+                distinct_dates = [r[0] for r in cursor.fetchall()]
+    except Exception as e: print(f"❌ Admin Fetch History Error: {e}")
+    finally: conn.close()
+
+    group_options = "<option value=''>-- เลือกวิชาที่ต้องการตรวจสอบ --</option>"
+    for g in all_groups:
+        is_sel = "selected" if group_id and int(group_id) == g[0] else ""
+        group_options += f"<option value='{g[0]}' {is_sel}>{g[1]}</option>"
+
+    date_list_items = ""
+    for d in distinct_dates:
+        target_detail_url = f"/admin/history/detail?group_name={selected_group_name}&date={d}"
+        date_list_items += f"""
+        <a href="{target_detail_url}" style="text-decoration:none; display:flex; justify-content:space-between; align-items:center; padding:14px; border:1px solid #cbd5e1; margin-bottom:10px; border-radius:8px; background:white; color:#0f172a;">
+            <span style="font-weight:600; font-size:14.5px;">📅 รอบวันที่: {d}</span>
+            <span style="color:#1e3a8a; font-size:13px; font-weight:700;">เปิดตรวจสอบ/ลบประวัติซ้ำ ➔</span>
+        </a>
+        """
+
+    return f"""
+    <html>{STYLE_HEADER}
+    <body>
+        <div class="navbar">
+            <h1><img src="{LOGO_URL}" class="nav-logo"> 📊 คลังใบเช็คชื่อส่วนกลาง</h1>
+            <a href="/admin/dashboard" class="btn btn-secondary">⬅ กลับหน้าหลัก</a>
+        </div>
+        <div class="main-container">
+            <div class="card">
+                <h2>🔍 คัดกรองเลือกวิชาเรียนคลาส</h2>
+                <label style="font-size:12.5px; color:#475569; font-weight:700;">วิชาเรียนในระบบทั้งหมด:</label>
+                <select onchange="location.href='/admin/history?group_id='+this.value;">
+                    {group_options}
+                </select>
+            </div>
+            {f'''
+            <div class="card">
+                <h2>📅 รายการวันที่บันทึกระบบของวิชา: {selected_group_name}</h2>
+                <div style="margin-top:10px;">
+                    {date_list_items if date_list_items else "<p style='color:gray; text-align:center; padding:10px;'>ยังไม่เคยมีประวัติบันทึกในวิชานี้</p>"}
+                </div>
+            </div>
+            ''' if group_id else ""}
+        </div>
+    </body></html>
+    """
+
+@app.get("/admin/history/detail", response_class=HTMLResponse)
+async def admin_history_detail_page(group_name: str, date: str, user_session: Optional[str] = Cookie(None)):
+    if user_session != "admin": return RedirectResponse(url="/login", status_code=303)
+    
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    logs = []
+    stats = {"มา": 0, "สาย": 0, "ลา": 0, "ขาด": 0}
+    checked_by_name = "ไม่ระบุ"
+    
+    try:
+        cursor.execute("SELECT student_name, student_no, classroom, status, checked_by FROM attendance_logs WHERE group_name = ? AND date = ?", (group_name, date))
+        logs = cursor.fetchall()
+        for row in logs:
+            if row[3] in stats: stats[row[3]] += 1
+            checked_by_name = row[4]
+    except Exception as e: print(f"❌ Admin Detail Error: {e}")
+    finally: conn.close()
+
+    table_rows = ""
+    for row in logs:
+        s_name, s_no, s_class, s_status, _ = row
+        status_color = "#10b981" if s_status == "มา" else "#f59e0b" if s_status == "สาย" else "#3b82f6" if s_status == "ลา" else "#ef4444"
+        table_rows += f"""
+        <tr>
+            <td><span class="badge">{s_class}</span></td>
+            <td><b>{s_no}</b></td>
+            <td><div style="text-align:left; font-weight:600; color:#0f172a;">{s_name}</div></td>
+            <td><span style="background-color:{status_color}; color:white; padding:4px 10px; border-radius:6px; font-size:12px; font-weight:700;">{s_status}</span></td>
+        </tr>
+        """
+
+    return f"""
+    <html>{STYLE_HEADER}
+    <body>
+        <div class="navbar">
+            <h1><img src="{LOGO_URL}" class="nav-logo"> 📋 ตรวจสอบ & บริหารข้อมูลใบเช็คชื่อ</h1>
+            <a href="javascript:history.back();" class="btn btn-secondary">⬅ ย้อนกลับ</a>
+        </div>
+        <div class="main-container">
+            <div class="card" style="background: linear-gradient(135deg, #1e293b, #0f172a); color: white;">
+                <h2 style="color: #fff; border-bottom: 2px solid #d4af37;">📘 รายละเอียดประวัติรอบแผ่นตรวจ</h2>
+                <p style="margin: 6px 0; font-size: 14px;"><b>วิชาเรียน:</b> {group_name}</p>
+                <p style="margin: 6px 0; font-size: 14px;"><b>ประจำรอบวันที่:</b> {date}</p>
+                <p style="margin: 6px 0; font-size: 14px; color:#cbd5e1;"><b>ผู้กดบันทึก:</b> {checked_by_name}</p>
+                
+                <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:8px; margin-top:15px; text-align:center;">
+                    <div style="background:#10b981; padding:8px; border-radius:6px;">มา<br><b>{stats['มา']}</b></div>
+                    <div style="background:#f59e0b; padding:8px; border-radius:6px;">สาย<br><b>{stats['สาย']}</b></div>
+                    <div style="background:#3b82f6; padding:8px; border-radius:6px;">ลา<br><b>{stats['ลา']}</b></div>
+                    <div style="background:#ef4444; padding:8px; border-radius:6px;">ขาด<br><b>{stats['ขาด']}</b></div>
+                </div>
+                
+                <div style="margin-top:20px;">
+                    <a href="/api/admin/delete_attendance_log?group_name={group_name}&date={date}" class="btn btn-danger" style="width:100%; padding:12px; font-size:14px; border-radius:8px; border-bottom:3px solid #b91c1c;" onclick="return confirm('⚠️ ยืนยันการลบข้อมูลใบเช็คชื่อในรอบวันนี้?')">🛑 ลบข้อมูลประวัติบันทึกซ้ำของรอบคลาสนี้</a>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>👥 ตารางสถานะรายชื่อเด็กรายบุคคล</h2>
+                <div style="overflow-x:auto; border-radius:8px; border:1px solid #e2e8f0;">
+                    <table>
+                        <thead><tr><th>ชั้นเรียน</th><th>เลขที่</th><th>ชื่อ-นามสกุล</th><th>สถานะ</th></tr></thead>
+                        <tbody>{table_rows if table_rows else "<tr><td colspan='4'>ไม่พบข้อมูลนักเรียน</td></tr>"}</tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </body></html>
+    """
+
+@app.get("/api/admin/delete_attendance_log")
+async def api_delete_attendance_log(group_name: str, date: str, user_session: Optional[str] = Cookie(None)):
+    if user_session != "admin": return HTMLResponse("Unauthorized", status_code=401)
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM attendance_logs WHERE group_name = ? AND date = ?", (group_name, date))
+        conn.commit()
+    except Exception as e: print(f"❌ DB Delete Attendance Log Error: {e}")
+    finally: conn.close()
+    return alert_redirect("ลบข้อมูลประวัติที่ซ้ำซ้อนในรอบนี้เรียบร้อยแล้ว", type="success", url="/admin/history")
+
+# ==========================================
+# 📝 [ADMIN EDIT & DELETE STUDENT]
+# ==========================================
+@app.get("/admin/edit_student", response_class=HTMLResponse)
+async def admin_edit_student_page(uid: str, user_session: Optional[str] = Cookie(None)):
+    if user_session != "admin": return RedirectResponse(url="/login", status_code=303)
+    master_students = get_sorted_master_students()
+    target = None
+    for s in master_students:
+        if s['uid'] == uid:
+            target = s
+            break
+    if not target: return "<h1>ไม่พบข้อมูลนักเรียน</h1>"
+    return f"""
+    <html>{STYLE_HEADER}
+    <body>
+        <div class="navbar"><h1><img src="{LOGO_URL}" class="nav-logo"> 📝 แก้ไขข้อมูลนักเรียนประจำทะเบียนหลัก</h1><a href="/admin/students" class="btn btn-secondary">⬅ กลับ</a></div>
+        <div class="main-container">
+            <div class="card">
+                <form action="/api/admin/edit_student" method="post">
+                    <input type="hidden" name="old_uid" value="{uid}">
+                    <label>ชื่อ-นามสกุล:</label><input type="text" name="student_name" value="{target['name']}" required>
+                    <label>เลขที่ประจำตัว:</label><input type="text" name="student_no" value="{target['no']}" required>
+                    <label>ระดับชั้นเรียน:</label><input type="text" name="classroom" value="{target['class']}" required>
+                    <label>สาขาวิชาเอก:</label><input type="text" name="branch" value="{target['branch']}" required>
+                    <button type="submit" class="btn-submit">💾 บันทึกการเปลี่ยนแปลง</button>
+                </form>
+            </div>
+        </div>
+    </body></html>
+    """
+
+@app.post("/api/admin/edit_student")
+async def api_edit_student(old_uid: str = Form(...), student_name: str = Form(...), student_no: str = Form(...), classroom: str = Form(...), branch: str = Form(...), user_session: Optional[str] = Cookie(None)):
+    if user_session != "admin": return HTMLResponse("Unauthorized", status_code=401)
+    lines_to_keep = []
+    if os.path.exists(TXT_DATABASE_PATH):
+        with open(TXT_DATABASE_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip() and "," in line:
+                    parts = line.split(",")
+                    curr_uid = f"{parts[0].strip()}_{parts[1].strip()}"
+                    if curr_uid != old_uid: lines_to_keep.append(line)
+    new_line = f"{student_name.strip()}, {student_no.strip()}, {classroom.strip()}, {branch.strip()}\n"
+    lines_to_keep.append(new_line)
+    with open(TXT_DATABASE_PATH, "w", encoding="utf-8") as f: f.writelines(lines_to_keep)
+    return alert_redirect("แก้ไขข้อมูลนักเรียนเรียบร้อยแล้ว", type="success", url="/admin/students")
+
+@app.get("/api/admin/delete_student")
+async def api_delete_student(uid: str, user_session: Optional[str] = Cookie(None)):
+    if user_session != "admin": return RedirectResponse(url="/login", status_code=303)
+    lines_to_keep = []
+    if os.path.exists(TXT_DATABASE_PATH):
+        with open(TXT_DATABASE_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip() and "," in line:
+                    parts = line.split(",")
+                    curr_uid = f"{parts[0].strip()}_{parts[1].strip()}"
+                    if curr_uid != uid: lines_to_keep.append(line)
+    return RedirectResponse(url="/admin/students", status_code=303)
+
+# ==========================================
+# 🎯 [DYNAMIC ASSIGNMENT SYSTEM] 
+# ==========================================
+@app.get("/admin/grades_visibility", response_class=HTMLResponse)
+async def admin_grades_visibility_page(selected_group_id: str = None, user_session: Optional[str] = Cookie(None)):
+    if user_session != "admin": return RedirectResponse(url="/login", status_code=303)
+    int_group_id = None
+    if selected_group_id and selected_group_id.strip() != "":
+        try: int_group_id = int(selected_group_id)
+        except ValueError: int_group_id = None
+
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT group_id, group_name, grades_visibility FROM course_groups ORDER BY group_name')
+    all_groups = cursor.fetchall()
+
+    group_options = "<option value=''>-- เลือกกลุ่มวิชาที่ต้องการตั้งค่า --</option>"
+    vis_map = {}
+    for g_id, g_name, vis in all_groups:
+        vis_map[g_id] = vis or "hidden"
+        is_sel = "selected" if int_group_id and g_id == int_group_id else ""
+        icon = {"all": "🟢", "hidden": "🔒", "custom": "🟡"}.get(vis or "hidden", "🔒")
+        group_options += f"<option value='{g_id}' {is_sel}>{icon} {g_name}</option>"
+
+    current_section = ""
+    if int_group_id and int_group_id in vis_map:
+        current_vis = vis_map[int_group_id]
+        cursor.execute("SELECT student_uid FROM group_assignments WHERE group_id=?", (int_group_id,))
+        assigned_uids = {r[0] for r in cursor.fetchall()}
+        cursor.execute("SELECT student_uid FROM grade_visible_students WHERE group_id=?", (int_group_id,))
+        custom_allowed = {r[0] for r in cursor.fetchall()}
+        class_students = [s for s in get_sorted_master_students() if s['uid'] in assigned_uids]
+
+        student_checkboxes = ""
+        for s in class_students:
+            is_checked = "checked" if s['uid'] in custom_allowed else ""
+            student_checkboxes += f"""
+            <div class="checkbox-container">
+                <input type="checkbox" class="gv-check" value="{s['uid']}" id="gv_{s['uid']}" {is_checked}>
+                <label for="gv_{s['uid']}" style="cursor:pointer; font-size:14px; width:100%; font-weight:500;">
+                    <span class="badge" style="margin-right:6px;">ชั้น {s['class']}</span> เลขที่ <b>{s['no']}</b> — {s['name']}
+                </label>
+            </div>"""
+
+        current_section = f"""
+        <div class="card" style="margin-top:20px;">
+            <h2>👁️ ตั้งค่าการมองเห็นคะแนน</h2>
+            <form action="/api/admin/grades_visibility/set_mode" method="post">
+                <input type="hidden" name="group_id" value="{int_group_id}">
+                <label style="font-size:12.5px;font-weight:700;color:#475569;">โหมดการมองเห็น:</label>
+                <select name="mode" required>
+                    <option value="hidden" {"selected" if current_vis == "hidden" else ""}>🔒 ปิด — นักเรียนดูไม่ได้เลย</option>
+                    <option value="all" {"selected" if current_vis == "all" else ""}>🟢 เปิด — นักเรียนดูได้ทุกคน</option>
+                    <option value="custom" {"selected" if current_vis == "custom" else ""}>🟡 กำหนดเอง — เลือกได้เฉพาะบางคน</option>
+                </select>
+                <button type="submit" class="btn-submit">💾 บันทึกโหมด</button>
+            </form>
+
+            <div style="margin-top:18px; {"opacity:0.4; pointer-events:none;" if current_vis != "custom" else ""}">
+                <p style="font-size:12.5px; color:#a16207; font-weight:700; margin-bottom:10px;">
+                    🟡 ใช้ได้เมื่อเลือกโหมด "กำหนดเอง" เท่านั้น — ติ๊กเฉพาะนักเรียนที่อนุญาตให้ดูคะแนนวิชานี้
+                </p>
+                <form action="/api/admin/grades_visibility/set_custom_list" method="post" onsubmit="return packVisibleStudents(this);">
+                    <input type="hidden" name="group_id" value="{int_group_id}">
+                    <input type="hidden" name="visible_students_csv" id="visible_students_csv">
+                    <div style="max-height:400px; overflow-y:auto; border:1px solid #e2e8f0; border-radius:8px; padding:8px;">
+                        {student_checkboxes if student_checkboxes else "<p style='color:#94a3b8;text-align:center;padding:10px;'>ยังไม่มีนักเรียนในกลุ่มนี้</p>"}
+                    </div>
+                    <button type="submit" class="btn-submit" style="margin-top:10px;">💾 บันทึกรายชื่อที่อนุญาต</button>
+                </form>
+            </div>
+        </div>
+        <script>
+        function packVisibleStudents(form) {{
+            // ✅ รวมรายชื่อ uid ที่ติ๊กเป็น field เดียว (คั่นด้วย comma) แทนการยิง checkbox แยกทีละคน
+            // ป้องกันปัญหาฟอร์มมี field เกิน 1000 ช่องเวลากลุ่มวิชามีนักเรียนจำนวนมาก
+            const checked = Array.from(form.querySelectorAll('.gv-check:checked')).map(el => el.value);
+            document.getElementById('visible_students_csv').value = checked.join(',');
+            return true;
+        }}
+        </script>"""
+
+    conn.close()
+
+    return f"""
+    <html>{STYLE_HEADER}
+    <body>
+        <div class="navbar">
+            <h1><img src="{LOGO_URL}" class="nav-logo"> 👁️ จัดการการมองเห็นคะแนน</h1>
+            <a href="/admin/dashboard" class="btn btn-secondary">⬅ กลับหน้าหลัก</a>
+        </div>
+        <div class="main-container">
+            <div class="card">
+                <h2>เลือกกลุ่มวิชาเรียน</h2>
+                <label style="font-size:12.5px; color:#475569; font-weight:700;">กลุ่มวิชา:</label>
+                <select onchange="location.href='/admin/grades_visibility?selected_group_id='+this.value;" style="border: 2px solid #1e3a8a; font-weight:700;">
+                    {group_options}
+                </select>
+                <p style="font-size:12px;color:#94a3b8;margin-top:10px;">
+                    🟢 เปิด = นักเรียนทุกคนในกลุ่มดูคะแนนวิชานี้ได้ · 🔒 ปิด = ดูไม่ได้เลย · 🟡 กำหนดเอง = เลือกได้เฉพาะบางคน
+                </p>
+            </div>
+            {current_section}
+        </div>
+    </body></html>
+    """
+
+@app.post("/api/admin/grades_visibility/set_mode")
+async def api_admin_grades_visibility_set_mode(group_id: int = Form(...), mode: str = Form(...), user_session: Optional[str] = Cookie(None)):
+    if user_session != "admin": return HTMLResponse("Unauthorized", status_code=401)
+    if mode not in ("all", "hidden", "custom"):
+        return alert_redirect("โหมดไม่ถูกต้อง", type="error", url=f"/admin/grades_visibility?selected_group_id={group_id}")
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("UPDATE course_groups SET grades_visibility=? WHERE group_id=?", (mode, group_id))
+    conn.commit()
+    conn.close()
+    return alert_redirect("บันทึกโหมดการมองเห็นคะแนนเรียบร้อยแล้ว", type="success", url=f"/admin/grades_visibility?selected_group_id={group_id}")
+
+@app.post("/api/admin/grades_visibility/set_custom_list")
+async def api_admin_grades_visibility_set_custom_list(group_id: int = Form(...), visible_students_csv: str = Form(""), user_session: Optional[str] = Cookie(None)):
+    if user_session != "admin": return HTMLResponse("Unauthorized", status_code=401)
+    allowed_uids = [u for u in visible_students_csv.split(",") if u.strip()]
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM grade_visible_students WHERE group_id=?", (group_id,))
+    for uid in allowed_uids:
+        cursor.execute("INSERT OR IGNORE INTO grade_visible_students (group_id, student_uid) VALUES (?, ?)", (group_id, uid))
+    conn.commit()
+    conn.close()
+    return alert_redirect("บันทึกรายชื่อที่อนุญาตให้ดูคะแนนเรียบร้อยแล้ว", type="success", url=f"/admin/grades_visibility?selected_group_id={group_id}")
+
+@app.get("/admin/assign_groups", response_class=HTMLResponse)
+async def admin_assign_groups_page(selected_group_id: str = None, class_filter: str = None, user_session: Optional[str] = Cookie(None)):
+    if user_session != "admin": return RedirectResponse(url="/login", status_code=303)
+    int_group_id = None
+    if selected_group_id and selected_group_id.strip() != "":
+        try: int_group_id = int(selected_group_id)
+        except ValueError: int_group_id = None
+
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT username, fullname FROM teachers")
+    teachers = cursor.fetchall()
+    cursor.execute('SELECT group_id, group_name FROM course_groups')
+    course_groups = cursor.fetchall()
+    
+    active_assigned_uids = []
+    if int_group_id:
+        cursor.execute("SELECT student_uid FROM group_assignments WHERE group_id = ?", (int_group_id,))
+        active_assigned_uids = [r[0] for r in cursor.fetchall()]
+    conn.close()
+
+    master_students = get_sorted_master_students()
+    # ดึงรายชื่อห้องทั้งหมด
+    all_classes = sorted(list(set(s['class'] for s in master_students)))
+    class_options_filter = '<option value="">-- แสดงทุกห้อง --</option>'
+    for c in all_classes:
+        sel = 'selected' if class_filter == c else ''
+        class_options_filter += f'<option value="{c}" {sel}>ชั้น {c}</option>'
+    # กรองนักเรียนตามห้อง (ถ้ามีการเลือก)
+    display_students = master_students
+    if class_filter:
+        display_students = [s for s in master_students if s['class'] == class_filter]
+    teacher_options = "".join([f"<option value='{t[0]}'>ครู {t[1]}</option>" for t in teachers])
+    
+    group_options = "<option value=''>-- เลือกวิชาที่ต้องการปรับปรุงรายชื่อเด็ก --</option>"
+    for g in course_groups:
+        is_sel = "selected" if int_group_id and g[0] == int_group_id else ""
+        group_options += f"<option value='{g[0]}' {is_sel}>{g[1]}</option>"
+
+    student_checkboxes = ""
+    for s in display_students:
+        is_checked = "checked" if s['uid'] in active_assigned_uids else ""
+        student_checkboxes += f"""
+        <div class="checkbox-container">
+            <input type="checkbox" name="assigned_students" value="{s['uid']}" id="st_{s['uid']}" {is_checked}>
+            <label for="st_{s['uid']}" style="cursor:pointer; font-size:14px; width:100%; font-weight:500;">
+                <span class="badge" style="margin-right:6px;">ชั้น {s['class']}</span> เลขที่ <b>{s['no']}</b> — {s['name']}
+            </label>
+        </div>
+        """
+
+    return f"""
+    <html>{STYLE_HEADER}
+    <body>
+        <div class="navbar">
+            <h1>🎯 การจัดแยกสายรายชื่อเข้ากลุ่มวิชาเรียนคลาส</h1>
+            <a href="/admin/dashboard" class="btn btn-secondary">⬅ กลับหน้าหลัก</a>
+        </div>
+        <div class="main-container">
+            <div class="card">
+                <h2>✨ การบริหารจัดการกลุ่มรายวิชาและกิจกรรม</h2>
+                <form action="/api/admin/create_group" method="post">
+                    <input type="text" name="group_name" placeholder="ชื่อวิชาเรียน เช่น: คลาสวิชาดิจิทัล, ทักษะโขน ม.2" required>
+                    <input type="text" name="branch" placeholder="สังกัดสาขาวิชาเอก เช่น: โขน" required>
+                    <select name="teacher_username" required>{teacher_options}</select>
+                    <button type="submit" class="btn-submit">⚡ ยืนยันการเพิ่มกลุ่มรายวิชา</button>
+                </form>
+            </div>
+            
+            <div class="card" style="margin-top: 24px;">
+                <h2>🎯 ส่วนแก้ไข/อัปเดต: เลือกกลุ่มวิชาเพื่อปรับปรุงรายชื่อนักเรียน</h2>
+                <label style="font-size:12.5px; color:#475569; font-weight:700;">เลือกรอบวิชาเรียนที่จะตรวจรายชื่อสิทธิ์:</label>
+                <select id="group_selector" onchange="location.href='/admin/assign_groups?selected_group_id='+this.value;" style="border: 2px solid #1e3a8a; font-weight:700;">
+                    {group_options}
+                </select>
+                
+                {f'''
+                <form action="/api/admin/assign_students_to_group" method="post" style="margin-top:15px;">
+                    <input type="hidden" name="group_id" value="{int_group_id}">
+                    <p style="font-size:13px; color:#f59e0b; font-weight:700; margin-bottom:10px;">💡 เลือกนักเรียนที่ต้องการเพิ่มหรือถอดถอนออกจากกลุ่มวิชา แล้วกดบันทึกได้เลย</p>
+                    <div style="display:flex; align-items:center; gap:10px; margin-bottom:12px; background:#f8fafc; padding:10px; border-radius:8px; border:1px solid #e2e8f0;">
+                        <span style="font-size:13px; font-weight:700; color:#1e3a8a;">🔍 เลือกดูเฉพาะห้อง:</span>
+                        <select onchange="let gid = document.getElementById('group_selector').value; location.href='/admin/assign_groups?selected_group_id='+gid+'&class_filter='+this.value;" style="flex:1; padding:6px; border-radius:6px; border:1px solid #cbd5e1; font-family:'Sarabun'; font-size:13px; font-weight:600;">
+                            {class_options_filter}
+                        </select>
+                    </div>
+                    <div style="border:1px solid #cbd5e1; border-radius:10px; max-height:400px; overflow-y:auto; padding:10px; background-color:#fff; margin-bottom:18px;">
+                        {student_checkboxes}
+                    </div>
+                    <button type="submit" class="btn-submit" style="background: linear-gradient(135deg, #10b981, #059669); border-bottom-color:#047857;">💾 บันทึกการจัดสรรนักเรียน</button>
+                </form>
+                ''' if int_group_id else "<p style='text-align:center; padding:20px; color:#64748b; font-size:13.5px;'>โปรดเลือกรายวิชาเพื่อดำเนินการจัดการข้อมูลนักเรียน</p>"}
+        </div>
+    </body></html>
+    """
+
+@app.get("/app/history", response_class=HTMLResponse)
+async def app_history_page(user: str, group_id: Optional[str] = None, user_session: Optional[str] = Cookie(None)):
+    if not user_session or user_session != f"teacher_{urllib.parse.quote(user)}": return RedirectResponse(url="/login", status_code=303)
+    m_cfg = get_maintenance_status()
+    if m_cfg["is_active"] == 1: return generate_maintenance_html(m_cfg["mode_type"])
+    
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    my_groups = []
+    distinct_dates = []
+    selected_group_name = ""
+    
+    try:
+        cursor.execute("SELECT group_id, group_name FROM course_groups WHERE teacher_username = ?", (user,))
+        my_groups = cursor.fetchall()
+        if group_id:
+            cursor.execute("SELECT group_name FROM course_groups WHERE group_id = ?", (group_id,))
+            g_res = cursor.fetchone()
+            if g_res:
+                selected_group_name = g_res[0]
+                cursor.execute("SELECT DISTINCT date FROM attendance_logs WHERE group_name = ? ORDER BY log_id DESC", (selected_group_name,))
+                distinct_dates = [r[0] for r in cursor.fetchall()]
+    except Exception as e: print(f"❌ Fetch History Error: {e}")
+    finally: conn.close()
+
+    group_options = "<option value=''>-- เลือกคลาสวิชาเรียน --</option>"
+    for g in my_groups:
+        is_sel = "selected" if group_id and int(group_id) == g[0] else ""
+        group_options += f"<option value='{g[0]}' {is_sel}>{g[1]}</option>"
+
+    date_list_items = ""
+    for d in distinct_dates:
+        target_detail_url = f"/app/history/detail?user={user}&group_name={selected_group_name}&date={d}"
+        date_list_items += f"""
+        <a href="{target_detail_url}" style="text-decoration:none; display:flex; justify-content:space-between; align-items:center; padding:14px; border:1px solid #cbd5e1; margin-bottom:10px; border-radius:8px; background:white; color:#0f172a;">
+            <span style="font-weight:600; font-size:14.5px;">📅 รอบวันที่: {d}</span>
+            <span style="color:#1e3a8a; font-size:13px; font-weight:700;">เปิดดูใบเช็คชื่อ ➔</span>
+        </a>
+        """
+
+    return f"""
+    <html>{STYLE_HEADER}
+    <body>
+        <div class="navbar">
+            <h1>📊 คลังประวัติใบเช็คชื่อย้อนหลัง</h1>
+            <a href="/app/dashboard?user={user}" class="btn btn-secondary">⬅ กลับหน้าหลัก</a>
+        </div>
+        <div class="main-container">
+            <div class="card">
+                <h2>🔍 เลือกวิชาเพื่อเรียกดูประวัติ</h2>
+                <label style="font-size:12.5px; color:#475569; font-weight:700;">คลาสวิชาเรียนเอก:</label>
+                <select onchange="location.href='/app/history?user={user}&group_id='+this.value;">
+                    {group_options}
+                </select>
+            </div>
+            {f'''
+            <div class="card">
+                <h2>📅 รายการรอบวันที่บันทึกไว้ของวิชา: {selected_group_name}</h2>
+                <div style="margin-top:10px;">
+                    {date_list_items if date_list_items else "<p style='color:gray; text-align:center; padding:10px;'>ยังไม่เคยมีประวัติการเช็คชื่อในวิชานี้</p>"}
+                </div>
+            </div>
+            ''' if group_id else ""}
+        </div>
+    </body></html>
+    """
+
+@app.get("/app/history/detail", response_class=HTMLResponse)
+async def app_history_detail_page(user: str, group_name: str, date: str, user_session: Optional[str] = Cookie(None)):
+    if not user_session or user_session != f"teacher_{urllib.parse.quote(user)}": return RedirectResponse(url="/login", status_code=303)
+    m_cfg = get_maintenance_status()
+    if m_cfg["is_active"] == 1: return generate_maintenance_html(m_cfg["mode_type"])
+    
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    logs = []
+    stats = {"มา": 0, "สาย": 0, "ลา": 0, "ขาด": 0}
+    checked_by_name = "ไม่ระบุ"
+    
+    try:
+        cursor.execute("SELECT student_name, student_no, classroom, status, checked_by FROM attendance_logs WHERE group_name = ? AND date = ?", (group_name, date))
+        logs = cursor.fetchall()
+        for row in logs:
+            if row[3] in stats: stats[row[3]] += 1
+            checked_by_name = row[4]
+    except Exception as e: print(f"❌ Detail Error: {e}")
+    finally: conn.close()
+
+    table_rows = ""
+    for row in logs:
+        s_name, s_no, s_class, s_status, _ = row
+        status_color = "#10b981" if s_status == "มา" else "#f59e0b" if s_status == "สาย" else "#3b82f6" if s_status == "ลา" else "#ef4444"
+        table_rows += f"""
+        <tr>
+            <td><span class="badge">{s_class}</span></td>
+            <td><b>{s_no}</b></td>
+            <td><div style="text-align:left; font-weight:600; color:#0f172a;">{s_name}</div></td>
+            <td><span style="background-color:{status_color}; color:white; padding:4px 10px; border-radius:6px; font-size:12px; font-weight:700;">{s_status}</span></td>
+        </tr>
+        """
+
+    return f"""
+    <html>{STYLE_HEADER}
+    <body>
+        <div class="navbar">
+            <h1>📋 รายละเอียดใบเช็คชื่อประจำห้อง</h1>
+            <a href="javascript:history.back();" class="btn btn-secondary">⬅ ย้อนกลับ</a>
+        </div>
+        <div class="main-container">
+            <div class="card" style="background: linear-gradient(135deg, #0f172a, #1e293b); color: white;">
+                <h2 style="color: #fff; border-bottom: 2px solid #d4af37;">📘 ข้อมูลแผ่นบันทึกคลาส</h2>
+                <p style="margin: 6px 0; font-size: 14px;"><b>วิชาเรียน:</b> {group_name}</p>
+                <p style="margin: 6px 0; font-size: 14px;"><b>ประจำรอบวันที่:</b> {date}</p>
+                <p style="margin: 6px 0; font-size: 14px; color:#cbd5e1;"><b>อาจารย์ผู้ตรวจ:</b> {checked_by_name}</p>
+                <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:8px; margin-top:15px; text-align:center;">
+                    <div style="background:#10b981; padding:8px; border-radius:6px;">มา<br><b>{stats['มา']}</b></div>
+                    <div style="background:#f59e0b; padding:8px; border-radius:6px;">สาย<br><b>{stats['สาย']}</b></div>
+                    <div style="background:#3b82f6; padding:8px; border-radius:6px;">ลา<br><b>{stats['ลา']}</b></div>
+                    <div style="background:#ef4444; padding:8px; border-radius:6px;">ขาด<br><b>{stats['ขาด']}</b></div>
+                </div>
+            </div>
+            <div class="card">
+                <h2>👥 บัญชีรายชื่อและสถานะการเข้าเรียน</h2>
+                <div style="overflow-x:auto; border-radius:8px; border:1px solid #e2e8f0;">
+                    <table>
+                        <thead><tr><th>ชั้นเรียน</th><th>เลขที่</th><th>ชื่อ-นามสกุล</th><th>สถานะ</th></tr></thead>
+                        <tbody>{table_rows if table_rows else "<tr><td colspan='4'>ไม่พบข้อมูลนักเรียน</td></tr>"}</tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </body></html>
+    """
+
+@app.get("/app/rollcall/{group_id}", response_class=HTMLResponse)
+async def app_rollcall_sheet(group_id: int, user: str, user_session: Optional[str] = Cookie(None)):
+    if not user_session or user_session != f"teacher_{urllib.parse.quote(user)}": return RedirectResponse(url="/login", status_code=303)
+    m_cfg = get_maintenance_status()
+    if m_cfg["is_active"] == 1: return generate_maintenance_html(m_cfg["mode_type"])
+
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT group_name FROM course_groups WHERE group_id = ?", (group_id,))
+    res_g = cursor.fetchone()
+    if not res_g:
+        conn.close()
+        return "<h1>ไม่พบกลุ่มวิชาเรียนนี้</h1>"
+    group_name = res_g[0]
+    cursor.execute('SELECT student_uid FROM group_assignments WHERE group_id = ?', (group_id,))
+    assigned_uids = [r[0] for r in cursor.fetchall()]
+    conn.close()
+
+    master_students = get_sorted_master_students()
+    students_in_class = [s for s in master_students if s['uid'] in assigned_uids]
+    today_val = datetime.now().strftime("%d/%m/%Y")
+    default_today_input = datetime.now().strftime("%Y-%m-%d")
+
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT checked_by FROM attendance_logs WHERE group_name = ? AND date = ? LIMIT 1", (group_name, today_val))
+    already_checked = cursor.fetchone()
+    
+    cursor.execute("SELECT student_name, student_no, reason FROM leave_requests WHERE group_id = ? AND leave_date = ? AND status = 'approved'", (group_id, default_today_input))
+    approved_leaves = {(r[0], r[1]): r[2] for r in cursor.fetchall()}
+    conn.close()
+
+    admin_notif = ""
+    if already_checked:
+        checker = already_checked[0]
+        admin_notif = f"""
+        <div style="background: rgba(245, 158, 11, 0.15); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 12px; padding: 15px; margin-bottom: 20px; display: flex; align-items: center; gap: 12px; color: #f59e0b;">
+            <div style="font-size: 24px;">👑</div>
+            <div style="flex: 1;">
+                <div style="font-weight: 800; font-size: 14px;">ระบบได้บันทึกข้อมูลเรียบร้อยแล้วสำหรับวันนี้</div>
+                <div style="font-size: 12.5px; opacity:0.8;">ผู้เช็กข้อมูลวันนี้: <b>{checker}</b></div>
+            </div>
+        </div>
+        """
+
+    student_items = ""
+    for idx, s in enumerate(students_in_class):
+        # ✅ ใช้ uid ของนักเรียนเป็น key โดยตรง แทนการยิง hidden field name_/no_/class_/selected_students
+        # แยกต่างหากทีละคน (เดิมคนละ 5 field ต่อคน) เพราะถ้าห้อง/กลุ่มมีนักเรียนเยอะ (เช่น 200+ คน)
+        # จะรวมกันเกิน 1000 field ต่อฟอร์ม แล้วโดน Starlette ปฏิเสธด้วย error
+        # "Too many fields. Maximum number of fields is 1000." ตอนนี้เหลือแค่ 1 field ต่อคน
+        # ส่วนชื่อ/เลขที่/ห้อง จะไปดึงจากฐานข้อมูลนักเรียนซ้ำอีกทีตอน submit แทน
+        key_id = s['uid']
+        leave_reason = approved_leaves.get((s['name'], s['no']))
+        
+        status_selection = ""
+        if leave_reason:
+            status_selection = f"""
+            <div style="display:flex; align-items:center; gap:10px; padding: 5px 0;">
+                <span style="background:#3b82f6; color:white; padding:6px 14px; border-radius:8px; font-weight:800; font-size:13px; box-shadow:0 2px 4px rgba(59,130,246,0.2);">✅ ลา (อนุมัติแล้ว)</span>
+                <span style="background:#eff6ff; color:#1e40af; padding:5px 10px; border-radius:6px; font-size:12px; border:1px solid #bfdbfe; font-weight:600;">🏷️ {leave_reason}</span>
+            </div>
+            <input type="hidden" id="radio_la_{key_id}" name="status_{key_id}" value="ลา">
+            """
+        else:
+            status_selection = f"""
+            <div class="status-group" data-student-name="{s['name']}" data-student-no="{s['no']}">
+                <input type="radio" id="status_ma_{key_id}" name="status_{key_id}" value="มา" checked>
+                <label for="status_ma_{key_id}" class="status-label label-ma">มา</label>
+                <input type="radio" id="status_sai_{key_id}" name="status_{key_id}" value="สาย">
+                <label for="status_sai_{key_id}" class="status-label label-sai">สาย</label>
+                <input type="radio" id="status_khad_{key_id}" name="status_{key_id}" value="ขาด">
+                <label for="status_khad_{key_id}" class="status-label label-khad">ขาด</label>
+                <input type="radio" id="status_la_{key_id}" name="status_{key_id}" value="ลา">
+                <label for="status_la_{key_id}" class="status-label label-la">ลา</label>
+            </div>
+            """
+
+        student_items += f"""
+        <div class="student-row-card" id="row_{s['no']}" style="padding:14px; border-bottom:1px solid rgba(255,255,255,0.06); transition: background 0.3s;">
+            <div style="margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
+                <div>
+                    <b style="color:#fff; font-size:15px;">{s['name']}</b>
+                    <span style="font-size:12.5px; color:var(--text-soft); font-weight:600; margin-left:6px;">
+                        เลขที่ {s['no']}
+                    </span>
+                </div>
+                <span class="badge" style="padding:2px 6px; font-size:10.5px; background:rgba(37,99,235,0.15); border:1px solid rgba(37,99,235,0.3); color:#60a5fa;">{s['class']}</span>
+            </div>
+            {status_selection}
+        </div>
+        """
+
+    return f"""
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>เช็กชื่อวิชา {group_name} | K-School</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Sarabun:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {{
+            --navy-900: #020617;
+            --navy-800: #0f172a;
+            --navy-700: #1e293b;
+            --navy-600: #2563eb;
+            --gold: #d4af37;
+            --gold-light: #f2d879;
+            --surface: rgba(255, 255, 255, 0.05);
+            --border: rgba(255, 255, 255, 0.1);
+            --text: #f8fafc;
+            --text-soft: #94a3b8;
+            --radius: 16px;
+        }}
+        * {{ margin:0; padding:0; box-sizing:border-box; }}
+        body {{
+            font-family:'Sarabun', 'Inter', sans-serif;
+            background: radial-gradient(circle at top, #0f172a 0%, #020617 100%);
+            color: var(--text);
+            min-height: 100vh;
+        }}
+        
+        .navbar {{
+            background: rgba(15, 23, 42, 0.6);
+            backdrop-filter: blur(12px);
+            border-bottom: 2px solid var(--gold);
+            padding: 14px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }}
+        .navbar h1 {{
+            font-size: 16px;
+            font-weight: 700;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }}
+        .nav-logo {{ height: 30px; width: auto; }}
+        .btn-back {{
+            background: rgba(255,255,255,0.08);
+            border: 1px solid rgba(255,255,255,0.15);
+            color: #cbd5e1;
+            padding: 6px 14px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 700;
+            font-size: 13px;
+            transition: all 0.2s;
+        }}
+        .btn-back:hover {{ background: rgba(255,255,255,0.15); }}
+        
+        .main-container {{
+            max-width: 650px;
+            margin: 0 auto;
+            padding: 20px 16px 100px;
+        }}
+        
+        .card {{
+            background: rgba(15, 23, 42, 0.55);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+        }}
+        
+        .card h2 {{
+            font-size: 15px;
+            font-weight: 700;
+            color: #fff;
+            border-bottom: 2px solid rgba(255,255,255,0.08);
+            padding-bottom: 12px;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }}
+        
+        /* ─── STATUS SELECTOR ─── */
+        .status-group {{
+            display: flex;
+            gap: 4px;
+            border: 1px solid rgba(255,255,255,0.08);
+            padding: 3px;
+            border-radius: 12px;
+            background-color: rgba(2, 6, 23, 0.4);
+        }}
+        .status-label {{
+            flex: 1;
+            text-align: center;
+            font-size: 13px;
+            font-weight: 700;
+            padding: 8px 10px;
+            border-radius: 9px;
+            cursor: pointer;
+            transition: all 0.15s;
+            color: var(--text-soft);
+            border: 1px solid transparent;
+        }}
+        .status-group input[type="radio"] {{ display: none; }}
+        
+        .status-group input[type="radio"][value="มา"]:checked + .status-label {{ background: linear-gradient(135deg, #10b981, #059669); color: white; box-shadow: 0 3px 8px rgba(16,185,129,0.3); }}
+        .status-group input[type="radio"][value="สาย"]:checked + .status-label {{ background: linear-gradient(135deg, #f59e0b, #d97706); color: white; box-shadow: 0 3px 8px rgba(245,158,11,0.3); }}
+        .status-group input[type="radio"][value="ขาด"]:checked + .status-label {{ background: linear-gradient(135deg, #ef4444, #dc2626); color: white; box-shadow: 0 3px 8px rgba(239,68,68,0.3); }}
+        .status-group input[type="radio"][value="ลา"]:checked + .status-label {{ background: linear-gradient(135deg, #3b82f6, #2563eb); color: white; box-shadow: 0 3px 8px rgba(59,130,246,0.3); }}
+        
+        /* ─── BUTTONS ─── */
+        .btn-submit {{
+            background: linear-gradient(135deg, var(--gold), #b8962e);
+            color: #020617;
+            width: 100%;
+            padding: 14.5px;
+            font-size: 15px;
+            font-weight: 800;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            border-bottom: 3px solid #8a6e1e;
+            box-shadow: 0 6px 16px rgba(212, 175, 55, 0.15);
+            font-family: 'Sarabun', sans-serif;
+            letter-spacing: 0.3px;
+            transition: all 0.15s;
+        }}
+        .btn-submit:active {{
+            transform: translateY(2px);
+            border-bottom-width: 1px;
+        }}
+        
+        .btn-otp-trigger {{
+            background: linear-gradient(135deg, #a78bfa, #7c3aed);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            padding: 14px;
+            width: 100%;
+            font-size: 14.5px;
+            font-weight: 800;
+            cursor: pointer;
+            border-bottom: 3px solid #5b21b6;
+            margin-bottom: 20px;
+            box-shadow: 0 6px 16px rgba(124, 58, 237, 0.25);
+            font-family: 'Sarabun', sans-serif;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            transition: all 0.15s;
+        }}
+        .btn-otp-trigger:active {{
+            transform: translateY(2px);
+            border-bottom-width: 1px;
+        }}
+        
+        /* ─── DYNAMIC OTP MODAL ─── */
+        .otp-modal {{
+            position: fixed;
+            inset: 0;
+            background: rgba(2, 6, 23, 0.85);
+            backdrop-filter: blur(10px);
+            z-index: 999;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }}
+        .otp-modal.active {{
+            display: flex;
+        }}
+        .otp-card {{
+            background: rgba(15, 23, 42, 0.9);
+            border: 2px solid var(--gold);
+            border-radius: 24px;
+            width: 100%;
+            max-width: 460px;
+            padding: 30px;
+            text-align: center;
+            box-shadow: 0 30px 60px rgba(0,0,0,0.6);
+            animation: modalPop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }}
+        @keyframes modalPop {{
+            from {{ transform: scale(0.85); opacity: 0; }}
+            to {{ transform: scale(1); opacity: 1; }}
+        }}
+        .otp-code-display {{
+            font-size: 54px;
+            font-weight: 800;
+            color: var(--gold-light);
+            letter-spacing: 8px;
+            margin: 15px 0;
+            text-shadow: 0 0 12px rgba(242, 216, 121, 0.5);
+            font-family: 'Inter', sans-serif;
+        }}
+        .qr-placeholder {{
+            background: white;
+            padding: 10px;
+            border-radius: 12px;
+            display: inline-block;
+            margin: 15px auto;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+        }}
+        .qr-placeholder img {{
+            display: block;
+            width: 160px;
+            height: 160px;
+        }}
+        .countdown-timer {{
+            font-size: 16px;
+            font-weight: 700;
+            color: #f87171;
+            margin-bottom: 20px;
+        }}
+        .checked-in-counter {{
+            background: rgba(255,255,255,0.06);
+            border-radius: 12px;
+            padding: 12px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            font-weight: 700;
+        }}
+        .checked-in-list {{
+            max-height: 120px;
+            overflow-y: auto;
+            background: rgba(0,0,0,0.2);
+            border-radius: 10px;
+            padding: 10px;
+            font-size: 12.5px;
+            text-align: left;
+            margin-bottom: 20px;
+        }}
+        .checked-in-item {{
+            padding: 4px 6px;
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+            color: #10b981;
+            display: flex;
+            justify-content: space-between;
+            animation: slideIn 0.3s ease-out;
+        }}
+        @keyframes slideIn {{
+            from {{ transform: translateY(10px); opacity:0; }}
+            to {{ transform: translateY(0); opacity:1; }}
+        }}
+        .btn-close-otp {{
+            background: #ef4444;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            padding: 11px 24px;
+            font-size: 13.5px;
+            font-weight: 700;
+            cursor: pointer;
+            font-family: 'Sarabun', sans-serif;
+            border-bottom: 3px solid #b91c1c;
+        }}
+        .btn-close-otp:active {{ transform: translateY(1px); }}
+        
+        .badge {{
+            background: rgba(255,255,255,0.1);
+            color: var(--gold-light);
+            border: 1px solid rgba(212, 175, 55, 0.3);
+            border-radius: 20px;
+        }}
+    </style>
+</head>
+<body>
+
+<div class="navbar">
+    <h1><img src="{LOGO_URL}" class="nav-logo"> เช็กชื่อคลาสเรียน</h1>
+    <a href="/app/dashboard?user={user}" class="btn-back">⬅ กลับหน้าบอร์ด</a>
+</div>
+
+<div class="main-container">
+    {admin_notif}
+    
+    <!-- ปุ่มเปิดระบบสแกนเช็กชื่ออัตโนมัติ -->
+    <button class="btn-otp-trigger" onclick="openOTPModal()">
+        <span>⚡ เปิดลงทะเบียนเช็กชื่อด่วน (OTP / QR Code)</span>
+    </button>
+    
+    <form action="/app/api/submit_attendance" method="post">
+        <input type="hidden" name="group_name" value="{group_name}">
+        <input type="hidden" name="teacher_user" value="{user}">
+        
+        <div class="card">
+            <h2>📅 วันที่เช็กชื่อคลาสเรียน</h2>
+            <input type="date" name="target_date" value="{default_today_input}" style="width:100%; padding:12px; border-radius:10px; border:1px solid rgba(255,255,255,0.15); background:rgba(0,0,0,0.3); color:#fff; font-family:'Sarabun'; font-weight:600; outline:none;" required>
+        </div>
+        
+        <div class="card" style="padding:10px 0;">
+            <h2 style="padding:0 20px 12px; margin-bottom:0;">👥 รายชื่อนักเรียนทั้งหมด</h2>
+            {student_items if student_items else "<p style='color:gray; padding:20px; text-align:center;'>ยังไม่มีรายชื่อนักเรียนจัดเข้ากลุ่มเรียนนี้</p>"}
+        </div>
+        
+        <button type="submit" class="btn-submit">💾 บันทึกรายงานเข้าคลังและแจ้งเตือน Discord</button>
+    </form>
+</div>
+
+<!-- หน้าต่างป๊อปอัพ OTP/QR Code -->
+<div class="otp-modal" id="otpModal">
+    <div class="otp-card">
+        <h3 style="font-size:18px; font-weight:800; color:#fff;">⚡ โหมดลงทะเบียนเช็กชื่อด่วน</h3>
+        <p style="font-size:13px; color:var(--text-soft); margin-top:4px;">เปิดให้นักเรียนสแกน QR Code หรือกรอกรหัสจากหน้าจอนี้</p>
+        
+        <div class="otp-code-display" id="otpDisplay">0000</div>
+        
+        <div class="qr-placeholder">
+            <!-- สร้าง QR Code อัตโนมัติจาก API -->
+            <img id="qrDisplay" src="" alt="QR Code Link">
+        </div>
+        
+        <div class="countdown-timer" id="timerDisplay">⏱️ เหลือเวลาเปิดรับ: 05:00 นาที</div>
+        
+        <div class="checked-in-counter">
+            👨‍🎓 เช็กอินสำเร็จแล้ว: <span id="checkinCount" style="color:var(--gold-light);">0</span> คน
+        </div>
+        
+        <div class="checked-in-list" id="checkinList">
+            <!-- รายชื่อนักเรียนจะแสดงผลเรียลไทม์ที่นี่ -->
+            <p style="color:gray; text-align:center; margin-top:25px;" id="emptyCheckinMsg">ยังไม่มีนักเรียนลงชื่อเข้ามา</p>
+        </div>
+        
+        <button class="btn-close-otp" onclick="closeOTPModal()">🛑 ปิดโหมดลงทะเบียนด่วน</button>
+    </div>
+</div>
+
+<!-- เสียงบี๊บแจ้งเตือนเมื่อนักเรียนเช็กอิน -->
+<audio id="beepSound" src="https://assets.mixkit.co/active_storage/sfx/2869/2869-84.wav" preload="auto"></audio>
+
+<script>
+const activeGroupId = {group_id};
+let timerInterval = null;
+let currentOtp = "";
+
+// เชื่อมต่อ WebSocket เรียลไทม์สำหรับรับข้อมูลนักเรียนที่สแกนเช็กชื่อ
+let rcReconnectDelay = 1500;
+function setupRollcallSocket() {{
+    const protocol = window.location.protocol === "https:" ? "wss://" : "ws://";
+    const wsUrl = protocol + window.location.host + "/ws/maintenance";
+    const ws = new WebSocket(wsUrl);
+
+    ws.onopen = function() {{ rcReconnectDelay = 1500; }};
+    
+    ws.onmessage = function(event) {{
+        try {{
+            const data = JSON.parse(event.data);
+            if (data.type === "student_checked_in" && data.group_id === activeGroupId) {{
+                // เล่นเสียงแจ้งเตือนสั้นๆ
+                try {{ document.getElementById('beepSound').play(); }} catch(e) {{}}
+                
+                // ซ่อนข้อความว่างเปล่า
+                const emptyMsg = document.getElementById('emptyCheckinMsg');
+                if (emptyMsg) emptyMsg.style.display = 'none';
+                
+                // เพิ่มชื่อเข้าในลิสต์เรียลไทม์
+                const list = document.getElementById('checkinList');
+                const item = document.createElement('div');
+                item.className = 'checked-in-item';
+                item.innerHTML = `
+                    <span>เลขที่ ${{data.student_no}} ${{data.student_name}}</span>
+                    <span style="font-weight:bold;">🟢 มาเรียน</span>
+                `;
+                list.insertBefore(item, list.firstChild);
+                
+                // อัปเดตยอดรวม
+                const countEl = document.getElementById('checkinCount');
+                let curCount = parseInt(countEl.textContent);
+                countEl.textContent = curCount + 1;
+                
+                // อัปเดตตารางเช็กชื่อด้านหลัง (ติ๊กช่อง "มา" ให้นักเรียนคนนั้น)
+                // ค้นหา status-group ของนักเรียนและตั้งค่าปุ่มวิทยุ (radio) เป็น "มา"
+                // โดยค้นหาตาม data attribute
+                document.querySelectorAll('.status-group').forEach(grp => {{
+                    const sName = grp.getAttribute('data-student-name');
+                    const sNo = grp.getAttribute('data-student-no');
+                    if (sName === data.student_name && sNo === data.student_no) {{
+                        const radioMa = grp.querySelector('input[value="มา"]');
+                        if (radioMa) {{
+                            radioMa.checked = true;
+                            // ไฮไลต์แถวเรียนเพื่อความสวยงาม
+                            const row = document.getElementById('row_' + sNo);
+                            if (row) {{
+                                row.style.background = 'rgba(16, 185, 129, 0.08)';
+                                setTimeout(() => {{ row.style.background = 'transparent'; }}, 2000);
+                            }}
+                        }}
+                    }}
+                }});
+            }}
+        }} catch(e) {{}}
+    }};
+    
+    ws.onclose = function() {{
+        setTimeout(setupRollcallSocket, rcReconnectDelay);
+        rcReconnectDelay = Math.min(rcReconnectDelay * 1.7, 30000);
+    }};
+}}
+
+// เปิดใช้งานคิวอาร์โค้ดลงทะเบียนด่วน
+async function openOTPModal() {{
+    const modal = document.getElementById('otpModal');
+    const otpDisplay = document.getElementById('otpDisplay');
+    const qrDisplay = document.getElementById('qrDisplay');
+    const timerDisplay = document.getElementById('timerDisplay');
+    const list = document.getElementById('checkinList');
+    const countEl = document.getElementById('checkinCount');
+    
+    list.innerHTML = '<p style="color:gray; text-align:center; margin-top:25px;" id="emptyCheckinMsg">ยังไม่มีนักเรียนลงชื่อเข้ามา</p>';
+    countEl.textContent = "0";
+    
+    // เรียกใช้ API หลังบ้านเพื่อดึง OTP
+    try {{
+        const formData = new FormData();
+        formData.append('group_id', activeGroupId);
+        formData.append('duration', 5);
+        
+        const res = await fetch('/api/teacher/start_otp', {{
+            method: 'POST',
+            body: formData
+        }});
+        
+        const data = await res.json();
+        if (res.ok && data.ok) {{
+            currentOtp = data.otp;
+            otpDisplay.textContent = currentOtp;
+            
+            // สร้าง URL ลิงก์เช็กชื่อของนักเรียน
+            const domain = window.location.origin;
+            const checkinUrl = `${{domain}}/checkin?group_id=${{activeGroupId}}`;
+            
+            // สร้าง QR Code จาก API ฟรี
+            qrDisplay.src = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${{encodeURIComponent(checkinUrl)}}`;
+            
+            // เริ่มจับเวลานับถอยหลัง 5 นาที (300 วินาที)
+            startCountdown(data.duration_seconds);
+            
+            modal.classList.add('active');
+        }} else {{
+            smartAlert({{ title: 'ไม่สำเร็จ', message: 'ไม่สามารถดึงข้อมูลรหัส OTP ได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง', type: 'error' }});
+        }}
+    }} catch(e) {{
+        smartAlert({{ title: 'เชื่อมต่อไม่ได้', message: 'เกิดข้อผิดพลาดในการติดต่อฐานข้อมูล กรุณาลองใหม่อีกครั้ง', type: 'error' }});
+    }}
+}}
+
+// ปิดโหมดลงทะเบียนด่วน
+async function closeOTPModal() {{
+    const modal = document.getElementById('otpModal');
+    clearInterval(timerInterval);
+    
+    try {{
+        const formData = new FormData();
+        formData.append('group_id', activeGroupId);
+        await fetch('/api/teacher/stop_otp', {{
+            method: 'POST',
+            body: formData
+        }});
+    }} catch(e) {{}}
+    
+    modal.classList.remove('active');
+}}
+
+// ระบบจับเวลานับถอยหลัง
+function startCountdown(seconds) {{
+    clearInterval(timerInterval);
+    const timerDisplay = document.getElementById('timerDisplay');
+    
+    let timeLeft = seconds;
+    
+    timerInterval = setInterval(() => {{
+        if (timeLeft <= 0) {{
+            clearInterval(timerInterval);
+            timerDisplay.textContent = "⏱️ หมดเวลาเปิดลงทะเบียนแล้ว";
+            alert("⏰ หมดเวลาลงทะเบียนเช็กชื่อด่วนเรียบร้อยครับ");
+            closeOTPModal();
+            return;
+        }}
+        
+        timeLeft--;
+        const mins = Math.floor(timeLeft / 60);
+        const secs = timeLeft % 60;
+        timerDisplay.textContent = `⏱️ เหลือเวลาเปิดรับ: ${{String(mins).padStart(2, '0')}}:${{String(secs).padStart(2, '0')}} นาที`;
+    }}, 1000);
+}}
+
+document.addEventListener("DOMContentLoaded", () => {{
+    setupRollcallSocket();
+}});
+</script>
+
+</body>
+</html>
+    """
+
+# ==========================================
+# ⚙️ CORE PROCESSING APIS & WORKERS
+# ==========================================
+@app.post("/api/admin/create_group")
+async def api_create_group(group_name: str = Form(...), branch: str = Form(...), teacher_username: str = Form(...), user_session: Optional[str] = Cookie(None)):
+    if user_session != "admin": return HTMLResponse("Unauthorized", status_code=401)
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO course_groups (group_name, teacher_username, branch) VALUES (?, ?, ?)", (group_name, teacher_username, branch))
+    conn.commit()
+    conn.close()
+    return RedirectResponse(url="/admin/assign_groups", status_code=303)
+
+@app.post("/api/admin/assign_students_to_group")
+async def api_assign_students_to_group(request: Request, group_id: int = Form(...), user_session: Optional[str] = Cookie(None)):
+    if user_session != "admin": return HTMLResponse("Unauthorized", status_code=401)
+    form_data = await request.form()
+    assigned_student_uids = form_data.getlist("assigned_students")
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    # แก้ไข: เปลี่ยนจาก DELETE ทั้งหมด เป็นการ INSERT เพิ่มเติม (ใช้ INSERT OR IGNORE เพื่อไม่ให้ซ้ำ)
+    for uid in assigned_student_uids:
+        cursor.execute("INSERT OR IGNORE INTO group_assignments (group_id, student_uid) VALUES (?, ?)", (group_id, uid))
+    conn.commit()
+    conn.close()
+    return alert_redirect("อัปเดตสมาชิกห้องเรียนเรียบร้อยแล้ว", type="success", url=f"/admin/assign_groups?selected_group_id={group_id}")
+
+def run_discord_log_background(title, message, color_rgb):
+    """ฟังก์ชันสำหรับส่ง Discord Log ใน Background Thread"""
+    asyncio.run_coroutine_threadsafe(
+        send_discord_log(title, message, discord.Color.from_rgb(*color_rgb)),
+        bot.loop
+    )
+
+@app.post("/app/api/submit_attendance")
+async def app_api_submit(
+    background_tasks: BackgroundTasks,
+    request: Request,
+    group_name: str = Form(...),
+    teacher_user: str = Form(...),
+    target_date: str = Form(...),
+    user_session: Optional[str] = Cookie(None)
+):
+    if not user_session or user_session != f"teacher_{teacher_user}": return HTMLResponse("Unauthorized", status_code=401)
+    form_data = await request.form()
+
+    try:
+        date_obj = datetime.strptime(target_date, "%Y-%m-%d")
+        formatted_date = date_obj.strftime("%d/%m/%Y")
+    except Exception: formatted_date = target_date
+
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT fullname FROM teachers WHERE username = ?", (teacher_user,))
+    t_info = cursor.fetchone()
+    fullname_teacher = t_info[0] if t_info else teacher_user
+
+    stats = {"มา": 0, "สาย": 0, "ลา": 0, "ขาด": 0}
+    discord_details = []
+
+    # ดึงข้อมูลกลุ่ม ID เพื่อตรวจสอบการลา
+    cursor.execute("SELECT group_id FROM course_groups WHERE group_name = ?", (group_name,))
+    g_res = cursor.fetchone()
+    group_id = g_res[0] if g_res else 0
+
+    # ✅ ดึงรายชื่อนักเรียนของกลุ่มนี้จากฐานข้อมูลเอง (ไม่พึ่งพา hidden field name_/no_/class_ จากฟอร์มอีกต่อไป)
+    # ฟอร์มตอนนี้จะส่งมาแค่ status_{uid} ต่อคนเท่านั้น ทำให้ไม่มีปัญหา "Too many fields" แม้กลุ่มจะมีนักเรียนจำนวนมาก
+    cursor.execute('SELECT student_uid FROM group_assignments WHERE group_id = ?', (group_id,))
+    assigned_uids = {r[0] for r in cursor.fetchall()}
+    students_by_uid = {s['uid']: s for s in get_sorted_master_students() if s['uid'] in assigned_uids}
+
+    for key, s in students_by_uid.items():
+        sname = s['name']
+        sno   = s['no']
+        sclass = s['class']
+        status_value = form_data.get(f"status_{key}")
+        
+        if sname and status_value:
+            # ตรวจสอบว่ามีใบลาที่อนุมัติแล้วในวันที่ระบุหรือไม่
+            cursor.execute("SELECT reason FROM leave_requests WHERE group_id = ? AND student_name = ? AND student_no = ? AND leave_date = ? AND status = 'approved'", 
+                           (group_id, sname, sno, target_date))
+            leave_found = cursor.fetchone()
+            
+            final_status = status_value
+            checker_name = fullname_teacher
+            
+            if leave_found:
+                final_status = "ลา"
+                checker_name = f"ระบบ (ลา: {leave_found[0]})"
+
+            cursor.execute('INSERT INTO attendance_logs (group_name, student_name, student_no, classroom, status, date, checked_by, log_time) VALUES (?,?,?,?,?,?,?,?)',
+                (group_name, sname, sno, sclass, final_status, formatted_date, checker_name, datetime.now().strftime("%H:%M:%S")))
+            stats[final_status] += 1
+            discord_details.append(f"• เลขที่ {sno} {sname} (ห้อง {sclass}) -> **[{final_status}]**")
+    conn.commit()
+    conn.close()
+
+    # เตรียมข้อมูลส่ง Discord (ทำใน Background ไม่ต้องรอ)
+    student_rows_str = "\n".join(discord_details) if discord_details else "ไม่มีข้อมูล"
+    embed_message = f"👤 **ผู้บันทึกข้อมูล:** อาจารย์ {fullname_teacher}\n📘 **กลุ่มคลาสรายวิชา:** {group_name}\n📅 **ประจำรอบวันที่เรียน:** {formatted_date}\n\n📊 **สถิติเช็กชื่อ:** มา: `{stats['มา']}` | สาย: `{stats['สาย']}` | ลา: `{stats['ลา']}` | ขาด: `{stats['ขาด']}`\n\n📋 **รายชื่อระบบ:**\n{student_rows_str}"
+    
+    background_tasks.add_task(run_discord_log_background, "🏫 [K-School Platform] รายงานบันทึกเวลาเรียนวิชาเอก", embed_message, (30, 58, 138))
+
+    return HTMLResponse(f"""<html>{STYLE_HEADER}<body><script>smartAlert({{title: 'บันทึกดำเนินการเสร็จสิ้น!', message: 'ระบบได้เก็บข้อมูลเข้าคลังเรียบร้อยแล้ว!', type: 'success', callback: () => {{ window.location.href='/app/dashboard?user={teacher_user}'; }} }});</script></body></html>""")
+
+# ==========================================
+# ⚡ QUICK OTP / QR CHECK-IN APIS
+# ==========================================
+@app.post("/api/teacher/start_otp")
+async def api_teacher_start_otp(
+    group_id: int = Form(...),
+    duration: int = Form(5),
+    user_session: Optional[str] = Cookie(None)
+):
+    if not user_session or not user_session.startswith("teacher_"):
+        return JSONResponse({"ok": False, "error": "Unauthorized"}, status_code=401)
+    
+    import random
+    otp = f"{random.randint(1000, 9999)}"
+    
+    from datetime import timedelta
+    expires_at = (datetime.now() + timedelta(minutes=duration)).isoformat()
+    
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO otp_sessions (group_id, otp, expires_at, is_active)
+        VALUES (?, ?, ?, 1)
+        ON CONFLICT(group_id) DO UPDATE SET otp=excluded.otp, expires_at=excluded.expires_at, is_active=1
+    """, (group_id, otp, expires_at))
+    conn.commit()
+    conn.close()
+    
+    add_log(f"อาจารย์เปิดเซสชันเช็กชื่อด่วนวิชา #{group_id} รหัส OTP: {otp}")
+    
+    return JSONResponse({
+        "ok": True,
+        "otp": otp,
+        "expires_at": expires_at,
+        "duration_seconds": duration * 60
+    })
+
+@app.post("/api/teacher/stop_otp")
+async def api_teacher_stop_otp(
+    group_id: int = Form(...),
+    user_session: Optional[str] = Cookie(None)
+):
+    if not user_session or not user_session.startswith("teacher_"):
+        return JSONResponse({"ok": False, "error": "Unauthorized"}, status_code=401)
+    
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("UPDATE otp_sessions SET is_active=0 WHERE group_id=?", (group_id,))
+    conn.commit()
+    conn.close()
+    
+    add_log(f"ปิดเซสชันเช็กชื่อด่วนวิชา #{group_id}")
+    return JSONResponse({"ok": True})
+
+@app.post("/api/student/checkin")
+async def api_student_checkin(
+    request: Request,
+    background_tasks: BackgroundTasks
+):
+    m_cfg = get_maintenance_status()
+    if m_cfg["is_active"] == 1:
+        return JSONResponse({"ok": False, "error": "ระบบปิดปรับปรุงอยู่"}, status_code=503)
+        
+    try:
+        data = await request.json()
+        student_name = data.get("student_name", "").strip()
+        student_no = data.get("student_no", "").strip()
+        classroom = data.get("classroom", "").strip()
+        otp = data.get("otp", "").strip()
+        group_id = int(data.get("group_id", 0))
+    except Exception:
+        return JSONResponse({"ok": False, "error": "รูปแบบข้อมูลไม่ถูกต้อง"}, status_code=400)
+        
+    if not all([student_name, student_no, classroom, otp, group_id]):
+        return JSONResponse({"ok": False, "error": "กรุณากรอกข้อมูลให้ครบถ้วน"}, status_code=400)
+        
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT otp, expires_at, is_active FROM otp_sessions WHERE group_id = ?", (group_id,))
+    session = cursor.fetchone()
+    if not session or session[2] == 0 or session[0] != otp:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "รหัส OTP ไม่ถูกต้อง หรือเซสชันปิดแล้ว"}, status_code=400)
+        
+    expires_at = datetime.fromisoformat(session[1])
+    if datetime.now() > expires_at:
+        cursor.execute("UPDATE otp_sessions SET is_active=0 WHERE group_id=?", (group_id,))
+        conn.commit()
+        conn.close()
+        return JSONResponse({"ok": False, "error": "รหัส OTP หมดอายุแล้ว"}, status_code=400)
+        
+    student_uid = f"{student_name}_{student_no}"
+    cursor.execute("SELECT student_uid FROM group_assignments WHERE group_id = ? AND student_uid = ?", (group_id, student_uid))
+    assignment = cursor.fetchone()
+    if not assignment:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "ไม่พบรายชื่อของคุณในกลุ่มเรียนนี้"}, status_code=400)
+        
+    cursor.execute("SELECT group_name FROM course_groups WHERE group_id = ?", (group_id,))
+    group_name = cursor.fetchone()[0]
+    
+    today_val = datetime.now().strftime("%d/%m/%Y")
+    
+    cursor.execute("""
+        SELECT log_id FROM attendance_logs 
+        WHERE student_name = ? AND group_name = ? AND date = ?
+    """, (student_name, group_name, today_val))
+    existing = cursor.fetchone()
+    
+    if existing:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "คุณได้ลงชื่อเข้าเรียนในวิชานี้ของวันนี้เรียบร้อยแล้ว"}, status_code=400)
+        
+    cursor.execute("""
+        INSERT INTO attendance_logs (group_name, student_name, student_no, classroom, status, date, checked_by, log_time)
+        VALUES (?, ?, ?, ?, 'มา', ?, 'เช็กชื่อด่วน (OTP)', ?)
+    """, (group_name, student_name, student_no, classroom, today_val, datetime.now().strftime("%H:%M:%S")))
+    
+    conn.commit()
+    conn.close()
+    
+    import json
+    ws_msg = json.dumps({
+        "type": "student_checked_in",
+        "group_id": group_id,
+        "student_name": student_name,
+        "student_no": student_no,
+        "classroom": classroom
+    })
+    background_tasks.add_task(manager.broadcast, ws_msg)
+    
+    discord_msg = f"👤 **นักเรียนลงชื่อเอง:** {student_name} (เลขที่ {student_no} ห้อง {classroom})\n📘 **กลุ่มคลาส:** {group_name}\n📅 **วันที่:** {today_val}\n⚡ **วิธีการ:** เช็กชื่อด่วนด้วยรหัส OTP"
+    background_tasks.add_task(run_discord_log_background, "🏫 [K-School] นักเรียนเช็กชื่อผ่าน OTP สำเร็จ", discord_msg, (16, 185, 129))
+    
+    return JSONResponse({"ok": True})
+
+@app.get("/admin/add_student", response_class=HTMLResponse)
+async def admin_add_student_page(user_session: Optional[str] = Cookie(None)):
+    if user_session != "admin": return RedirectResponse(url="/login", status_code=303)
+    return f"""<html>{STYLE_HEADER}<body><div class="navbar"><h1>➕ เพิ่มรายชื่อทะเบียนนักเรียนใหม่</h1><a href="/admin/students" class="btn btn-secondary">⬅ กลับหน้าหลัก</a></div><div class="main-container"><div class="card"><form action="/api/admin/add_student" method="post"><input type="text" name="student_name" placeholder="ชื่อ-นามสกุลนักเรียน" required><input type="text" name="student_no" placeholder="เลขที่ประจำตัว" required><input type="text" name="classroom" placeholder="ระดับชั้นเรียน" required><input type="text" name="branch" placeholder="สาขาวิชาเอก" required><button type="submit" class="btn-submit">💾 ยืนยันบันทึกข้อมูลหลัก</button></form></div></div></body></html>"""
+
+@app.post("/api/admin/add_student")
+async def api_add_student(student_name: str = Form(...), student_no: str = Form(...), classroom: str = Form(...), branch: str = Form(...), user_session: Optional[str] = Cookie(None)):
+    if user_session != "admin": return HTMLResponse("Unauthorized", status_code=401)
+    new_line = f"{student_name.strip()}, {student_no.strip()}, {classroom.strip()}, {branch.strip()}\n"
+    with open(TXT_DATABASE_PATH, "a", encoding="utf-8") as f: f.write(new_line)
+    return HTMLResponse(f"""<html>{STYLE_HEADER}<body><script>smartAlert({{title: 'ดำเนินการเสร็จสิ้น!', message: 'บันทึกเพิ่มรายชื่อเรียบร้อย!', type: 'success', callback: () => {{ window.location.href='/admin/add_student'; }} }});</script></body></html>""")
+
+# ==========================================
+# 🎖️ ระบบคะแนนความประพฤติ
+# ==========================================
+CONDUCT_REASONS_PLUS = [
+    "เข้าร่วมกิจกรรมของสถาบัน", "ช่วยเหลืองานส่วนรวม", "ทำความดีเด่นชัด", "มีความประพฤติดีต่อเนื่อง"
+]
+CONDUCT_REASONS_MINUS = [
+    "มาสาย", "ขาดเรียนไม่แจ้งลา", "แต่งกายผิดระเบียบ", "ก่อความไม่สงบในชั้นเรียน", "ทะเลาะวิวาท", "อื่นๆ"
+]
+
+CONDUCT_PAGE_STYLE = """
+<style>
+    .cd-level-card {
+        background: var(--surface); border: 1px solid var(--border); border-radius: 18px;
+        padding: 20px; text-decoration: none; color: var(--navy-800);
+        display: flex; align-items: center; gap: 16px;
+        box-shadow: var(--shadow-sm); margin-bottom: 12px; transition: transform .15s ease;
+    }
+    .cd-level-card:active { transform: scale(0.98); }
+    .cd-level-icon {
+        width: 54px; height: 54px; border-radius: 15px; flex-shrink: 0;
+        background: linear-gradient(135deg, var(--navy-600), var(--navy-900));
+        color: #fff; display: flex; align-items: center; justify-content: center; font-size: 24px;
+    }
+    .cd-level-info { flex: 1; min-width: 0; }
+    .cd-level-info h3 { margin: 0 0 3px; font-size: 15.5px; font-weight: 800; color: var(--navy-900); }
+    .cd-level-info p { margin: 0; font-size: 12px; color: var(--text-soft); }
+    .cd-level-avg {
+        text-align: center; flex-shrink: 0; padding: 6px 14px; border-radius: 12px;
+        font-weight: 800; font-size: 15px;
+    }
+    .cd-level-avg span { display: block; font-size: 9.5px; font-weight: 700; opacity: 0.75; margin-top: 1px; }
+
+    .cd-student-row {
+        background: var(--surface); border: 1px solid var(--border); border-radius: 15px;
+        padding: 13px 14px; margin-bottom: 10px; display: flex; align-items: center; gap: 12px;
+        box-shadow: var(--shadow-sm);
+    }
+    .cd-avatar {
+        width: 40px; height: 40px; border-radius: 50%; flex-shrink: 0;
+        background: var(--surface-muted); color: var(--navy-700);
+        display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 14px;
+        border: 1px solid var(--border);
+    }
+    .cd-student-info { flex: 1; min-width: 0; }
+    .cd-student-info .cd-name { font-weight: 700; font-size: 13.5px; color: var(--navy-900); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .cd-student-info .cd-meta { font-size: 11px; color: var(--text-soft); margin-top: 1px; }
+    .cd-score-pill { flex-shrink: 0; padding: 5px 13px; border-radius: 100px; font-weight: 800; font-size: 13.5px; }
+    .cd-actions { display: flex; gap: 5px; flex-shrink: 0; }
+    .cd-action-btn {
+        width: 32px; height: 32px; border-radius: 9px; display: flex; align-items: center; justify-content: center;
+        text-decoration: none; font-size: 14px; border: 1px solid var(--border); background: var(--surface-muted);
+    }
+    .cd-back-link { display: inline-flex; align-items: center; gap: 5px; color: var(--navy-600); font-weight: 700; font-size: 13px; text-decoration: none; margin-bottom: 14px; }
+</style>
+"""
+
+@app.get("/admin/conduct", response_class=HTMLResponse)
+async def admin_conduct_page(level: Optional[str] = None, room: Optional[str] = None, user_session: Optional[str] = Cookie(None)):
+    access, redirect = require_discipline_access(user_session)
+    if redirect: return redirect
+    # 🎓 หัวหน้าระดับ: บังคับดูเฉพาะระดับของตัวเอง
+    if access["role"] == "level_head":
+        if not access["level_scope"]:
+            return alert_redirect("บัญชีของคุณยังไม่ถูกกำหนดระดับชั้นที่รับผิดชอบ กรุณาติดต่อผู้ดูแลระบบ", type="error", url="/app/dashboard")
+        if level and level != access["level_scope"]:
+            return RedirectResponse(url=f"/admin/conduct?level={access['level_scope']}", status_code=303)
+        if not level:
+            level = access["level_scope"]
+
+    back_url = "/admin/dashboard" if access["role"] == "admin" else f"/app/dashboard?user={urllib.parse.quote(access['username'])}"
+
+    def score_color(score):
+        if score >= 80: return "#10b981", "#f0fdf4", "#bbf7d0"
+        if score >= 50: return "#d97706", "#fffbeb", "#fde68a"
+        return "#ef4444", "#fef2f2", "#fecaca"
+
+    # ── ยังไม่เลือกระดับชั้น: แสดงเป็นการ์ดระดับชั้น ไม่ขึ้นรวมทุกคน ──
+    if not level:
+        all_summary = get_conduct_summary()
+        levels = {}
+        for s in all_summary:
+            lv = get_grade_level(s['class'])
+            levels.setdefault(lv, []).append(s['score'])
+
+        def sort_key(lv):
+            digits = ''.join(ch for ch in lv if ch.isdigit())
+            return (0, int(digits)) if digits else (1, lv)
+
+        level_cards = ""
+        for lv in sorted(levels.keys(), key=sort_key):
+            scores = levels[lv]
+            avg = round(sum(scores) / len(scores)) if scores else 0
+            fg, bg, _ = score_color(avg)
+            level_cards += f"""
+            <a href="/admin/conduct?level={lv}" class="cd-level-card">
+                <div class="cd-level-icon">🎓</div>
+                <div class="cd-level-info">
+                    <h3>ระดับชั้น {lv}</h3>
+                    <p>นักเรียนทั้งหมด {len(scores)} คน</p>
+                </div>
+                <div class="cd-level-avg" style="background:{bg}; color:{fg};">
+                    {avg}<span>เฉลี่ย</span>
+                </div>
+            </a>
+            """
+
+        return f"""
+        <html>{STYLE_HEADER}
+        {CONDUCT_PAGE_STYLE}
+        <body>
+            <div class="navbar">
+                <h1><img src="{LOGO_URL}" class="nav-logo"> 🎖️ คะแนนความประพฤติ</h1>
+                <a href="{back_url}" class="btn btn-secondary">⬅ กลับหน้าควบคุม</a>
+            </div>
+            <div class="main-container">
+                <div class="card" style="background:#eff6ff; border:1px solid #bfdbfe;">
+                    <p style="margin:0; font-size:13px; color:#1e40af; line-height:1.7;">
+                        📌 นักเรียนทุกคนเริ่มต้นที่ <b>100 คะแนน</b> เลือกระดับชั้นด้านล่างเพื่อดูและบันทึกคะแนนของนักเรียนในระดับนั้น
+                    </p>
+                </div>
+                <div class="ah-section-title" style="margin:4px 4px 12px; font-size:12.5px; font-weight:800; color:#64748b;">เลือกระดับชั้น</div>
+                {level_cards if level_cards else "<p style='color:#94a3b8; text-align:center; padding:30px 0;'>ยังไม่มีข้อมูลนักเรียนในระบบ</p>"}
+            </div>
+        </body></html>
+        """
+
+    # ── เลือกระดับชั้นแล้ว: แสดงเฉพาะนักเรียนในระดับนี้ ──
+    summary = [s for s in get_conduct_summary() if get_grade_level(s['class']) == level]
+    rooms_in_level = sorted(set(s['class'] for s in summary))
+    if room:
+        summary = [s for s in summary if s['class'] == room]
+
+    room_options = '<option value="">ทุกห้องในระดับนี้</option>'
+    for r in rooms_in_level:
+        sel = 'selected' if room == r else ''
+        room_options += f'<option value="{r}" {sel}>ห้อง {r}</option>'
+
+    rows = ""
+    for s in summary:
+        fg, bg, border = score_color(s['score'])
+        initial = s['name'][:1] if s['name'] else "?"
+        rows += f"""
+        <div class="cd-student-row">
+            <div class="cd-avatar">{initial}</div>
+            <div class="cd-student-info">
+                <div class="cd-name">{s['name']}</div>
+                <div class="cd-meta">{s['class']} · เลขที่ {s['no']}</div>
+            </div>
+            <div class="cd-score-pill" style="background:{bg}; color:{fg}; border:1px solid {border};">{s['score']}</div>
+            <div class="cd-actions">
+                <a href="/admin/conduct/add?uid={s['uid']}" class="cd-action-btn" title="บันทึกคะแนน">✏️</a>
+                <a href="/admin/conduct/history?uid={s['uid']}" class="cd-action-btn" title="ดูประวัติ">📜</a>
+            </div>
+        </div>
+        """
+
+    return f"""
+    <html>{STYLE_HEADER}
+    {CONDUCT_PAGE_STYLE}
+    <body>
+        <div class="navbar">
+            <h1><img src="{LOGO_URL}" class="nav-logo"> 🎖️ ระดับชั้น {level}</h1>
+            <a href="{back_url}" class="btn btn-secondary">⬅ กลับหน้าควบคุม</a>
+        </div>
+        <div class="main-container">
+            {'' if access["role"] == "level_head" else '<a href="/admin/conduct" class="cd-back-link">← เลือกระดับชั้นอื่น</a>'}
+            <div class="card" style="padding:16px; margin-bottom:16px;">
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <span style="font-size:13px; font-weight:700; color:#475569;">🔍 กรองห้อง:</span>
+                    <select onchange="location.href='/admin/conduct?level={level}&room='+this.value;" style="padding:6px; border-radius:6px; border:1px solid #cbd5e1; font-family:'Sarabun'; font-size:13px; font-weight:600; flex:1;">
+                        {room_options}
+                    </select>
+                </div>
+            </div>
+            {rows if rows else "<p style='color:#94a3b8; text-align:center; padding:30px 0;'>ไม่พบนักเรียนในระดับชั้นนี้</p>"}
+        </div>
+    </body></html>
+    """
+
+@app.get("/admin/conduct/add", response_class=HTMLResponse)
+async def admin_conduct_add_page(uid: str, user_session: Optional[str] = Cookie(None)):
+    access, redirect = require_discipline_access(user_session)
+    if redirect: return redirect
+
+    all_students = get_sorted_master_students()
+    target = next((s for s in all_students if s['uid'] == uid), None)
+    if not target:
+        return alert_redirect("ไม่พบข้อมูลนักเรียนที่ต้องการ", type="error", url="/admin/conduct")
+    if not in_discipline_scope(access, target['class']):
+        return alert_redirect("คุณไม่มีสิทธิ์บันทึกคะแนนของนักเรียนนอกระดับชั้นที่รับผิดชอบ", type="error", url="/admin/conduct")
+
+    current_score = get_conduct_summary()
+    current = next((s for s in current_score if s['uid'] == uid), None)
+    score_now = current['score'] if current else CONDUCT_START_SCORE
+
+    plus_chips = "".join([f'<button type="button" class="cd-chip cd-chip-plus" onclick="cdFill(\'{r}\')">➕ {r}</button>' for r in CONDUCT_REASONS_PLUS])
+    minus_chips = "".join([f'<button type="button" class="cd-chip cd-chip-minus" onclick="cdFill(\'{r}\')">➖ {r}</button>' for r in CONDUCT_REASONS_MINUS])
+
+    return f"""
+    <html>{STYLE_HEADER}
+    <body>
+        <div class="navbar">
+            <h1><img src="{LOGO_URL}" class="nav-logo"> ✏️ บันทึกคะแนนความประพฤติ</h1>
+            <a href="/admin/conduct" class="btn btn-secondary">⬅ กลับ</a>
+        </div>
+        <div class="main-container">
+            <div class="card" style="text-align:center;">
+                <div style="font-size:14px; color:#64748b; margin-bottom:4px;">{target['class']} · เลขที่ {target['no']}</div>
+                <div style="font-size:19px; font-weight:800; color:#0f172a; margin-bottom:10px;">{target['name']}</div>
+                <div style="display:inline-block; background:#f1f5f9; padding:6px 20px; border-radius:100px; font-weight:800; font-size:15px; color:#1e3a8a;">คะแนนปัจจุบัน: {score_now} / 100</div>
+            </div>
+            <div class="card">
+                <h2>เลือกเหตุผลด่วน</h2>
+                <div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:6px;">{plus_chips}</div>
+                <div style="display:flex; flex-wrap:wrap; gap:8px;">{minus_chips}</div>
+                <style>
+                    .cd-chip {{ border:none; border-radius:100px; padding:8px 14px; font-size:12.5px; font-weight:700; cursor:pointer; font-family:'Sarabun',sans-serif; }}
+                    .cd-chip-plus {{ background:#f0fdf4; color:#15803d; border:1px solid #bbf7d0; }}
+                    .cd-chip-minus {{ background:#fef2f2; color:#b91c1c; border:1px solid #fecaca; }}
+                </style>
+            </div>
+            <div class="card">
+                <h2>บันทึกคะแนน</h2>
+                <form action="/api/admin/conduct/add" method="post">
+                    <input type="hidden" name="uid" value="{target['uid']}">
+                    <input type="hidden" name="student_name" value="{target['name']}">
+                    <input type="hidden" name="student_no" value="{target['no']}">
+                    <input type="hidden" name="classroom" value="{target['class']}">
+                    <label style="font-size:12.5px; font-weight:700; color:#475569;">คะแนน (ใส่เลขบวกเพื่อเพิ่ม, ลบเพื่อหัก):</label>
+                    <input type="number" id="cdPoints" name="points" placeholder="เช่น -5 หรือ +10" required>
+                    <label style="font-size:12.5px; font-weight:700; color:#475569;">เหตุผล:</label>
+                    <textarea id="cdReason" name="reason" placeholder="ระบุเหตุผลในการบันทึกคะแนน" required style="min-height:70px;"></textarea>
+                    <button type="submit" class="btn-submit">💾 บันทึกคะแนนความประพฤติ</button>
+                </form>
+            </div>
+        </div>
+        <script>
+            function cdFill(reason) {{
+                document.getElementById('cdReason').value = reason;
+                const pointsInput = document.getElementById('cdPoints');
+                if (!pointsInput.value) {{
+                    pointsInput.value = reason.includes('เข้าร่วม') || reason.includes('ช่วยเหลือ') || reason.includes('ดีเด่น') || reason.includes('ต่อเนื่อง') ? 5 : -5;
+                }}
+            }}
+        </script>
+    </body></html>
+    """
+
+@app.post("/api/admin/conduct/add")
+async def api_conduct_add(uid: str = Form(...), student_name: str = Form(...), student_no: str = Form(...), classroom: str = Form(...), points: int = Form(...), reason: str = Form(...), user_session: Optional[str] = Cookie(None)):
+    access, redirect = require_discipline_access(user_session)
+    if redirect: return redirect
+    if not in_discipline_scope(access, classroom):
+        return alert_redirect("คุณไม่มีสิทธิ์บันทึกคะแนนของนักเรียนนอกระดับชั้นที่รับผิดชอบ", type="error", url="/admin/conduct")
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO conduct_scores (student_uid, student_name, student_no, classroom, points, reason, recorded_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (uid, student_name, student_no, classroom, points, reason.strip(), f"{access['role_label']} {access['fullname']}".strip(), datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    )
+    conn.commit()
+    conn.close()
+    verb = "เพิ่ม" if points >= 0 else "หัก"
+
+    # 🔴 แจ้งเตือนแบบเรียลไทม์ให้นักเรียนคนนั้นทันที ไม่ต้องรอรีเฟรชหน้า
+    summary_now = next((s for s in get_conduct_summary() if s['uid'] == uid), None)
+    score_now = summary_now['score'] if summary_now else CONDUCT_START_SCORE
+    await push_student_notify(
+        title=f"{'ได้รับ' if points >= 0 else 'ถูกหัก'}คะแนนความประพฤติ {abs(points)} คะแนน",
+        message=reason.strip(),
+        tone="success" if points >= 0 else "danger",
+        target_uids=[uid],
+        score_now=score_now,
+    )
+
+    return alert_redirect(f"บันทึกคะแนนความประพฤติเรียบร้อยแล้ว ({verb} {abs(points)} คะแนน)", type="success", url="/admin/conduct")
+
+@app.get("/coming_soon", response_class=HTMLResponse)
+async def coming_soon_page(back: str = "/student/dashboard"):
+    """🚧 ฟีเจอร์ที่ยังไม่ได้พัฒนา — ใช้เป็นทางลัดชั่วคราวสำหรับไอคอนในกริดเมนูที่ยังไม่มีระบบหลังบ้านรองรับ"""
+    return alert_redirect("ฟีเจอร์นี้อยู่ระหว่างการพัฒนา เร็วๆ นี้จะเปิดให้ใช้งาน", type="info", url=back)
+
+@app.get("/api/admin/conduct/delete")
+async def api_conduct_delete(entry_id: int, uid: str, user_session: Optional[str] = Cookie(None)):
+    """🗑️ ลบรายการคะแนนความประพฤติที่เคยบันทึกผิด/ไม่ต้องการแล้ว — คะแนนของนักเรียนจะถูกคืนให้อัตโนมัติ
+    เพราะคะแนนรวมคำนวณสดจาก SUM ของทุกแถวที่เหลืออยู่ (ไม่มีคอลัมน์คะแนนคงที่ให้ค้างเป็นค่าเก่า)"""
+    access, redirect = require_discipline_access(user_session)
+    if redirect: return redirect
+    all_students = get_sorted_master_students()
+    target = next((s for s in all_students if s['uid'] == uid), None)
+    if not target:
+        return alert_redirect("ไม่พบข้อมูลนักเรียนที่ต้องการ", type="error", url="/admin/conduct")
+    if not in_discipline_scope(access, target['class']):
+        return alert_redirect("คุณไม่มีสิทธิ์ลบประวัติของนักเรียนนอกระดับชั้นที่รับผิดชอบ", type="error", url="/admin/conduct")
+
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT points, reason FROM conduct_scores WHERE id=? AND student_uid=?", (entry_id, uid))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return alert_redirect("ไม่พบรายการนี้ (อาจถูกลบไปแล้ว)", type="error", url=f"/admin/conduct/history?uid={uid}")
+    cursor.execute("DELETE FROM conduct_scores WHERE id=? AND student_uid=?", (entry_id, uid))
+    conn.commit()
+    conn.close()
+
+    points, reason = row
+    refund_msg = f"คืนคะแนน {abs(points)} คะแนนให้นักเรียนแล้ว" if points < 0 else f"ตัดคะแนนที่เคยให้ไป {points} คะแนนออกแล้ว"
+
+    # 🔴 แจ้งเตือนแบบเรียลไทม์ทันทีที่ลบ (คะแนนถูกคืน/ตัดออกไปแล้วให้ขึ้นบนหน้าจอนักเรียนโดยไม่ต้องรีเฟรช)
+    summary_now = next((s for s in get_conduct_summary() if s['uid'] == uid), None)
+    score_now = summary_now['score'] if summary_now else CONDUCT_START_SCORE
+    await push_student_notify(
+        title="ยกเลิกรายการคะแนนความประพฤติ",
+        message=f'"{reason}" — {refund_msg}',
+        tone="info",
+        target_uids=[uid],
+        score_now=score_now,
+    )
+
+    return alert_redirect(f"ลบรายการ \"{reason}\" เรียบร้อยแล้ว — {refund_msg}", type="success", url=f"/admin/conduct/history?uid={uid}")
+
+@app.get("/admin/conduct/history", response_class=HTMLResponse)
+async def admin_conduct_history_page(uid: str, user_session: Optional[str] = Cookie(None)):
+    access, redirect = require_discipline_access(user_session)
+    if redirect: return redirect
+
+    all_students = get_sorted_master_students()
+    target = next((s for s in all_students if s['uid'] == uid), None)
+    if not target:
+        return alert_redirect("ไม่พบข้อมูลนักเรียนที่ต้องการ", type="error", url="/admin/conduct")
+    if not in_discipline_scope(access, target['class']):
+        return alert_redirect("คุณไม่มีสิทธิ์ดูประวัติของนักเรียนนอกระดับชั้นที่รับผิดชอบ", type="error", url="/admin/conduct")
+
+    history = get_conduct_history(uid)
+    rows = ""
+    for h in history:
+        sign = "+" if h['points'] >= 0 else ""
+        color = "#15803d" if h['points'] >= 0 else "#b91c1c"
+        rows += f"""
+        <tr>
+            <td style="white-space:nowrap; font-size:12px; color:#64748b;">{h['created_at']}</td>
+            <td style="text-align:left;">{h['reason']}<br><span style="font-size:10.5px;color:#94a3b8;">โดย: {h['recorded_by']}</span></td>
+            <td><b style="color:{color};">{sign}{h['points']}</b></td>
+            <td><b>{h['running_total']}</b></td>
+            <td>
+                <a href="/api/admin/conduct/delete?entry_id={h['id']}&uid={uid}"
+                   onclick="return confirm('ลบรายการนี้? ระบบจะคืนคะแนนให้นักเรียนอัตโนมัติ')"
+                   class="btn btn-danger" style="padding:4px 9px;font-size:11px;">🗑️ ลบ</a>
+            </td>
+        </tr>
+        """
+    return f"""
+    <html>{STYLE_HEADER}
+    <body>
+        <div class="navbar">
+            <h1><img src="{LOGO_URL}" class="nav-logo"> 📜 ประวัติคะแนนความประพฤติ</h1>
+            <a href="/admin/conduct" class="btn btn-secondary">⬅ กลับ</a>
+        </div>
+        <div class="main-container">
+            <div class="card" style="text-align:center;">
+                <div style="font-size:14px; color:#64748b; margin-bottom:4px;">{target['class']} · เลขที่ {target['no']}</div>
+                <div style="font-size:19px; font-weight:800; color:#0f172a;">{target['name']}</div>
+            </div>
+            <div class="card">
+                <h2>ประวัติการบันทึกคะแนนทั้งหมด</h2>
+                <div style="overflow-x:auto; border-radius:8px; border:1px solid #e2e8f0;">
+                    <table>
+                        <thead><tr><th>วันที่-เวลา</th><th>เหตุผล</th><th>คะแนน</th><th>คงเหลือ</th><th>จัดการ</th></tr></thead>
+                        <tbody>{rows if rows else "<tr><td colspan='5'>ยังไม่มีประวัติการบันทึกคะแนน</td></tr>"}</tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </body></html>
+    """
+
+@app.get("/admin/teachers", response_class=HTMLResponse)
+async def admin_teachers_page(user_session: Optional[str] = Cookie(None)):
+    access = get_access(user_session)
+    if not access["authenticated"] or not can_manage_teacher_accounts(access):
+        return RedirectResponse(url="/login", status_code=303)
+    back_url = "/admin/dashboard" if access["role"] == "admin" else f"/app/dashboard?user={urllib.parse.quote(access['username'])}"
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT username, fullname, role, level_scope FROM teachers")
+    teachers = cursor.fetchall()
+    conn.close()
+
+    role_options = "".join([f'<option value="{key}">{meta["label"]}</option>' for key, meta in TEACHER_ROLES.items()])
+
+    rows = ""
+    for t in teachers:
+        username, fullname, role, level_scope = t
+        role = role or "teacher"
+        role_meta = TEACHER_ROLES.get(role, TEACHER_ROLES["teacher"])
+        scope_txt = f" · ระดับ {level_scope}" if role == "level_head" and level_scope else ""
+        rows += f"""<tr>
+            <td><code>{username}</code></td>
+            <td>{fullname}</td>
+            <td><span style="font-size:12px; font-weight:700;">{role_meta['label']}{scope_txt}</span></td>
+            <td><div style='display:flex;gap:6px;'><a href='/admin/confirm_edit_teacher?target_username={username}' class='btn btn-warning' style='padding:5px 10px; font-size:11.5px;'>📝 แก้ไข</a><a href='/admin/confirm_delete_teacher?target_username={username}' class='btn btn-danger' style='padding:5px 10px; font-size:11.5px;'>🗑️ ลบ</a></div></td>
+        </tr>"""
+
+    return f"""<html>{STYLE_HEADER}<body><div class="navbar"><h1>👤 จัดการครู &amp; สิทธิ์การใช้งาน</h1><a href="{back_url}" class="btn btn-secondary">⬅ ประตูหลัก</a></div><div class="main-container">
+        <div class="card">
+            <h2>➕ สร้างบัญชีครูใหม่</h2>
+            <form action="/api/admin/create_teacher" method="post">
+                <input type="text" name="u" placeholder="Username" required>
+                <input type="text" name="p" placeholder="Password" required>
+                <input type="text" name="f" placeholder="ชื่อครู" required>
+                <label style="font-size:12.5px; font-weight:700; color:#475569; display:block; margin:8px 0 4px;">บทบาท / สิทธิ์การใช้งาน</label>
+                <select name="role" id="createRoleSel" onchange="document.getElementById('createScopeWrap').style.display = this.value==='level_head' ? 'block' : 'none';">
+                    {role_options}
+                </select>
+                <div id="createScopeWrap" style="display:none;">
+                    <input type="text" name="level_scope" placeholder="ระดับชั้นที่รับผิดชอบ เช่น ม.2">
+                </div>
+                <button type="submit" class="btn-submit">➕ สร้างบัญชี</button>
+            </form>
+        </div>
+        <div class="card">
+            <h2>📋 รายชื่อครูในระบบ</h2>
+            <table><thead><tr><th>User</th><th>ชื่อ</th><th>บทบาท</th><th>การจัดการ</th></tr></thead><tbody>{rows}</tbody></table>
+        </div>
+    </div></body></html>"""
+
+@app.post("/api/admin/create_teacher")
+async def api_create_teacher(u: str = Form(...), p: str = Form(...), f: str = Form(...), role: str = Form("teacher"), level_scope: str = Form(""), user_session: Optional[str] = Cookie(None)):
+    access = get_access(user_session)
+    if not access["authenticated"] or not can_manage_teacher_accounts(access):
+        return HTMLResponse("Unauthorized", status_code=401)
+    if role not in TEACHER_ROLES: role = "teacher"
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    try: 
+        cursor.execute("INSERT INTO teachers (username, password, fullname, role, level_scope) VALUES (?, ?, ?, ?, ?)",
+                        (u, p, f, role, level_scope.strip() if role == "level_head" else ""))
+        conn.commit()
+    except sqlite3.IntegrityError: pass
+    finally: conn.close()
+    return RedirectResponse(url="/admin/teachers", status_code=303)
+
+@app.get("/admin/confirm_delete_teacher", response_class=HTMLResponse)
+async def confirm_delete_teacher_page(target_username: str, user_session: Optional[str] = Cookie(None)):
+    access = get_access(user_session)
+    if not access["authenticated"] or not can_manage_teacher_accounts(access):
+        return RedirectResponse(url="/login", status_code=303)
+    pw_label = "รหัส Admin ยืนยัน" if access["role"] == "admin" else "รหัสผ่านบัญชีของคุณ (ยืนยันตัวตน)"
+    return f"""<html>{STYLE_HEADER}<body style="background: #0f172a; display: flex; align-items: center; justify-content: center; height: 100vh;"><div style="background: white; border-radius: 16px; padding: 30px; width: 100%; max-width: 380px; text-align:center;"><h3 style="color:#ef4444;">🔒 ลบบัญชีผู้ใช้งาน: {target_username}</h3><form action="/api/delete_teacher" method="post"><input type="hidden" name="target_username" value="{target_username}"><input type="password" name="admin_password" placeholder="{pw_label}" required><br><br><button type="submit" class="btn btn-danger" style="width:100%; padding:10px;">🛑 ยืนยันลบ</button></form></div></body></html>"""
+
+@app.post("/api/delete_teacher")
+async def api_delete_teacher(target_username: str = Form(...), admin_password: str = Form(...), user_session: Optional[str] = Cookie(None)):
+    access = get_access(user_session)
+    if not access["authenticated"] or not can_manage_teacher_accounts(access):
+        return HTMLResponse("Unauthorized", status_code=401)
+    if not verify_manager_password(access, admin_password):
+        return HTMLResponse(f"""<html>{STYLE_HEADER}<body><script>smartAlert({{title: 'ผิดพลาด!', message: 'รหัสผ่านไม่ถูกต้อง!', type: 'error', callback: () => {{ history.back(); }} }});</script></body></html>""")
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM teachers WHERE username = ?", (target_username,))
+    conn.commit()
+    conn.close()
+    return HTMLResponse(f"""<html>{STYLE_HEADER}<body><script>smartAlert({{title: 'ดำเนินการเสร็จสิ้น!', message: 'ลบบัญชีครูออกจากระบบแล้ว!', type: 'success', callback: () => {{ window.location.href='/admin/teachers'; }} }});</script></body></html>""")
+
+@app.get("/admin/confirm_edit_teacher", response_class=HTMLResponse)
+async def confirm_edit_teacher_page(target_username: str, user_session: Optional[str] = Cookie(None)):
+    access = get_access(user_session)
+    if not access["authenticated"] or not can_manage_teacher_accounts(access):
+        return RedirectResponse(url="/login", status_code=303)
+    pw_label = "รหัส Admin ยืนยัน" if access["role"] == "admin" else "รหัสผ่านบัญชีของคุณ (ยืนยันตัวตน)"
+    return f"""<html>{STYLE_HEADER}<body style="background: #0f172a; display: flex; align-items: center; justify-content: center; height: 100vh;"><div style="background: white; border-radius: 16px; padding: 30px; width: 100%; max-width: 380px; text-align:center;"><h3 style="color:#f59e0b;">🔐 ยืนยันรหัสผ่านเพื่อแก้ไข: {target_username}</h3><form action="/admin/edit_teacher" method="post"><input type="hidden" name="target_username" value="{target_username}"><input type="password" name="admin_password" placeholder="{pw_label}" required><br><br><button type="submit" class="btn btn-warning" style="width:100%; padding:10px; font-weight:700;">🔓 ยืนยันเพื่อเข้าแก้ไข</button></form><a href="/admin/teachers" style="display:block; margin-top:14px; color:#64748b; font-size:13px; text-decoration:none;">↩ ยกเลิก</a></div></body></html>"""
+
+@app.post("/admin/edit_teacher", response_class=HTMLResponse)
+async def admin_edit_teacher_page(target_username: str = Form(...), admin_password: str = Form(...), user_session: Optional[str] = Cookie(None)):
+    access = get_access(user_session)
+    if not access["authenticated"] or not can_manage_teacher_accounts(access):
+        return HTMLResponse("Unauthorized", status_code=401)
+    if not verify_manager_password(access, admin_password):
+        return alert_redirect("รหัสผ่านไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง", type="error")
+    back_url = "/admin/dashboard" if access["role"] == "admin" else f"/app/dashboard?user={urllib.parse.quote(access['username'])}"
+
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT username, password, fullname, role, level_scope FROM teachers WHERE username = ?", (target_username,))
+    t = cursor.fetchone()
+    conn.close()
+    
+    if not t: return alert_redirect("ไม่พบข้อมูลครูที่ต้องการ", type="error", url="/admin/teachers")
+    current_role = t[3] or "teacher"
+    current_scope = t[4] or ""
+
+    role_options = "".join([f'<option value="{key}" {"selected" if key==current_role else ""}>{meta["label"]}</option>' for key, meta in TEACHER_ROLES.items()])
+    
+    return f"""
+    <html>{STYLE_HEADER}
+    <body>
+        <div class="navbar">
+            <h1><img src="{LOGO_URL}" class="nav-logo"> ✏️ แก้ไขบัญชีครู</h1>
+            <a href="/admin/teachers" class="btn btn-secondary">⬅ กลับ</a>
+        </div>
+        <div class="main-container">
+            <div class="card">
+                <h2>✏️ แก้ไขข้อมูล: {t[0]}</h2>
+                <form action="/api/admin/update_teacher" method="post">
+                    <input type="hidden" name="old_username" value="{t[0]}">
+                    <label style="font-size:13px; font-weight:700; color:#475569; display:block; margin-bottom:4px;">Username (ชื่อผู้ใช้)</label>
+                    <input type="text" name="new_username" value="{t[0]}" required>
+                    <label style="font-size:13px; font-weight:700; color:#475569; display:block; margin-bottom:4px;">Password (รหัสผ่าน)</label>
+                    <input type="text" name="new_password" value="{t[1]}" required>
+                    <label style="font-size:13px; font-weight:700; color:#475569; display:block; margin-bottom:4px;">ชื่อ-นามสกุลครู</label>
+                    <input type="text" name="new_fullname" value="{t[2]}" required>
+                    <label style="font-size:13px; font-weight:700; color:#475569; display:block; margin-bottom:4px;">บทบาท / สิทธิ์การใช้งาน</label>
+                    <select name="new_role" id="editRoleSel" onchange="document.getElementById('editScopeWrap').style.display = this.value==='level_head' ? 'block' : 'none';">
+                        {role_options}
+                    </select>
+                    <div id="editScopeWrap" style="display:{'block' if current_role=='level_head' else 'none'};">
+                        <label style="font-size:13px; font-weight:700; color:#475569; display:block; margin-bottom:4px;">ระดับชั้นที่รับผิดชอบ (หัวหน้าระดับ)</label>
+                        <input type="text" name="new_level_scope" value="{current_scope}" placeholder="เช่น ม.2">
+                    </div>
+                    <div style="background:#fef2f2; border:1px solid #fecaca; border-radius:8px; padding:12px; margin-bottom:14px; font-size:12px; color:#b91c1c;">
+                        ⚠️ หากเปลี่ยน Username ครูจะต้องใช้ชื่อใหม่ในการ Login และระบบจะอัปเดตข้อมูลในคลาสเรียนที่เกี่ยวข้องให้อัตโนมัติ
+                    </div>
+                    <button type="submit" class="btn-submit">💾 บันทึกการเปลี่ยนแปลง</button>
+                </form>
+            </div>
+        </div>
+    </body></html>
+    """
+
+@app.post("/api/admin/update_teacher")
+async def api_update_teacher(old_username: str = Form(...), new_username: str = Form(...), new_password: str = Form(...), new_fullname: str = Form(...), new_role: str = Form("teacher"), new_level_scope: str = Form(""), user_session: Optional[str] = Cookie(None)):
+    access = get_access(user_session)
+    if not access["authenticated"] or not can_manage_teacher_accounts(access):
+        return HTMLResponse("Unauthorized", status_code=401)
+    if new_role not in TEACHER_ROLES: new_role = "teacher"
+    scope_value = new_level_scope.strip() if new_role == "level_head" else ""
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    try:
+        # อัปเดตข้อมูลครู
+        cursor.execute(
+            "UPDATE teachers SET username = ?, password = ?, fullname = ?, role = ?, level_scope = ? WHERE username = ?",
+            (new_username.strip(), new_password.strip(), new_fullname.strip(), new_role, scope_value, old_username)
+        )
+        # ถ้า Username เปลี่ยน ต้องอัปเดตใน course_groups ด้วย
+        if new_username.strip() != old_username:
+            cursor.execute("UPDATE course_groups SET teacher_username = ? WHERE teacher_username = ?", (new_username.strip(), old_username))
+        
+        conn.commit()
+    except sqlite3.IntegrityError:
+        return alert_redirect("Username นี้มีผู้ใช้งานแล้ว กรุณาใช้ชื่ออื่น", type="warning")
+    except Exception as e:
+        print(f"❌ DB Update Teacher Error: {e}")
+        return alert_redirect("เกิดข้อผิดพลาดในการแก้ไขข้อมูล กรุณาลองใหม่อีกครั้ง", type="error")
+    finally:
+        conn.close()
+    return HTMLResponse(f"""<html>{STYLE_HEADER}<body><script>smartAlert({{title: 'ดำเนินการเสร็จสิ้น!', message: 'อัปเดตข้อมูลบัญชีครูเรียบร้อยแล้ว!', type: 'success', callback: () => {{ window.location.href='/admin/teachers'; }} }});</script></body></html>""")
+
+@app.get("/admin/view_classes", response_class=HTMLResponse)
+async def admin_view_classes_page(user_session: Optional[str] = Cookie(None)):
+    if user_session != "admin": return RedirectResponse(url="/login", status_code=303)
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT group_id, group_name, teacher_username, branch FROM course_groups')
+    course_groups = cursor.fetchall()
+    conn.close()
+    rows = "".join([f"<tr><td>#{g[0]}</td><td>{g[1]}</td><td>{g[2]}</td><td>{g[3]}</td><td><div style='display:flex;gap:6px;justify-content:center;'><a href='/admin/edit_group?group_id={g[0]}' class='btn btn-warning' style='padding:5px 10px;font-size:11.5px;'>✏️ แก้ไข</a><a href='/admin/confirm_delete_group?group_id={g[0]}&group_name={g[1]}' class='btn btn-danger' style='padding:5px 10px;font-size:11.5px;'>🗑️ ลบ</a></div></td></tr>" for g in course_groups])
+    return f"""<html>{STYLE_HEADER}<body><div class="navbar"><h1>📊 คลาสเรียนทั้งหมด</h1><a href="/admin/dashboard" class="btn btn-secondary">⬅ กลับ</a></div><div class="main-container"><div class="card"><table><thead><tr><th>ID</th><th>ชื่อคลาส</th><th>ครู</th><th>วิชาเอก</th><th>การจัดการ</th></tr></thead><tbody>{rows}</tbody></table></div></div></body></html>"""
+
+# ==========================================
+# ✏️ [ADMIN EDIT COURSE GROUP SYSTEM]
+# ==========================================
+@app.get("/admin/edit_group", response_class=HTMLResponse)
+async def admin_edit_group_page(group_id: int, user_session: Optional[str] = Cookie(None)):
+    if user_session != "admin": return RedirectResponse(url="/login", status_code=303)
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT group_id, group_name, teacher_username, branch FROM course_groups WHERE group_id = ?', (group_id,))
+    g = cursor.fetchone()
+    cursor.execute('SELECT username, fullname FROM teachers')
+    teachers = cursor.fetchall()
+    conn.close()
+    if not g:
+        return alert_redirect("ไม่พบข้อมูลคลาสนี้ในระบบ", type="error", url="/admin/view_classes")
+    teacher_options = "".join([f"<option value='{t[0]}' {'selected' if t[0]==g[2] else ''}>{t[1]} ({t[0]})</option>" for t in teachers])
+    return f"""
+    <html>{STYLE_HEADER}
+    <body>
+        <div class="navbar">
+            <h1><img src="{LOGO_URL}" class="nav-logo"> ✏️ แก้ไขข้อมูลคลาสเรียน</h1>
+            <a href="/admin/view_classes" class="btn btn-secondary">⬅ กลับ</a>
+        </div>
+        <div class="main-container">
+            <div class="card">
+                <h2>✏️ แก้ไขคลาส #{g[0]}</h2>
+                <form action="/api/admin/update_group" method="post">
+                    <input type="hidden" name="group_id" value="{g[0]}">
+                    <input type="hidden" name="old_group_name" value="{g[1]}">
+                    <label style="font-size:13px; font-weight:700; color:#475569; display:block; margin-bottom:4px;">ชื่อคลาส / วิชาเรียน</label>
+                    <input type="text" name="group_name" value="{g[1]}" placeholder="ชื่อคลาส / วิชาเรียน" required>
+                    <label style="font-size:13px; font-weight:700; color:#475569; display:block; margin-bottom:4px;">ครูผู้ดูแลคลาส</label>
+                    <select name="teacher_username" required>
+                        {teacher_options}
+                    </select>
+                    <label style="font-size:13px; font-weight:700; color:#475569; display:block; margin-bottom:4px;">สาขาวิชาเอก</label>
+                    <input type="text" name="branch" value="{g[3]}" placeholder="สาขาวิชาเอก" required>
+                    <div style="background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:12px; margin-bottom:14px; font-size:13px; color:#92400e;">
+                        ⚠️ หากเปลี่ยนชื่อคลาส ระบบจะอัปเดตชื่อในประวัติเช็คชื่อทั้งหมดให้อัตโนมัติ
+                    </div>
+                    <button type="submit" class="btn-submit">💾 บันทึกการแก้ไข</button>
+                </form>
+            </div>
+        </div>
+    </body></html>
+    """
+
+@app.post("/api/admin/update_group")
+async def api_update_group(
+    group_id: int = Form(...),
+    old_group_name: str = Form(...),
+    group_name: str = Form(...),
+    teacher_username: str = Form(...),
+    branch: str = Form(...),
+    user_session: Optional[str] = Cookie(None)
+):
+    if user_session != "admin": return HTMLResponse("Unauthorized", status_code=401)
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    try:
+        # อัปเดตข้อมูลคลาส
+        cursor.execute(
+            "UPDATE course_groups SET group_name = ?, teacher_username = ?, branch = ? WHERE group_id = ?",
+            (group_name.strip(), teacher_username.strip(), branch.strip(), group_id)
+        )
+        # ถ้าชื่อคลาสเปลี่ยน ให้อัปเดตประวัติเช็คชื่อด้วย
+        if group_name.strip() != old_group_name.strip():
+            cursor.execute(
+                "UPDATE attendance_logs SET group_name = ? WHERE group_name = ?",
+                (group_name.strip(), old_group_name.strip())
+            )
+        conn.commit()
+    except Exception as e:
+        print(f"❌ DB Update Group Error: {e}")
+        return alert_redirect("เกิดข้อผิดพลาดในการแก้ไข กรุณาลองใหม่อีกครั้ง", type="error")
+    finally:
+        conn.close()
+    return HTMLResponse(f"""<html>{STYLE_HEADER}<body><script>smartAlert({{title: 'ดำเนินการเสร็จสิ้น!', message: 'แก้ไขข้อมูลคลาสเรียบร้อยแล้ว!', type: 'success', callback: () => {{ window.location.href='/admin/view_classes'; }} }});</script></body></html>""")
+
+# ==========================================
+# 🗑️ [ADMIN DELETE COURSE GROUP SYSTEM]
+# ==========================================
+@app.get("/admin/confirm_delete_group", response_class=HTMLResponse)
+async def confirm_delete_group_page(group_id: int, group_name: str, user_session: Optional[str] = Cookie(None)):
+    if user_session != "admin": return RedirectResponse(url="/login", status_code=303)
+    return f"""
+    <html>{STYLE_HEADER}
+    <body style="background: #0f172a; display: flex; align-items: center; justify-content: center; height: 100vh;">
+        <div style="background: white; border-radius: 16px; padding: 30px; width: 100%; max-width: 400px; text-align:center; box-shadow: 0 20px 40px rgba(0,0,0,0.3);">
+            <div style="font-size: 52px; margin-bottom: 12px;">⚠️</div>
+            <h3 style="color:#ef4444; margin: 0 0 8px 0; font-size: 18px;">ยืนยันการลบวิชาเรียน</h3>
+            <p style="color:#475569; font-size:14px; margin-bottom:6px;">คุณกำลังจะลบวิชา:</p>
+            <p style="background:#fef2f2; border:1px solid #fecaca; border-radius:8px; padding:10px 16px; font-weight:700; color:#b91c1c; font-size:15px; margin-bottom:16px;">#{group_id} — {group_name}</p>
+            <p style="color:#ef4444; font-size:13px; font-weight:700; margin-bottom:20px;">⛔ การลบจะลบรายชื่อสมาชิกและประวัติเช็คชื่อทั้งหมดในวิชานี้ไปด้วย!</p>
+            <form action="/api/admin/delete_group" method="post">
+                <input type="hidden" name="group_id" value="{group_id}">
+                <input type="hidden" name="group_name" value="{group_name}">
+                <input type="password" name="admin_password" placeholder="รหัส Admin ยืนยัน" required>
+                <button type="submit" class="btn-submit" style="background: linear-gradient(135deg, #ef4444, #b91c1c); border-bottom: 3px solid #991b1b; margin-top:4px;">🛑 ยืนยันลบวิชานี้ถาวร</button>
+            </form>
+            <a href="/admin/view_classes" style="display:block; margin-top:14px; color:#64748b; font-size:13px; text-decoration:none; font-weight:600;">↩ ยกเลิก กลับไปหน้ารายการวิชา</a>
+        </div>
+    </body></html>
+    """
+
+@app.post("/api/admin/delete_group")
+async def api_delete_group(group_id: int = Form(...), group_name: str = Form(...), admin_password: str = Form(...), user_session: Optional[str] = Cookie(None)):
+    if user_session != "admin": return HTMLResponse("Unauthorized", status_code=401)
+    if admin_password != ADMIN_PASS:
+        return alert_redirect("รหัสผ่าน Admin ไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง", type="error")
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    try:
+        # ลบประวัติเช็คชื่อทั้งหมดของวิชานี้
+        cursor.execute("DELETE FROM attendance_logs WHERE group_name = ?", (group_name,))
+        # ลบรายชื่อสมาชิกในกลุ่มวิชานี้
+        cursor.execute("DELETE FROM group_assignments WHERE group_id = ?", (group_id,))
+        # ลบวิชาออกจากระบบ
+        cursor.execute("DELETE FROM course_groups WHERE group_id = ?", (group_id,))
+        conn.commit()
+    except Exception as e:
+        print(f"❌ DB Delete Group Error: {e}")
+        return alert_redirect("เกิดข้อผิดพลาดในการลบ กรุณาลองใหม่อีกครั้ง", type="error")
+    finally:
+        conn.close()
+    return HTMLResponse(f"""<html>{STYLE_HEADER}<body><script>smartAlert({{title: 'ดำเนินการเสร็จสิ้น!', message: 'ลบวิชาและข้อมูลที่เกี่ยวข้องทั้งหมดสำเร็จแล้ว!', type: 'success', callback: () => {{ window.location.href='/admin/view_classes'; }} }});</script></body></html>""")
+
+def init_db():
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute('CREATE TABLE IF NOT EXISTS teachers (username TEXT PRIMARY KEY, password TEXT, fullname TEXT)')
+    # 🔐 เพิ่มคอลัมน์บทบาท/ขอบเขตระดับชั้น ให้ตารางครู (ใช้ try/except เพราะ SQLite ไม่มี ADD COLUMN IF NOT EXISTS)
+    for alter_sql in [
+        "ALTER TABLE teachers ADD COLUMN role TEXT DEFAULT 'teacher'",
+        "ALTER TABLE teachers ADD COLUMN level_scope TEXT DEFAULT ''",
+    ]:
+        try:
+            cursor.execute(alter_sql)
+        except sqlite3.OperationalError:
+            pass  # คอลัมน์มีอยู่แล้ว
+    cursor.execute("UPDATE teachers SET role='teacher' WHERE role IS NULL")
+    # 🎒 บัญชีเข้าสู่ระบบของนักเรียน: ล็อกอินด้วยรหัสประจำตัว + เบอร์โทร (ไม่มีรหัสผ่าน)
+    cursor.execute('''CREATE TABLE IF NOT EXISTS student_accounts (
+        uid TEXT PRIMARY KEY,
+        student_id TEXT UNIQUE,
+        phone TEXT
+    )''')
+    try:
+        cursor.execute("ALTER TABLE student_accounts ADD COLUMN photo_url TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass  # คอลัมน์มีอยู่แล้ว
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_student_accounts_login ON student_accounts (student_id, phone)")
+    cursor.execute('CREATE TABLE IF NOT EXISTS course_groups (group_id INTEGER PRIMARY KEY AUTOINCREMENT, group_name TEXT, teacher_username TEXT, branch TEXT)')
+    # 👁️ การมองเห็นคะแนน: 'hidden' = นักเรียนดูไม่ได้เลย, 'all' = ดูได้ทุกคน, 'custom' = ดูได้เฉพาะบางคน (ดู grade_visible_students)
+    try:
+        cursor.execute("ALTER TABLE course_groups ADD COLUMN grades_visibility TEXT DEFAULT 'hidden'")
+    except sqlite3.OperationalError:
+        pass  # คอลัมน์มีอยู่แล้ว
+    cursor.execute('CREATE TABLE IF NOT EXISTS group_assignments (group_id INTEGER, student_uid TEXT, PRIMARY KEY (group_id, student_uid))')
+    cursor.execute('CREATE TABLE IF NOT EXISTS attendance_logs (log_id INTEGER PRIMARY KEY AUTOINCREMENT, group_name TEXT, student_name TEXT, student_no TEXT, classroom TEXT, status TEXT, date TEXT, checked_by TEXT)')
+    # 🕐 เวลาบันทึก (แยกจาก date เดิมเพื่อไม่กระทบ query เช็กซ้ำที่มีอยู่) — ใช้แสดงในฟีดแจ้งเตือน
+    try:
+        cursor.execute("ALTER TABLE attendance_logs ADD COLUMN log_time TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass  # คอลัมน์มีอยู่แล้ว
+    cursor.execute('CREATE TABLE IF NOT EXISTS maintenance_settings (id INTEGER PRIMARY KEY, is_active INTEGER, mode_type TEXT)')
+    cursor.execute("INSERT OR IGNORE INTO maintenance_settings (id, is_active, mode_type) VALUES (1, 0, 'off')")
+    cursor.execute('''CREATE TABLE IF NOT EXISTS leave_requests (
+        req_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        student_name TEXT,
+        student_no TEXT,
+        classroom TEXT,
+        group_id INTEGER,
+        group_name TEXT,
+        leave_date TEXT,
+        reason TEXT,
+        status TEXT DEFAULT 'pending',
+        submitted_at TEXT,
+        reviewed_at TEXT
+    )''')
+    # 🩺 เพิ่มประเภทการลา (ลาป่วย / ลากิจ / อื่นๆ) ให้คำร้องลา
+    try:
+        cursor.execute("ALTER TABLE leave_requests ADD COLUMN leave_type TEXT DEFAULT 'อื่นๆ'")
+    except sqlite3.OperationalError:
+        pass  # คอลัมน์มีอยู่แล้ว
+    cursor.execute("UPDATE leave_requests SET leave_type='อื่นๆ' WHERE leave_type IS NULL OR leave_type=''")
+    # 🔐 ตารางสิทธิ์แบบ Role-based ที่แก้ไขได้จากหน้าแอดมิน (ไม่ต้องแก้โค้ด)
+    cursor.execute('''CREATE TABLE IF NOT EXISTS role_permissions (
+        role TEXT,
+        perm_key TEXT,
+        allowed INTEGER,
+        PRIMARY KEY (role, perm_key)
+    )''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS announcements (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        body TEXT NOT NULL,
+        level TEXT DEFAULT 'normal',
+        created_at TEXT NOT NULL,
+        is_active INTEGER DEFAULT 1
+    )''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS otp_sessions (
+        group_id INTEGER PRIMARY KEY,
+        otp TEXT,
+        expires_at TEXT,
+        is_active INTEGER DEFAULT 0
+    )''')
+    # 🎖️ ระบบคะแนนความประพฤติ — นักเรียนเริ่มต้นที่ 100 คะแนน แล้วบวก/ลบตามพฤติกรรม
+    cursor.execute('''CREATE TABLE IF NOT EXISTS conduct_scores (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        student_uid TEXT,
+        student_name TEXT,
+        student_no TEXT,
+        classroom TEXT,
+        points INTEGER,
+        reason TEXT,
+        recorded_by TEXT,
+        created_at TEXT
+    )''')
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_conduct_uid ON conduct_scores (student_uid)")
+
+    # ⚡ เพิ่ม index ให้ตารางที่ query บ่อยที่สุด — ของเดิมไม่มี index เลย พอข้อมูลเยอะขึ้น
+    # ทุก query ต้องสแกนทั้งตาราง (full table scan) ทำให้เว็บช้าลงเรื่อยๆ ตามข้อมูลที่สะสม
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_attendance_student ON attendance_logs (student_name)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_attendance_group ON attendance_logs (group_name)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_attendance_group_date ON attendance_logs (group_name, date)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_leave_student_status ON leave_requests (student_name, status)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_leave_status ON leave_requests (status)")
+
+    # ==========================================
+    # 🆕 ตารางเรียน / การบ้าน / ผลการเรียน / ชำระเงิน
+    # ==========================================
+    # 🗓️ ตารางเรียน: แต่ละแถวคือ 1 คาบเรียนของกลุ่มวิชา (group_id) ในแต่ละวัน
+    cursor.execute('''CREATE TABLE IF NOT EXISTS timetable_slots (
+        slot_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        group_id INTEGER,
+        day_of_week INTEGER,
+        start_time TEXT,
+        end_time TEXT,
+        room TEXT,
+        created_by TEXT,
+        created_at TEXT
+    )''')
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_timetable_group ON timetable_slots (group_id)")
+
+    # 📖 การบ้าน/งานที่มอบหมาย ผูกกับกลุ่มวิชา
+    cursor.execute('''CREATE TABLE IF NOT EXISTS assignments (
+        assignment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        group_id INTEGER,
+        title TEXT,
+        detail TEXT,
+        due_date TEXT,
+        created_by TEXT,
+        created_at TEXT,
+        is_active INTEGER DEFAULT 1
+    )''')
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_assignments_group ON assignments (group_id)")
+
+    # 📤 งานที่นักเรียนส่ง (1 คน ส่งได้ 1 ครั้งต่อการบ้าน 1 ชิ้น — ส่งซ้ำจะอัปเดตของเดิม)
+    cursor.execute('''CREATE TABLE IF NOT EXISTS assignment_submissions (
+        submission_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        assignment_id INTEGER,
+        student_uid TEXT,
+        content TEXT,
+        submitted_at TEXT,
+        UNIQUE(assignment_id, student_uid)
+    )''')
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_submissions_assignment ON assignment_submissions (assignment_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_submissions_student ON assignment_submissions (student_uid)")
+
+    # 📊 ผลการเรียน/คะแนนเก็บ: รายการคะแนน (item) ต่อกลุ่มวิชา + คะแนนรายบุคคลของนักเรียนแต่ละคน
+    cursor.execute('''CREATE TABLE IF NOT EXISTS grade_items (
+        item_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        group_id INTEGER,
+        item_name TEXT,
+        max_score REAL,
+        category TEXT DEFAULT 'คะแนนเก็บ',
+        created_by TEXT,
+        created_at TEXT
+    )''')
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_grade_items_group ON grade_items (group_id)")
+    cursor.execute('''CREATE TABLE IF NOT EXISTS grade_scores (
+        item_id INTEGER,
+        student_uid TEXT,
+        score REAL,
+        PRIMARY KEY (item_id, student_uid)
+    )''')
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_grade_scores_student ON grade_scores (student_uid)")
+    # 👁️ รายชื่อนักเรียนที่ได้รับอนุญาตพิเศษให้ดูคะแนน เมื่อ group นั้นตั้งโหมด grades_visibility = 'custom'
+    cursor.execute('''CREATE TABLE IF NOT EXISTS grade_visible_students (
+        group_id INTEGER,
+        student_uid TEXT,
+        PRIMARY KEY (group_id, student_uid)
+    )''')
+
+    # 💳 ชำระเงิน: รายการเรียกเก็บเงินของนักเรียนแต่ละคน (ค่าเทอม ค่ากิจกรรม ฯลฯ)
+    cursor.execute('''CREATE TABLE IF NOT EXISTS payments (
+        payment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        student_uid TEXT,
+        item_name TEXT,
+        amount REAL,
+        status TEXT DEFAULT 'unpaid',
+        due_date TEXT,
+        paid_at TEXT,
+        note TEXT,
+        recorded_by TEXT,
+        created_at TEXT
+    )''')
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_payments_student ON payments (student_uid)")
+
+    conn.commit()
+    conn.close()
+
+THAI_WEEKDAYS = {1: "จันทร์", 2: "อังคาร", 3: "พุธ", 4: "พฤหัสบดี", 5: "ศุกร์", 6: "เสาร์", 7: "อาทิตย์"}
+
+# ==========================================
+# 🔌 STUDENT OTP/QR CHECK-IN PAGE
+# ==========================================
+@app.get("/checkin", response_class=HTMLResponse)
+async def student_checkin_page(group_id: Optional[int] = None):
+    m_cfg = get_maintenance_status()
+    if m_cfg["is_active"] == 1:
+        return generate_maintenance_html(m_cfg["mode_type"])
+        
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    
+    # ดึงรายวิชาที่มี OTP เซสชันที่เปิดใช้งานอยู่
+    cursor.execute("""
+        SELECT cg.group_id, cg.group_name 
+        FROM course_groups cg
+        JOIN otp_sessions os ON cg.group_id = os.group_id
+        WHERE os.is_active = 1
+    """)
+    active_groups = cursor.fetchall()
+    conn.close()
+    
+    group_options = ""
+    for g in active_groups:
+        sel = "selected" if group_id and group_id == g[0] else ""
+        group_options += f"<option value='{g[0]}' {sel}>{g[1]}</option>"
+        
+    no_active_warning = ""
+    if not active_groups:
+        no_active_warning = """
+        <div style="background:rgba(239, 68, 68, 0.15); border:1px solid rgba(239, 68, 68, 0.3); color:#f87171; border-radius:12px; padding:15px; font-size:13.5px; font-weight:700; margin-bottom:15px; text-align:center; line-height:1.6;">
+            ⚠️ ในขณะนี้ยังไม่มีคลาสเรียนใดเปิดลงทะเบียนเช็กชื่อด่วนด้วย OTP/QR ในระบบครับ
+        </div>
+        """
+        
+    return f"""
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>เช็กชื่อเข้าเรียนด้วย OTP | K-School</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Sarabun:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {{
+            --navy-900: #020617;
+            --navy-800: #0f172a;
+            --navy-700: #1e293b;
+            --navy-600: #2563eb;
+            --gold: #d4af37;
+            --gold-light: #f2d879;
+            --surface: rgba(255, 255, 255, 0.08);
+            --border: rgba(255, 255, 255, 0.15);
+            --text: #f8fafc;
+            --text-soft: #94a3b8;
+            --radius: 20px;
+        }}
+        * {{ margin:0; padding:0; box-sizing:border-box; }}
+        body {{
+            font-family:'Sarabun', 'Inter', sans-serif;
+            background: radial-gradient(circle at top, #0f172a 0%, #020617 100%);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }}
+        .glass-card {{
+            background: rgba(15, 23, 42, 0.65);
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 35px 28px;
+            width: 100%;
+            max-width: 440px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }}
+        .glass-card::before {{
+            content: '';
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 4px;
+            background: linear-gradient(90deg, var(--gold), var(--gold-light), var(--gold));
+        }}
+        .logo-img {{
+            height: 80px;
+            width: auto;
+            margin-bottom: 18px;
+            filter: drop-shadow(0 4px 8px rgba(0,0,0,0.3));
+        }}
+        h2 {{
+            font-size: 22px;
+            font-weight: 800;
+            margin-bottom: 6px;
+            letter-spacing: 0.5px;
+            color: #fff;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        }}
+        p.subtitle {{
+            font-size: 13.5px;
+            color: var(--text-soft);
+            margin-bottom: 24px;
+            font-weight: 500;
+        }}
+        label {{
+            font-size: 12.5px;
+            font-weight: 700;
+            color: #cbd5e1;
+            display: block;
+            text-align: left;
+            margin-bottom: 6px;
+            padding-left: 2px;
+        }}
+        input, select {{
+            width: 100%;
+            padding: 12.5px 14px;
+            border: 1.5px solid var(--border);
+            border-radius: 12px;
+            font-family: 'Sarabun', sans-serif;
+            font-size: 14.5px;
+            background: rgba(15, 23, 42, 0.4);
+            color: white;
+            margin-bottom: 14px;
+            outline: none;
+            transition: all 0.2s;
+        }}
+        input:focus, select:focus {{
+            border-color: var(--gold);
+            box-shadow: 0 0 0 3px rgba(212, 175, 55, 0.2);
+            background: rgba(15, 23, 42, 0.6);
+        }}
+        input[id="otp"] {{
+            text-align: center;
+            font-size: 24px;
+            font-weight: 800;
+            letter-spacing: 6px;
+            color: var(--gold-light);
+            border: 2px solid rgba(212, 175, 55, 0.3);
+            text-shadow: 0 0 8px rgba(242, 216, 121, 0.3);
+        }}
+        input[id="otp"]::placeholder {{
+            font-size: 15px;
+            font-weight: 500;
+            letter-spacing: 0;
+            color: #475569;
+            text-shadow: none;
+        }}
+        .btn-submit {{
+            background: linear-gradient(135deg, var(--gold), #b8962e);
+            color: #020617;
+            width: 100%;
+            padding: 14px;
+            font-size: 15px;
+            font-weight: 800;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            border-bottom: 3px solid #8a6e1e;
+            font-family: 'Sarabun', sans-serif;
+            letter-spacing: 0.5px;
+            transition: all 0.15s;
+            margin-top: 10px;
+            box-shadow: 0 6px 20px rgba(212, 175, 55, 0.2);
+        }}
+        .btn-submit:active {{
+            transform: translateY(2px);
+            border-bottom-width: 1px;
+            box-shadow: 0 2px 10px rgba(212, 175, 55, 0.1);
+        }}
+        .success-box {{
+            display: none;
+            text-align: center;
+            padding: 10px 0;
+        }}
+        .success-box .success-icon {{
+            font-size: 64px;
+            margin-bottom: 15px;
+            animation: popIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }}
+        @keyframes popIn {{
+            from {{ transform: scale(0.5); opacity: 0; }}
+            to {{ transform: scale(1); opacity: 1; }}
+        }}
+        .success-box h3 {{
+            color: #10b981;
+            font-size: 20px;
+            font-weight: 800;
+            margin-bottom: 8px;
+        }}
+        .success-box p {{
+            font-size: 14px;
+            color: var(--text-soft);
+            line-height: 1.6;
+        }}
+        /* 🔔 Toast แจ้งเตือนแบบไม่บล็อกหน้าจอ (แทน alert() ของเบราว์เซอร์) */
+        .pg-toast-wrap {{ position: fixed; top: 0; left: 0; right: 0; z-index: 9999; display: flex; flex-direction: column; align-items: center; padding-top: max(env(safe-area-inset-top, 0px), 14px); pointer-events: none; }}
+        .pg-toast {{
+            pointer-events: auto;
+            display: flex; align-items: center; gap: 10px;
+            background: rgba(15, 23, 42, 0.92);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--border);
+            border-left: 4px solid var(--gold);
+            border-radius: 14px;
+            padding: 13px 16px;
+            max-width: 90vw;
+            width: 360px;
+            box-shadow: 0 12px 30px -8px rgba(0,0,0,0.5);
+            color: #fff; font-size: 13.5px; font-weight: 600;
+            transform: translateY(-120%);
+            transition: transform 0.3s cubic-bezier(0.34,1.56,0.64,1);
+            margin-bottom: 8px;
+        }}
+        .pg-toast.show {{ transform: translateY(0); }}
+        .pg-toast.pg-error {{ border-left-color: #ef4444; }}
+        .pg-toast.pg-warning {{ border-left-color: #f59e0b; }}
+        .pg-toast .pg-toast-icon {{ font-size: 18px; flex-shrink: 0; }}
+    </style>
+</head>
+<body>
+    <div class="pg-toast-wrap" id="pgToastWrap"></div>
+
+<div class="glass-card">
+    <div id="form-area">
+        <img src="{LOGO_URL}" class="logo-img">
+        <h2>ลงทะเบียนเข้าเรียนด้วย OTP</h2>
+        <p class="subtitle">เช็กชื่อเข้าเรียนด้วยตนเองผ่านมือถือ</p>
+        
+        {no_active_warning}
+        
+        <div id="inputs-group" style="{ 'display:none;' if not active_groups else '' }">
+            <label>เลือกกลุ่มวิชา</label>
+            <select id="group_id" required>
+                {group_options}
+            </select>
+            
+            <label>ชื่อ-นามสกุลนักเรียน</label>
+            <input type="text" id="student_name" placeholder="กรอกชื่อ-นามสกุลจริงของคุณ" autocomplete="off" required>
+            
+            <label>เลขที่</label>
+            <input type="text" id="student_no" placeholder="ตัวอย่าง: 15" autocomplete="off" required>
+            
+            <label>ระดับชั้นเรียน</label>
+            <input type="text" id="classroom" placeholder="ตัวอย่าง: ม.5/2" autocomplete="off" required>
+            
+            <label>รหัส OTP 4 หลัก</label>
+            <input type="text" id="otp" placeholder="กรอกรหัสจากครูผู้สอน" maxlength="4" autocomplete="off" required>
+            
+            <button class="btn-submit" onclick="submitCheckin()">⚡ ยืนยันข้อมูลเช็กชื่อ</button>
+        </div>
+    </div>
+    
+    <div class="success-box" id="success-box">
+        <div class="success-icon">🎉</div>
+        <h3>เช็กชื่อสำเร็จแล้ว!</h3>
+        <p id="success-message">ระบบได้ลงบันทึกเวลาเรียนและส่งสัญญาณแจ้งเตือนไปยังครูผู้สอนเรียบร้อยแล้ว ขอให้มีความสุขกับการเรียนวันนี้</p>
+    </div>
+</div>
+
+<script>
+function pageToast(message, type) {{
+    type = type || 'info';
+    const icons = {{ success: '✅', error: '❌', warning: '⚠️', info: 'ℹ️' }};
+    const wrap = document.getElementById('pgToastWrap');
+    const el = document.createElement('div');
+    el.className = 'pg-toast pg-' + type;
+    el.innerHTML = '<span class="pg-toast-icon">' + (icons[type] || 'ℹ️') + '</span><span>' + message + '</span>';
+    wrap.appendChild(el);
+    requestAnimationFrame(() => el.classList.add('show'));
+    setTimeout(() => {{
+        el.classList.remove('show');
+        setTimeout(() => el.remove(), 300);
+    }}, 3200);
+}}
+
+async function submitCheckin() {{
+    const name = document.getElementById('student_name').value.trim();
+    const no = document.getElementById('student_no').value.trim();
+    const cls = document.getElementById('classroom').value.trim();
+    const otp = document.getElementById('otp').value.trim();
+    const gid = document.getElementById('group_id').value;
+    
+    if (!name || !no || !cls || !otp || !gid) {{
+        pageToast('กรุณากรอกข้อมูลให้ครบถ้วนทุกช่องครับ', 'warning');
+        return;
+    }}
+    
+    const btn = document.querySelector('.btn-submit');
+    btn.disabled = true;
+    btn.textContent = '⏱️ กำลังบันทึกข้อมูล...';
+    
+    try {{
+        const res = await fetch('/api/student/checkin', {{
+            method: 'POST',
+            headers: {{ 'Content-Type': 'application/json' }},
+            body: JSON.stringify({{
+                student_name: name,
+                student_no: no,
+                classroom: cls,
+                otp: otp,
+                group_id: parseInt(gid)
+            }})
+        }});
+        
+        const data = await res.json();
+        if (res.ok && data.ok) {{
+            document.getElementById('form-area').style.display = 'none';
+            document.getElementById('success-message').innerHTML = `<b>นักเรียน:</b> ${{name}} เลขที่ ${{no}} ห้อง ${{cls}}<br>ได้ทำการลงทะเบียนเข้าเรียนสำเร็จเรียบร้อยแล้ว!`;
+            document.getElementById('success-box').style.display = 'block';
+        }} else {{
+            pageToast('เช็กชื่อไม่สำเร็จ: ' + (data.error || 'เกิดข้อผิดพลาดไม่ทราบสาเหตุ'), 'error');
+            btn.disabled = false;
+            btn.textContent = '⚡ ยืนยันข้อมูลเช็กชื่อ';
+        }}
+    }} catch(e) {{
+        pageToast('การเชื่อมต่อล้มเหลว กรุณาลองใหม่อีกครั้ง', 'error');
+        btn.disabled = false;
+        btn.textContent = '⚡ ยืนยันข้อมูลเช็กชื่อ';
+    }}
+}}
+</script>
+
+</body>
+</html>
+    """
+
+# ==========================================
+# 🏖️ LEAVE REQUEST — นักเรียนยื่นคำร้องลา
+# ==========================================
+@app.get("/leave", response_class=HTMLResponse)
+async def leave_request_page():
+    m_cfg = get_maintenance_status()
+    if m_cfg["is_active"] == 1:
+        return HTMLResponse(generate_maintenance_html(m_cfg["mode_type"]))
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    # เลือกเฉพาะวิชาที่มีการมอบหมายนักเรียนไว้ (วิชาที่กำหนดไว้)
+    cursor.execute("""
+        SELECT DISTINCT cg.group_id, cg.group_name 
+        FROM course_groups cg
+        JOIN group_assignments ga ON cg.group_id = ga.group_id
+        ORDER BY cg.group_name
+    """)
+    groups = cursor.fetchall()
+    conn.close()
+    group_options = "".join([f"<option value='{g[0]}'>{g[1]}</option>" for g in groups])
+    return f"""
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ยื่นคำร้องลา | K-School</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Sarabun:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        * {{ margin:0; padding:0; box-sizing:border-box; }}
+        body {{ font-family:'Sarabun',sans-serif; background:#f1f5f9; color:#1e293b; min-height:100vh; }}
+        .topbar {{ background:linear-gradient(135deg,#1e3a8a,#0f172a); color:white; padding:16px 20px; border-bottom:3px solid #d4af37; display:flex; align-items:center; gap:12px; }}
+        .topbar h1 {{ font-size:17px; font-weight:700; }}
+        .container {{ max-width:520px; margin:0 auto; padding:20px 16px; }}
+        .card {{ background:white; border-radius:14px; padding:24px; box-shadow:0 2px 8px rgba(0,0,0,0.06); border:1px solid #e2e8f0; margin-bottom:20px; }}
+        .card h2 {{ font-size:15px; font-weight:700; color:#0f172a; margin-bottom:18px; padding-bottom:10px; border-bottom:2px solid #e2e8f0; display:flex; align-items:center; gap:8px; }}
+        label {{ font-size:13px; font-weight:700; color:#475569; display:block; margin-bottom:5px; }}
+        input, select, textarea {{ width:100%; padding:12px; border:1px solid #cbd5e1; border-radius:8px; font-family:'Sarabun',sans-serif; font-size:14px; color:#0f172a; background:white; margin-bottom:14px; box-sizing:border-box; }}
+        textarea {{ resize:vertical; min-height:90px; }}
+        .btn-submit {{ background:linear-gradient(135deg,#1e3a8a,#0f172a); color:white; width:100%; padding:14px; font-size:15px; font-weight:700; border:none; border-radius:10px; cursor:pointer; border-bottom:3px solid #0f172a; }}
+        .btn-submit:active {{ transform:translateY(2px); border-bottom-width:1px; }}
+        .info-box {{ background:#eff6ff; border:1px solid #bfdbfe; border-radius:10px; padding:14px; margin-bottom:18px; font-size:13px; color:#1e40af; line-height:1.6; }}
+        .success-box {{ display:none; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:12px; padding:24px; text-align:center; }}
+        .success-box .icon {{ font-size:48px; margin-bottom:10px; }}
+        .success-box h3 {{ color:#166534; font-size:18px; margin-bottom:6px; }}
+        .success-box p {{ color:#15803d; font-size:13.5px; }}
+        .pg-toast-wrap {{ position:fixed; top:0; left:0; right:0; z-index:9999; display:flex; flex-direction:column; align-items:center; padding-top:max(env(safe-area-inset-top,0px),14px); pointer-events:none; }}
+        .pg-toast {{ pointer-events:auto; display:flex; align-items:center; gap:10px; background:rgba(15,23,42,0.94); border-left:4px solid #d4af37; border-radius:12px; padding:13px 16px; max-width:90vw; width:360px; box-shadow:0 12px 30px -8px rgba(0,0,0,0.4); color:#fff; font-size:13.5px; font-weight:600; transform:translateY(-120%); transition:transform .3s cubic-bezier(.34,1.56,.64,1); margin-bottom:8px; }}
+        .pg-toast.show {{ transform:translateY(0); }}
+        .pg-toast.pg-error {{ border-left-color:#ef4444; }}
+        .pg-toast.pg-warning {{ border-left-color:#f59e0b; }}
+    </style>
+</head>
+<body>
+<div class="pg-toast-wrap" id="pgToastWrap"></div>
+<div class="topbar">
+    <a href="/login" style="color:#d4af37; font-size:20px; text-decoration:none;">←</a>
+    <h1>📋 ยื่นคำร้องขอลา</h1>
+</div>
+<div class="container">
+    <div class="info-box">
+        📌 กรอกคำร้องลาล่วงหน้า แอดมินจะตรวจสอบและอนุมัติ<br>
+        เมื่ออนุมัติแล้ว ระบบจะบันทึกสถานะ <b>"ลา"</b> ให้อัตโนมัติในวันที่ระบุ
+    </div>
+    <div class="card">
+        <h2>📝 แบบฟอร์มคำร้องลา</h2>
+        <div id="form-area">
+            <label>ชื่อ-นามสกุล</label>
+            <input type="text" id="student_name" placeholder="กรอกชื่อ-นามสกุลของคุณ" required>
+            <label>เลขที่</label>
+            <input type="text" id="student_no" placeholder="เช่น 12" required>
+            <label>ชั้น/ห้อง</label>
+            <input type="text" id="classroom" placeholder="เช่น ม.5/2" required>
+            <label>วิชา / กลุ่มเรียน</label>
+            <select id="group_id">
+                {group_options}
+            </select>
+            <label>วันที่ต้องการลา</label>
+            <input type="date" id="leave_date" required>
+            <label>ประเภทการลา</label>
+            <select id="leave_type">
+                <option value="ลาป่วย">🤒 ลาป่วย</option>
+                <option value="ลากิจ">📌 ลากิจ</option>
+                <option value="อื่นๆ">📝 อื่นๆ</option>
+            </select>
+            <label>เหตุผลการลา</label>
+            <textarea id="reason" placeholder="อธิบายเหตุผลการลาของคุณ..."></textarea>
+            <button class="btn-submit" onclick="submitLeave()">📤 ยื่นคำร้องลา</button>
+        </div>
+        <div class="success-box" id="success-box">
+            <div class="icon">✅</div>
+            <h3>ยื่นคำร้องดำเนินการเสร็จสิ้น!</h3>
+            <p>แอดมินจะตรวจสอบและอนุมัติคำร้องของคุณ<br>เมื่ออนุมัติแล้วระบบจะบันทึกสถานะ "ลา" ให้อัตโนมัติ</p>
+        </div>
+    </div>
+</div>
+<script>
+function pageToast(message, type) {{
+    type = type || 'info';
+    const icons = {{ success:'✅', error:'❌', warning:'⚠️', info:'ℹ️' }};
+    const wrap = document.getElementById('pgToastWrap');
+    const el = document.createElement('div');
+    el.className = 'pg-toast pg-' + type;
+    el.innerHTML = '<span>' + (icons[type] || 'ℹ️') + '</span><span>' + message + '</span>';
+    wrap.appendChild(el);
+    requestAnimationFrame(() => el.classList.add('show'));
+    setTimeout(() => {{ el.classList.remove('show'); setTimeout(() => el.remove(), 300); }}, 3200);
+}}
+async function submitLeave() {{
+    const name = document.getElementById('student_name').value.trim();
+    const no = document.getElementById('student_no').value.trim();
+    const cls = document.getElementById('classroom').value.trim();
+    const gid = document.getElementById('group_id').value;
+    const date = document.getElementById('leave_date').value;
+    const leaveType = document.getElementById('leave_type').value;
+    const reason = document.getElementById('reason').value.trim();
+    if (!name || !no || !cls || !date) {{ pageToast('กรุณากรอกข้อมูลให้ครบทุกช่อง', 'warning'); return; }}
+    const res = await fetch('/api/leave/submit', {{
+        method:'POST',
+        headers:{{'Content-Type':'application/json'}},
+        body: JSON.stringify({{student_name:name, student_no:no, classroom:cls, group_id:parseInt(gid), leave_date:date, leave_type:leaveType, reason:reason}})
+    }});
+    const data = await res.json();
+    if (data.ok) {{
+        document.getElementById('form-area').style.display = 'none';
+        document.getElementById('success-box').style.display = 'block';
+    }} else {{ pageToast('เกิดข้อผิดพลาด: ' + data.error, 'error'); }}
+}}
+</script>
+</body>
+</html>
+"""
+
+@app.post("/api/leave/submit")
+async def api_leave_submit(request: Request):
+    m_cfg = get_maintenance_status()
+    if m_cfg["is_active"] == 1:
+        return JSONResponse({"ok": False, "error": "ระบบปิดอยู่"})
+    data = await request.json()
+    student_name = data.get("student_name", "").strip()
+    student_no = data.get("student_no", "").strip()
+    classroom = data.get("classroom", "").strip()
+    group_id = int(data.get("group_id", 0))
+    leave_date = data.get("leave_date", "")
+    leave_type = data.get("leave_type", "อื่นๆ").strip() or "อื่นๆ"
+    if leave_type not in ("ลาป่วย", "ลากิจ", "อื่นๆ"):
+        leave_type = "อื่นๆ"
+    reason = data.get("reason", "").strip()
+    if not all([student_name, student_no, classroom, leave_date]):
+        return JSONResponse({"ok": False, "error": "ข้อมูลไม่ครบ"})
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT group_name FROM course_groups WHERE group_id=?", (group_id,))
+    g = cursor.fetchone()
+    group_name = g[0] if g else ""
+    submitted_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute("""INSERT INTO leave_requests
+        (student_name, student_no, classroom, group_id, group_name, leave_date, leave_type, reason, status, submitted_at)
+        VALUES (?,?,?,?,?,?,?,?,'pending',?)""",
+        (student_name, student_no, classroom, group_id, group_name, leave_date, leave_type, reason, submitted_at))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True})
+
+LEAVE_TYPE_BADGE = {
+    "ลาป่วย": '<span style="background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700;">🤒 ลาป่วย</span>',
+    "ลากิจ":  '<span style="background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700;">📌 ลากิจ</span>',
+    "อื่นๆ":  '<span style="background:#f8fafc;color:#475569;border:1px solid #e2e8f0;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700;">📝 อื่นๆ</span>',
+}
+
+@app.get("/admin/leave_requests", response_class=HTMLResponse)
+async def admin_leave_requests(leave_type: Optional[str] = None, user_session: Optional[str] = Cookie(None)):
+    access, redirect = require_discipline_access(user_session)
+    if redirect: return redirect
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("""SELECT req_id, student_name, student_no, classroom, group_name,
+        leave_date, reason, status, submitted_at, leave_type FROM leave_requests ORDER BY submitted_at DESC""")
+    rows = cursor.fetchall()
+    conn.close()
+    # 🎓 หัวหน้าระดับเห็นเฉพาะคำร้องของนักเรียนในระดับชั้นที่รับผิดชอบ
+    if access["role"] == "level_head":
+        rows = [r for r in rows if in_discipline_scope(access, r[3])]
+    # 🩺 ตัวกรองตามประเภทการลา
+    if leave_type in ("ลาป่วย", "ลากิจ", "อื่นๆ"):
+        rows = [r for r in rows if (r[9] or "อื่นๆ") == leave_type]
+
+    filter_tabs = ""
+    for lbl, val in [("ทั้งหมด", ""), ("🤒 ลาป่วย", "ลาป่วย"), ("📌 ลากิจ", "ลากิจ"), ("📝 อื่นๆ", "อื่นๆ")]:
+        active = "background:#1e3a8a;color:white;" if (leave_type or "") == val else "background:#f1f5f9;color:#475569;"
+        filter_tabs += f'<a href="/admin/leave_requests{"?leave_type="+val if val else ""}" style="{active}padding:6px 14px;border-radius:20px;font-size:12.5px;font-weight:700;text-decoration:none;">{lbl}</a>'
+
+    status_badge = {
+        "pending":  '<span style="background:#fef9c3;color:#854d0e;border:1px solid #fde047;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:700;">⏳ รออนุมัติ</span>',
+        "approved": '<span style="background:#f0fdf4;color:#166534;border:1px solid #86efac;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:700;">✅ อนุมัติแล้ว</span>',
+        "rejected": '<span style="background:#fff1f2;color:#9f1239;border:1px solid #fecdd3;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:700;">❌ ปฏิเสธ</span>',
+    }
+
+    table_rows = ""
+    for r in rows:
+        req_id, name, no, cls, grp, date, reason, status, submitted, ltype = r
+        badge = status_badge.get(status, status)
+        type_badge = LEAVE_TYPE_BADGE.get(ltype or "อื่นๆ", LEAVE_TYPE_BADGE["อื่นๆ"])
+        actions = ""
+        if status == "pending":
+            actions = f"""
+            <div style="display:flex;gap:6px;justify-content:center;">
+                <a href="/api/admin/leave/approve?req_id={req_id}" class="btn"
+                   style="background:#10b981;color:white;padding:5px 10px;border-radius:6px;font-size:12px;font-weight:700;"
+                   onclick="return confirm('อนุมัติคำร้องลาของ {name} วันที่ {date}?')">✅ อนุมัติ</a>
+                <a href="/api/admin/leave/reject?req_id={req_id}" class="btn"
+                   style="background:#ef4444;color:white;padding:5px 10px;border-radius:6px;font-size:12px;font-weight:700;"
+                   onclick="return confirm('ปฏิเสธคำร้องนี้?')">❌ ปฏิเสธ</a>
+            </div>"""
+        else:
+            actions = f'<span style="color:#94a3b8;font-size:12px;">ดำเนินการแล้ว</span>'
+
+        table_rows += f"""<tr>
+            <td style="text-align:left;font-weight:600;">{name}<br><span style="color:#94a3b8;font-size:12px;">เลขที่ {no} · {cls}</span></td>
+            <td>{grp}<br><span style="color:#3b82f6;font-size:12.5px;font-weight:700;">{date}</span></td>
+            <td>{type_badge}</td>
+            <td style="text-align:left;font-size:12.5px;color:#475569;max-width:140px;">{reason or '-'}</td>
+            <td>{badge}</td>
+            <td>{actions}</td>
+        </tr>"""
+
+    pending_count = sum(1 for r in rows if r[7] == "pending")
+    back_url = "/admin/dashboard" if access["role"] == "admin" else f"/app/dashboard?user={urllib.parse.quote(access['username'])}"
+    scope_note = ""
+    if access["role"] == "level_head":
+        scope_note = f'<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:10px 16px;margin-bottom:12px;font-size:12.5px;color:#1e40af;">🎓 คุณกำลังดูเฉพาะคำร้องของนักเรียนระดับชั้น <b>{access["level_scope"] or "(ยังไม่ระบุระดับ)"}</b></div>'
+    return f"""
+    <html>{STYLE_HEADER}
+    <body>
+    <div class="navbar">
+        <h1>📋 คำร้องขอลา</h1>
+        <a href="{back_url}" class="btn btn-secondary">← กลับ</a>
+    </div>
+    <div class="main-container" style="max-width:860px;">
+        {scope_note}
+        {"" if not pending_count else f'<div style="background:#fef9c3;border:1px solid #fde047;border-radius:10px;padding:12px 16px;margin-bottom:16px;font-weight:700;color:#854d0e;font-size:14px;">⏳ มีคำร้องรออนุมัติ {pending_count} รายการ</div>'}
+        <div class="card">
+            <h2>📋 รายการคำร้องลาทั้งหมด</h2>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">{filter_tabs}</div>
+            <div style="overflow-x:auto;border-radius:8px;border:1px solid #e2e8f0;">
+                <table>
+                    <thead><tr>
+                        <th style="text-align:left;">นักเรียน</th>
+                        <th>วิชา / วันที่ลา</th>
+                        <th>ประเภท</th>
+                        <th>เหตุผล</th>
+                        <th>สถานะ</th>
+                        <th>การดำเนินการ</th>
+                    </tr></thead>
+                    <tbody>{table_rows if table_rows else "<tr><td colspan='6' style='color:#94a3b8;'>ยังไม่มีคำร้อง</td></tr>"}</tbody>
+                </table>
+            </div>
+        </div>
+        <div style="text-align:center;color:#94a3b8;font-size:12px;margin-top:12px;">KK STUDIO GROUP · K-School Leave System</div>
+    </div>
+    </body></html>
+    """
+
+@app.get("/api/admin/leave/approve")
+async def api_leave_approve(req_id: int, user_session: Optional[str] = Cookie(None)):
+    access, redirect = require_discipline_access(user_session)
+    if redirect: return HTMLResponse("Unauthorized", status_code=401)
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT student_name, student_no, classroom, group_name, leave_date, reason, leave_type FROM leave_requests WHERE req_id=?", (req_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return alert_redirect("ไม่พบคำร้องนี้ในระบบ", type="error")
+    name, no, cls, grp, date, reason, ltype = row
+    ltype = ltype or "อื่นๆ"
+    if not in_discipline_scope(access, cls):
+        conn.close()
+        return alert_redirect("คุณไม่มีสิทธิ์อนุมัติคำร้องของนักเรียนนอกระดับชั้นที่รับผิดชอบ", type="error", url="/admin/leave_requests")
+    reviewed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute("UPDATE leave_requests SET status='approved', reviewed_at=? WHERE req_id=?", (reviewed_at, req_id))
+    
+    # แปลงวันที่จาก YYYY-MM-DD เป็น DD/MM/YYYY สำหรับตาราง logs
+    try:
+        date_obj = datetime.strptime(date, "%Y-%m-%d")
+        formatted_date = date_obj.strftime("%d/%m/%Y")
+    except: formatted_date = date
+
+    # ตรวจว่ายังไม่มีบันทึกวันนี้ก่อนแล้วค่อยเพิ่ม
+    cursor.execute("""SELECT log_id FROM attendance_logs
+        WHERE student_name=? AND group_name=? AND date=?""", (name, grp, formatted_date))
+    existing = cursor.fetchone()
+    
+    checker_tag = f"ระบบ ({ltype}: {reason})" if reason else f"ระบบ (อนุมัติใบลา - {ltype})"
+    
+    if not existing:
+        cursor.execute("""INSERT INTO attendance_logs
+            (group_name, student_name, student_no, classroom, status, date, checked_by, log_time)
+            VALUES (?,?,?,?,?,?,?,?)""",
+            (grp, name, no, cls, "ลา", formatted_date, checker_tag, datetime.now().strftime("%H:%M:%S")))
+    else:
+        cursor.execute("""UPDATE attendance_logs SET status='ลา', checked_by=?
+            WHERE log_id=?""", (checker_tag, existing[0]))
+    conn.commit()
+    conn.close()
+
+    # 🔴 แจ้งเตือนแบบเรียลไทม์ให้นักเรียนคนที่ยื่นคำร้องทราบทันทีว่าใบลาได้รับอนุมัติแล้ว
+    leave_uid = find_student_uid(name, no, cls)
+    if leave_uid:
+        await push_student_notify(
+            title="✅ ใบลาของคุณได้รับการอนุมัติแล้ว",
+            message=f"{grp} · วันที่ {formatted_date} ({ltype}: {reason})" if reason else f"{grp} · วันที่ {formatted_date}",
+            tone="success",
+            target_uids=[leave_uid],
+        )
+
+    return alert_redirect('อนุมัติคำร้องเรียบร้อยแล้ว ระบบบันทึกสถานะ "ลา" ให้แล้ว', type="success", url="/admin/leave_requests")
+
+@app.get("/api/admin/leave/reject")
+async def api_leave_reject(req_id: int, user_session: Optional[str] = Cookie(None)):
+    access, redirect = require_discipline_access(user_session)
+    if redirect: return HTMLResponse("Unauthorized", status_code=401)
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT student_name, student_no, classroom, group_name FROM leave_requests WHERE req_id=?", (req_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return alert_redirect("ไม่พบคำร้องนี้ในระบบ", type="error")
+    name, no, cls, grp = row
+    if not in_discipline_scope(access, cls):
+        conn.close()
+        return alert_redirect("คุณไม่มีสิทธิ์ดำเนินการคำร้องของนักเรียนนอกระดับชั้นที่รับผิดชอบ", type="error", url="/admin/leave_requests")
+    reviewed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute("UPDATE leave_requests SET status='rejected', reviewed_at=? WHERE req_id=?", (reviewed_at, req_id))
+    conn.commit()
+    conn.close()
+
+    # 🔴 แจ้งเตือนแบบเรียลไทม์ให้นักเรียนทราบทันทีว่าใบลาไม่ได้รับอนุมัติ
+    leave_uid = find_student_uid(name, no, cls)
+    if leave_uid:
+        await push_student_notify(
+            title="❌ ใบลาของคุณไม่ได้รับการอนุมัติ",
+            message=f"{grp} — กรุณาติดต่อครูผู้สอนหรือฝ่ายกิจการนักเรียนเพื่อสอบถามรายละเอียด",
+            tone="danger",
+            target_uids=[leave_uid],
+        )
+
+    return alert_redirect("ปฏิเสธคำร้องเรียบร้อยแล้ว", type="success", url="/admin/leave_requests")
+
+# ==========================================
+# 🔐 ADMIN — จัดการสิทธิ์ผู้ใช้แบบ Role-based (ปรับได้จากหน้าเว็บ ไม่ต้องแก้โค้ด)
+# ==========================================
+ROLE_LABEL_TH = {"teacher": "👩‍🏫 ครูผู้สอน", "level_head": "🎓 หัวหน้าระดับ", "affairs": "🛡️ ฝ่ายกิจการนักเรียน"}
+
+@app.get("/admin/permissions", response_class=HTMLResponse)
+async def admin_permissions_page(user_session: Optional[str] = Cookie(None)):
+    if user_session != "admin":
+        return RedirectResponse(url="/login", status_code=303)
+    matrix = get_permission_matrix()
+
+    rows_html = ""
+    for perm_key, meta in PERMISSIONS.items():
+        cells = ""
+        for role in CONFIGURABLE_ROLES:
+            checked = "checked" if matrix[role][perm_key] else ""
+            cells += f'<td style="text-align:center;"><input type="checkbox" name="{role}__{perm_key}" {checked} style="width:20px;height:20px;cursor:pointer;"></td>'
+        rows_html += f'<tr><td style="text-align:left;font-weight:600;font-size:13px;">{meta["label"]}</td>{cells}</tr>'
+
+    role_headers = "".join([f'<th>{ROLE_LABEL_TH[r]}</th>' for r in CONFIGURABLE_ROLES])
+
+    return f"""
+    <html>{STYLE_HEADER}
+    <body>
+    <div class="navbar">
+        <h1>🔐 จัดการสิทธิ์ผู้ใช้ (Role-based)</h1>
+        <a href="/admin/dashboard" class="btn btn-secondary">← กลับ</a>
+    </div>
+    <div class="main-container" style="max-width:820px;">
+        <div class="card">
+            <h2>🧩 ตารางสิทธิ์การเข้าถึง</h2>
+            <p style="font-size:12.5px;color:#64748b;margin-bottom:16px;line-height:1.6;">
+                ✅ ติ๊กเพื่อ "เปิด" สิทธิ์ให้บทบาทนั้นเข้าถึงเมนู/ฟีเจอร์ที่ระบุ · 👑 ผู้ดูแลระบบ (Admin) มีสิทธิ์ทุกอย่างเสมอ ไม่ต้องตั้งค่า
+            </p>
+            <form method="post" action="/api/admin/permissions/update">
+                <div style="overflow-x:auto;border-radius:8px;border:1px solid #e2e8f0;">
+                    <table>
+                        <thead><tr><th style="text-align:left;">สิทธิ์การใช้งาน</th>{role_headers}</tr></thead>
+                        <tbody>{rows_html}</tbody>
+                    </table>
+                </div>
+                <button type="submit" class="btn-submit" style="margin-top:18px;">💾 บันทึกการตั้งค่าสิทธิ์</button>
+            </form>
+        </div>
+        <div style="text-align:center;color:#94a3b8;font-size:12px;margin-top:12px;">KK STUDIO GROUP · K-School RBAC</div>
+    </div>
+    </body></html>
+    """
+
+@app.post("/api/admin/permissions/update")
+async def api_update_permissions(request: Request, user_session: Optional[str] = Cookie(None)):
+    if user_session != "admin":
+        return HTMLResponse("Unauthorized", status_code=401)
+    form = await request.form()
+    checked_keys = set(form.keys())
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    for role in CONFIGURABLE_ROLES:
+        for perm_key in PERMISSIONS:
+            allowed = 1 if f"{role}__{perm_key}" in checked_keys else 0
+            cursor.execute(
+                "INSERT INTO role_permissions (role, perm_key, allowed) VALUES (?,?,?) "
+                "ON CONFLICT(role, perm_key) DO UPDATE SET allowed=excluded.allowed",
+                (role, perm_key, allowed)
+            )
+    conn.commit()
+    conn.close()
+    add_log("แอดมินปรับปรุงตารางสิทธิ์ผู้ใช้ (Role-based Permissions)")
+    return alert_redirect("บันทึกการตั้งค่าสิทธิ์เรียบร้อยแล้ว", type="success", url="/admin/permissions")
+
+
+def require_analytics_access(user_session: Optional[str]):
+    """ใช้ต้นทางฟังก์ชัน route: คืน (access, redirect_or_None) — ใช้เช็คสิทธิ์เข้าหน้าแดชบอร์ดสถิติ"""
+    access = get_access(user_session)
+    if not access["authenticated"] or not can_view_analytics(access):
+        return access, RedirectResponse(url="/login", status_code=303)
+    return access, None
+
+
+def _analytics_classroom_ok(access: dict, classroom: str) -> bool:
+    """กรองข้อมูลตามขอบเขตระดับชั้นของหัวหน้าระดับ (level_head เห็นเฉพาะระดับตน)"""
+    if access.get("role") == "level_head" and access.get("level_scope"):
+        return get_grade_level(classroom or "") == access["level_scope"]
+    return True
+
+
+# ==========================================
+# 📈 ADVANCED ANALYTICS DASHBOARD — สถิติ/กราฟภาพรวมระบบ
+# ==========================================
+@app.get("/admin/analytics", response_class=HTMLResponse)
+async def admin_analytics_page(user_session: Optional[str] = Cookie(None)):
+    access, redirect = require_analytics_access(user_session)
+    if redirect: return redirect
+    back_url = "/admin/dashboard" if access["role"] == "admin" else f"/app/dashboard?user={urllib.parse.quote(access['username'])}"
+    scope_note = ""
+    if access["role"] == "level_head":
+        scope_note = f'<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:10px 16px;margin-bottom:16px;font-size:12.5px;color:#1e40af;">🎓 สถิติที่แสดงเฉพาะระดับชั้น <b>{access["level_scope"] or "(ยังไม่ระบุระดับ)"}</b></div>'
+
+    # 🧮 คำนวณ KPI ภาพรวม
+    summary = get_conduct_summary()
+    if access.get("role") == "level_head" and access.get("level_scope"):
+        summary = [s for s in summary if get_grade_level(s.get("class", "")) == access["level_scope"]]
+    total_students = len(summary)
+    avg_score = round(sum(s["score"] for s in summary) / total_students, 1) if total_students else 0
+    at_risk = [s for s in summary if s["score"] < 70]
+    top5 = sorted(summary, key=lambda s: s["score"], reverse=True)[:5]
+    bottom5 = sorted(summary, key=lambda s: s["score"])[:5]
+
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    today_val = datetime.now().strftime("%d/%m/%Y")
+    cursor.execute("SELECT status, classroom FROM attendance_logs WHERE date=?", (today_val,))
+    today_logs = [r for r in cursor.fetchall() if _analytics_classroom_ok(access, r[1])]
+    present_today = sum(1 for s, _ in today_logs if s in ("มา", "สาย"))
+    total_today = len(today_logs)
+    attendance_rate_today = round(present_today / total_today * 100, 1) if total_today else None
+    cursor.execute("SELECT COUNT(*) FROM leave_requests WHERE status='pending'")
+    pending_leave = cursor.fetchone()[0]
+    conn.close()
+
+    def leaderboard_row(s, rank, is_top):
+        medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(rank, f"#{rank}")
+        color = "#15803d" if is_top else "#b91c1c"
+        return f"""<div style="display:flex;align-items:center;gap:10px;padding:9px 4px;border-bottom:1px solid var(--border);">
+            <span style="font-weight:800;width:26px;text-align:center;">{medal}</span>
+            <div style="flex:1;min-width:0;">
+                <div style="font-size:13px;font-weight:700;color:#1e293b;">{s['name']}</div>
+                <div style="font-size:11px;color:#94a3b8;">{s['class']} · เลขที่ {s['no']}</div>
+            </div>
+            <div style="font-weight:800;color:{color};font-size:15px;">{s['score']}</div>
+        </div>"""
+
+    top5_html = "".join(leaderboard_row(s, i + 1, True) for i, s in enumerate(top5)) or "<p style='color:#94a3b8;text-align:center;padding:16px;font-size:12.5px;'>ยังไม่มีข้อมูล</p>"
+    bottom5_html = "".join(leaderboard_row(s, i + 1, False) for i, s in enumerate(bottom5)) or "<p style='color:#94a3b8;text-align:center;padding:16px;font-size:12.5px;'>ยังไม่มีข้อมูล</p>"
+
+    # 🗺️ แผนที่ uid -> ชื่อ/ห้อง ฝังไว้ให้ฝั่ง client ใช้แปะชื่อในฟีดสด (ไม่ต้องยิง API ซ้ำ)
+    import json as _json
+    uid_map = {s["uid"]: f"{s['name']} ({s['class']})" for s in get_sorted_master_students()}
+    uid_map_json = _json.dumps(uid_map, ensure_ascii=False)
+
+    return f"""
+    <html>{STYLE_HEADER}
+    <body>
+    <div class="navbar">
+        <h1>📈 แดชบอร์ดสถิติขั้นสูง</h1>
+        <a href="{back_url}" class="btn btn-secondary">← กลับ</a>
+    </div>
+    <div class="main-container" style="max-width:920px;">
+        {scope_note}
+
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap:10px; margin-bottom:18px;">
+            <div class="card" style="text-align:center; padding:14px 8px;">
+                <div style="font-size:22px;">🧑‍🎓</div>
+                <div style="font-size:20px;font-weight:800;color:#1e293b;">{total_students}</div>
+                <div style="font-size:11px;color:#64748b;">นักเรียนทั้งหมด</div>
+            </div>
+            <div class="card" style="text-align:center; padding:14px 8px;">
+                <div style="font-size:22px;">🎖️</div>
+                <div style="font-size:20px;font-weight:800;color:#1d4ed8;">{avg_score}</div>
+                <div style="font-size:11px;color:#64748b;">คะแนนประพฤติเฉลี่ย</div>
+            </div>
+            <div class="card" style="text-align:center; padding:14px 8px;">
+                <div style="font-size:22px;">🚨</div>
+                <div style="font-size:20px;font-weight:800;color:#dc2626;">{len(at_risk)}</div>
+                <div style="font-size:11px;color:#64748b;">นักเรียนที่ควรเฝ้าระวัง</div>
+            </div>
+            <div class="card" style="text-align:center; padding:14px 8px;">
+                <div style="font-size:22px;">📅</div>
+                <div style="font-size:20px;font-weight:800;color:#16a34a;">{f"{attendance_rate_today}%" if attendance_rate_today is not None else "-"}</div>
+                <div style="font-size:11px;color:#64748b;">อัตรามาเรียนวันนี้</div>
+            </div>
+            <div class="card" style="text-align:center; padding:14px 8px;">
+                <div style="font-size:22px;">📋</div>
+                <div style="font-size:20px;font-weight:800;color:#a16207;">{pending_leave}</div>
+                <div style="font-size:11px;color:#64748b;">คำร้องลารอตรวจสอบ</div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>🔴 เหตุการณ์สดทั่วโรงเรียน <span id="live-dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#22c55e;margin-left:6px;"></span></h2>
+            <div id="live-feed" style="max-height:260px; overflow-y:auto; display:flex; flex-direction:column-reverse; gap:8px;">
+                <p style="color:#94a3b8;text-align:center;padding:20px 0;font-size:12.5px;">🔌 กำลังรอเหตุการณ์... (ลองหักคะแนน/มอบหมายการบ้าน/อนุมัติใบลา จากอีกแท็บดูได้เลย)</p>
+            </div>
+        </div>
+
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
+            <div class="card" style="padding:14px;">
+                <h2 style="font-size:14px;">🏆 ท็อป 5 คะแนนดีเด่น</h2>
+                {top5_html}
+            </div>
+            <div class="card" style="padding:14px;">
+                <h2 style="font-size:14px;">⚠️ ท็อป 5 ที่ควรเฝ้าระวัง</h2>
+                {bottom5_html}
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>📊 แนวโน้มการเช็กชื่อ (14 วันล่าสุด)</h2>
+            <canvas id="trendChart" height="110"></canvas>
+        </div>
+        <div class="card">
+            <h2>🩺 สัดส่วนประเภทการลา</h2>
+            <canvas id="leaveChart" height="140"></canvas>
+        </div>
+        <div class="card">
+            <h2>🚨 นักเรียนขาดเรียนบ่อยที่สุด (Top 10)</h2>
+            <canvas id="absentChart" height="140"></canvas>
+        </div>
+        <div class="card">
+            <h2>🎖️ การกระจายคะแนนความประพฤติ</h2>
+            <canvas id="conductChart" height="140"></canvas>
+        </div>
+        <div style="text-align:center;color:#94a3b8;font-size:12px;margin:12px 0 20px;">KK STUDIO GROUP · K-School Analytics</div>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+    <script>
+        const palette = {{ มา:'#10b981', สาย:'#f59e0b', ลา:'#3b82f6', ขาด:'#ef4444' }};
+
+        async function loadTrend() {{
+            const res = await fetch('/api/analytics/attendance_trend');
+            const d = await res.json();
+            new Chart(document.getElementById('trendChart'), {{
+                type: 'line',
+                data: {{
+                    labels: d.labels,
+                    datasets: Object.keys(d.series).map(k => ({{
+                        label: k, data: d.series[k], borderColor: palette[k] || '#64748b',
+                        backgroundColor: (palette[k] || '#64748b') + '22', tension: 0.35, fill: true
+                    }}))
+                }},
+                options: {{ responsive:true, plugins:{{legend:{{position:'bottom'}}}}, scales:{{y:{{beginAtZero:true}}}} }}
+            }});
+        }}
+
+        async function loadLeaveBreakdown() {{
+            const res = await fetch('/api/analytics/leave_breakdown');
+            const d = await res.json();
+            new Chart(document.getElementById('leaveChart'), {{
+                type: 'doughnut',
+                data: {{ labels: d.labels, datasets: [{{ data: d.values, backgroundColor: ['#ef4444','#3b82f6','#94a3b8'] }}] }},
+                options: {{ responsive:true, plugins:{{legend:{{position:'bottom'}}}} }}
+            }});
+        }}
+
+        async function loadTopAbsent() {{
+            const res = await fetch('/api/analytics/top_absent');
+            const d = await res.json();
+            new Chart(document.getElementById('absentChart'), {{
+                type: 'bar',
+                data: {{ labels: d.labels, datasets: [{{ label:'จำนวนครั้งที่ขาด', data: d.values, backgroundColor:'#ef4444' }}] }},
+                options: {{ responsive:true, indexAxis:'y', plugins:{{legend:{{display:false}}}}, scales:{{x:{{beginAtZero:true, ticks:{{stepSize:1}}}}}} }}
+            }});
+        }}
+
+        async function loadConduct() {{
+            const res = await fetch('/api/analytics/conduct_distribution');
+            const d = await res.json();
+            new Chart(document.getElementById('conductChart'), {{
+                type: 'bar',
+                data: {{ labels: d.labels, datasets: [{{ label:'จำนวนนักเรียน', data: d.values, backgroundColor:['#10b981','#3b82f6','#f59e0b','#ef4444'] }}] }},
+                options: {{ responsive:true, plugins:{{legend:{{display:false}}}}, scales:{{y:{{beginAtZero:true, ticks:{{stepSize:1}}}}}} }}
+            }});
+        }}
+
+        loadTrend(); loadLeaveBreakdown(); loadTopAbsent(); loadConduct();
+
+        // 🔴 ฟีดเหตุการณ์สดทั่วโรงเรียน — แอดมินเห็นทุกอีเวนต์ไม่ว่าจะส่งหาใคร (ต่างจากฝั่งนักเรียนที่กรองเฉพาะของตัวเอง)
+        const UID_MAP = {uid_map_json};
+        function connectLiveFeed() {{
+            const protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+            let ws;
+            try {{ ws = new WebSocket(protocol + window.location.host + '/ws/notify'); }} catch(e) {{ return; }}
+            const feed = document.getElementById('live-feed');
+            const dot = document.getElementById('live-dot');
+            ws.onopen = function() {{ dot.style.background = '#22c55e'; }};
+            ws.onclose = function() {{ dot.style.background = '#94a3b8'; setTimeout(connectLiveFeed, 3000); }};
+            ws.onmessage = function(event) {{
+                let data;
+                try {{ data = JSON.parse(event.data); }} catch(e) {{ return; }}
+                if (data.type !== 'student_notify') return;
+                if (feed.children.length === 1 && feed.children[0].tagName === 'P') {{ feed.innerHTML = ''; }}
+                const who = (Array.isArray(data.target_uids) && data.target_uids.length === 1) ? (UID_MAP[data.target_uids[0]] || '') :
+                            (data.target_uid ? (UID_MAP[data.target_uid] || '') :
+                            (data.broadcast_all ? 'นักเรียนทุกคน' : (Array.isArray(data.target_uids) ? `${{data.target_uids.length}} คน` : '')));
+                const now = new Date();
+                const timeStr = now.toLocaleTimeString('th-TH', {{hour:'2-digit', minute:'2-digit', second:'2-digit'}});
+                const toneColors = {{ success:'#15803d', danger:'#b91c1c', info:'#1d4ed8' }};
+                const c = toneColors[data.tone] || '#1d4ed8';
+                const row = document.createElement('div');
+                row.style.cssText = 'padding:8px 10px; border-left:3px solid ' + c + '; background:#f8fafc; border-radius:6px; animation: fadeIn .4s ease;';
+                row.innerHTML = `<div style="font-size:12.5px;font-weight:700;color:${{c}};">${{data.title}}</div>
+                    <div style="font-size:11.5px;color:#475569;margin-top:2px;">${{data.message}}${{who ? ' · ' + who : ''}}</div>
+                    <div style="font-size:10px;color:#94a3b8;margin-top:2px;">🕐 ${{timeStr}}</div>`;
+                feed.insertBefore(row, feed.firstChild);
+                while (feed.children.length > 30) {{ feed.removeChild(feed.lastChild); }}
+            }};
+        }}
+        connectLiveFeed();
+    </script>
+    <style>@keyframes fadeIn {{ from {{ opacity:0; transform:translateY(-6px); }} to {{ opacity:1; transform:translateY(0); }} }}</style>
+    </body></html>
+    """
+
+
+@app.get("/api/analytics/attendance_trend")
+async def api_analytics_attendance_trend(days: int = 14, user_session: Optional[str] = Cookie(None)):
+    access, redirect = require_analytics_access(user_session)
+    if redirect: return JSONResponse({"labels": [], "series": {}}, status_code=401)
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT classroom, status, date FROM attendance_logs")
+    logs = cursor.fetchall()
+    conn.close()
+
+    today = datetime.now().date()
+    date_labels = []
+    for i in range(days - 1, -1, -1):
+        d = today - timedelta(days=i)
+        date_labels.append(d.strftime("%d/%m"))
+    counts = {k: {lbl: 0 for lbl in date_labels} for k in ("มา", "สาย", "ลา", "ขาด")}
+
+    for classroom, status, date_str in logs:
+        if not _analytics_classroom_ok(access, classroom):
+            continue
+        if status not in counts:
+            continue
+        try:
+            d_obj = datetime.strptime(date_str, "%d/%m/%Y").date()
+        except Exception:
+            continue
+        delta_days = (today - d_obj).days
+        if 0 <= delta_days < days:
+            lbl = d_obj.strftime("%d/%m")
+            if lbl in counts[status]:
+                counts[status][lbl] += 1
+
+    series = {status: [counts[status][lbl] for lbl in date_labels] for status in counts}
+    return JSONResponse({"labels": date_labels, "series": series})
+
+
+@app.get("/api/analytics/leave_breakdown")
+async def api_analytics_leave_breakdown(user_session: Optional[str] = Cookie(None)):
+    access, redirect = require_analytics_access(user_session)
+    if redirect: return JSONResponse({"labels": [], "values": []}, status_code=401)
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT classroom, leave_type FROM leave_requests")
+    rows = cursor.fetchall()
+    conn.close()
+    tally = {"ลาป่วย": 0, "ลากิจ": 0, "อื่นๆ": 0}
+    for classroom, ltype in rows:
+        if not _analytics_classroom_ok(access, classroom):
+            continue
+        tally[ltype if ltype in tally else "อื่นๆ"] += 1
+    return JSONResponse({"labels": list(tally.keys()), "values": list(tally.values())})
+
+
+@app.get("/api/analytics/top_absent")
+async def api_analytics_top_absent(limit: int = 10, user_session: Optional[str] = Cookie(None)):
+    access, redirect = require_analytics_access(user_session)
+    if redirect: return JSONResponse({"labels": [], "values": []}, status_code=401)
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT student_name, classroom, status FROM attendance_logs WHERE status='ขาด'")
+    rows = cursor.fetchall()
+    conn.close()
+    tally = {}
+    for name, classroom, status in rows:
+        if not _analytics_classroom_ok(access, classroom):
+            continue
+        tally[name] = tally.get(name, 0) + 1
+    top = sorted(tally.items(), key=lambda x: x[1], reverse=True)[:limit]
+    return JSONResponse({"labels": [t[0] for t in top], "values": [t[1] for t in top]})
+
+
+@app.get("/api/analytics/conduct_distribution")
+async def api_analytics_conduct_distribution(user_session: Optional[str] = Cookie(None)):
+    access, redirect = require_analytics_access(user_session)
+    if redirect: return JSONResponse({"labels": [], "values": []}, status_code=401)
+    summary = get_conduct_summary()
+    if access.get("role") == "level_head" and access.get("level_scope"):
+        summary = [s for s in summary if get_grade_level(s.get("class", "")) == access["level_scope"]]
+    buckets = {"90-100": 0, "70-89": 0, "50-69": 0, "ต่ำกว่า 50": 0}
+    for s in summary:
+        score = s["score"]
+        if score >= 90: buckets["90-100"] += 1
+        elif score >= 70: buckets["70-89"] += 1
+        elif score >= 50: buckets["50-69"] += 1
+        else: buckets["ต่ำกว่า 50"] += 1
+    return JSONResponse({"labels": list(buckets.keys()), "values": list(buckets.values())})
+
+
+
+# ==========================================
+# 📊 RISK TAGGING — วิเคราะห์กลุ่มเสี่ยง
+# ==========================================
+def get_student_risk_tags(student_name: str, group_name: str = None) -> list:
+    """คำนวณ tag กลุ่มเสี่ยงจากประวัติการเข้าเรียน"""
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    if group_name:
+        cursor.execute("""SELECT status FROM attendance_logs
+            WHERE student_name=? AND group_name=?""", (student_name, group_name))
+    else:
+        cursor.execute("SELECT status FROM attendance_logs WHERE student_name=?", (student_name,))
+    records = [r[0] for r in cursor.fetchall()]
+    conn.close()
+    if not records:
+        return []
+    total = len(records)
+    absent = records.count("ขาด")
+    late = records.count("สาย")
+    leave = records.count("ลา")
+    absent_rate = absent / total
+    late_rate = late / total
+    tags = []
+    if absent >= 3 or absent_rate >= 0.3:
+        tags.append(("🔴 ขาดบ่อย", "#fef2f2", "#dc2626", "#fecaca"))
+    if leave >= 3 or (leave + absent) / total >= 0.4:
+        tags.append(("🟠 ลาบ่อย", "#fff7ed", "#ea580c", "#fed7aa"))
+    if late >= 4 or late_rate >= 0.35:
+        tags.append(("🟡 สายบ่อย", "#fefce8", "#ca8a04", "#fef08a"))
+    if absent == 0 and late == 0 and total >= 3:
+        tags.append(("🟢 เข้าเรียนดี", "#f0fdf4", "#16a34a", "#bbf7d0"))
+    
+    # เพิ่มแท็กสถานะการลาล่าสุด
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT reason FROM leave_requests WHERE student_name=? AND status='approved' ORDER BY leave_date DESC LIMIT 1", (student_name,))
+    last_leave = cursor.fetchone()
+    conn.close()
+    if last_leave:
+        tags.append((f"📋 ลา: {last_leave[0]}", "#eff6ff", "#1e40af", "#bfdbfe"))
+
+    return tags
+
+def _compute_risk_tags_from_records(records: list, last_leave_reason: Optional[str]) -> list:
+    """คำนวณ tag จาก records ที่ดึงมาแล้ว (ไม่ query DB ซ้ำ) — ใช้ร่วมกับ get_all_students_risk_tags"""
+    tags = []
+    if records:
+        total = len(records)
+        absent = records.count("ขาด")
+        late = records.count("สาย")
+        leave = records.count("ลา")
+        absent_rate = absent / total
+        late_rate = late / total
+        if absent >= 3 or absent_rate >= 0.3:
+            tags.append(("🔴 ขาดบ่อย", "#fef2f2", "#dc2626", "#fecaca"))
+        if leave >= 3 or (leave + absent) / total >= 0.4:
+            tags.append(("🟠 ลาบ่อย", "#fff7ed", "#ea580c", "#fed7aa"))
+        if late >= 4 or late_rate >= 0.35:
+            tags.append(("🟡 สายบ่อย", "#fefce8", "#ca8a04", "#fef08a"))
+        if absent == 0 and late == 0 and total >= 3:
+            tags.append(("🟢 เข้าเรียนดี", "#f0fdf4", "#16a34a", "#bbf7d0"))
+    if last_leave_reason:
+        tags.append((f"📋 ลา: {last_leave_reason}", "#eff6ff", "#1e40af", "#bfdbfe"))
+    return tags
+
+def get_all_students_risk_tags(group_name: str = None) -> dict:
+    """
+    ⚡ เวอร์ชันเร็ว: ดึงข้อมูล attendance_logs และ leave_requests 'ครั้งเดียว' สำหรับนักเรียนทุกคน
+    แทนที่จะเปิด DB connection แยกทีละคน (ของเดิมทำให้หน้า dashboard หน่วงมากเมื่อนักเรียนเยอะ)
+    คืนค่าเป็น dict: { student_name: [tags...] }
+    """
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+
+    if group_name:
+        cursor.execute("SELECT student_name, status FROM attendance_logs WHERE group_name=?", (group_name,))
+    else:
+        cursor.execute("SELECT student_name, status FROM attendance_logs")
+    records_by_student = {}
+    for sname, status in cursor.fetchall():
+        records_by_student.setdefault(sname, []).append(status)
+
+    # ดึง "การลาที่อนุมัติล่าสุด" ของทุกคนในรอบเดียว โดยเรียงตามวันที่ล่าสุดก่อน
+    cursor.execute("SELECT student_name, reason FROM leave_requests WHERE status='approved' ORDER BY leave_date DESC")
+    last_leave_by_student = {}
+    for sname, reason in cursor.fetchall():
+        if sname not in last_leave_by_student:
+            last_leave_by_student[sname] = reason
+
+    conn.close()
+
+    all_names = set(records_by_student.keys()) | set(last_leave_by_student.keys())
+    result = {}
+    for name in all_names:
+        result[name] = _compute_risk_tags_from_records(
+            records_by_student.get(name, []),
+            last_leave_by_student.get(name)
+        )
+    return result
+
+# ==========================================
+# 📤 EXPORT EXCEL — ดาวน์โหลดรายงาน
+# ==========================================
+@app.get("/api/admin/export_excel")
+async def export_excel(user_session: Optional[str] = Cookie(None), group_name: str = ""):
+    if user_session != "admin":
+        return HTMLResponse("Unauthorized", status_code=401)
+    
+    try:
+        import io
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+        from openpyxl.utils import get_column_letter
+
+        conn = sqlite3.connect('attendance_pro.db')
+        cursor = conn.cursor()
+
+        if group_name:
+            cursor.execute("SELECT DISTINCT group_name FROM attendance_logs WHERE group_name=?", (group_name,))
+        else:
+            cursor.execute("SELECT DISTINCT group_name FROM attendance_logs ORDER BY group_name")
+        groups = [r[0] for r in cursor.fetchall()]
+
+        if not groups:
+            conn.close()
+            return alert_redirect("ยังไม่มีข้อมูลประวัติการเช็กชื่อในระบบ", type="warning")
+
+        wb = Workbook()
+        # ตรวจสอบว่ามี Sheet อยู่หรือไม่ก่อนลบ
+        if len(wb.sheetnames) > 0:
+            default_sheet = wb.active
+            # เราจะใช้ Sheet แรกที่มีอยู่แล้วแทนการลบและสร้างใหม่เพื่อความชัวร์
+            first_grp = groups[0]
+            safe_title = "".join([c for c in first_grp if c.isalnum() or c in ' '])[:31].strip() or "Report"
+            ws = wb.active
+            ws.title = safe_title
+        else:
+            ws = wb.create_sheet("Report")
+
+        for idx, grp in enumerate(groups):
+            if idx == 0:
+                ws = wb.active
+            else:
+                safe_title = "".join([c for c in grp if c.isalnum() or c in ' '])[:31].strip() or f"Report {idx+1}"
+                # ป้องกันชื่อ Sheet ซ้ำ
+                if safe_title in wb.sheetnames: safe_title = f"{safe_title}_{idx}"
+                ws = wb.create_sheet(title=safe_title)
+
+            # สไตล์สำหรับหัวตาราง
+            header_fill = PatternFill(start_color="1E3A8A", end_color="1E3A8A", fill_type="solid")
+            header_font = Font(color="FFFFFF", bold=True)
+            center_align = Alignment(horizontal="center", vertical="center")
+            border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+
+            # ส่วนหัวรายงาน
+            ws.merge_cells('A1:E1')
+            ws['A1'] = f"K-School · รายงานเช็กชื่อคลาสวิชา: {grp}"
+            ws['A1'].font = Font(size=14, bold=True, color="1E3A8A")
+            
+            ws['A2'] = f"ออกรายงานเมื่อ: {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+            ws['A2'].font = Font(italic=True, color="64748B")
+
+            # ดึงข้อมูลวันที่และนักเรียน
+            cursor.execute("SELECT DISTINCT date FROM attendance_logs WHERE group_name=? ORDER BY date ASC", (grp,))
+            dates = [r[0] for r in cursor.fetchall()]
+            
+            # แก้ไข: ดึงรายชื่อนักเรียนแบบไม่ซ้ำโดยใช้กลุ่มของ ชื่อ, เลขที่, และห้อง
+            cursor.execute("""SELECT student_name, student_no, classroom FROM attendance_logs 
+                              WHERE group_name=? 
+                              GROUP BY student_name, student_no, classroom
+                              ORDER BY CAST(student_no AS INTEGER)""", (grp,))
+            students = cursor.fetchall()
+
+            # Header Row
+            headers = ["เลขที่", "ชื่อ-นามสกุล", "ชั้น/ห้อง"] + dates + ["มา", "สาย", "ลา", "ขาด", "รวม", "กลุ่มเสี่ยง"]
+            ws.append([]) # เว้นบรรทัด
+            ws.append(headers)
+            
+            header_row_idx = 4
+            for col_idx, val in enumerate(headers, 1):
+                cell = ws.cell(row=header_row_idx, column=col_idx)
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = center_align
+                cell.border = border
+
+            # แก้ไข: ดึงข้อมูลการเช็กชื่อมาเก็บไว้ใน Map โดยใช้ (ชื่อ, เลขที่, ห้อง, วันที่) เพื่อป้องกันชื่อซ้ำแต่คนละคน
+            cursor.execute("SELECT student_name, student_no, classroom, date, status FROM attendance_logs WHERE group_name=?", (grp,))
+            log_map = {(r[0], r[1], r[2], r[3]): r[4] for r in cursor.fetchall()}
+
+            # ⚡ ดึง risk tags ของนักเรียนทั้งกลุ่มครั้งเดียว แทนการ query แยกทีละคน
+            group_risk_tags = get_all_students_risk_tags(grp)
+
+            # ใส่ข้อมูลนักเรียน
+            for sname, sno, scls in students:
+                row_data = [sno, sname, scls]
+                cnt = {"มา": 0, "สาย": 0, "ลา": 0, "ขาด": 0}
+                for d in dates:
+                    # แก้ไข: ใช้คีย์ที่ระบุตัวตนนักเรียนได้ชัดเจนขึ้น
+                    st = log_map.get((sname, sno, scls, d), "-")
+                    row_data.append(st)
+                    if st in cnt: cnt[st] += 1
+                
+                total = sum(cnt.values())
+                tags = group_risk_tags.get(sname, [])
+                tag_str = " / ".join([t[0] for t in tags]) if tags else "ปกติ"
+                row_data += [cnt["มา"], cnt["สาย"], cnt["ลา"], cnt["ขาด"], total, tag_str]
+                ws.append(row_data)
+                
+                curr_row = ws.max_row
+                for c_idx in range(1, len(headers) + 1):
+                    cell = ws.cell(row=curr_row, column=c_idx)
+                    cell.border = border
+                    if c_idx != 2: cell.alignment = center_align
+
+            # ปรับขนาดคอลัมน์ (แก้บัค ####)
+            column_widths = [8, 25, 12] + [12]*len(dates) + [8, 8, 8, 8, 8, 15]
+            for i, width in enumerate(column_widths, 1):
+                ws.column_dimensions[get_column_letter(i)].width = width
+
+        conn.close()
+        
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+        
+        fname = f"kschool_report_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+        from fastapi.responses import Response as FResponse
+        return FResponse(
+            content=output.getvalue(),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={fname}"}
+        )
+    except Exception as e:
+        import traceback
+        error_msg = traceback.format_exc()
+        print(f"❌ Excel Export Error: {error_msg}")
+        return HTMLResponse(f"<h3>เกิดข้อผิดพลาดในการสร้างไฟล์ Excel</h3><pre>{e}</pre><p>โปรดตรวจสอบว่าได้ติดตั้งไลบรารี openpyxl หรือยัง</p>")
+
+# ==========================================
+
+@app.get("/admin/announcements", response_class=HTMLResponse)
+async def admin_announcements_page(user_session: Optional[str] = Cookie(None)):
+    if user_session != "admin":
+        return RedirectResponse(url="/login", status_code=303)
+
+    conn = sqlite3.connect("attendance_pro.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, title, body, level, created_at, is_active FROM announcements ORDER BY id DESC")
+    rows = cursor.fetchall()
+    conn.close()
+
+    level_meta = {
+        "normal": {"bg": "#eff6ff", "border": "#bfdbfe", "text": "#1e40af", "icon": "📣", "label": "ทั่วไป"},
+        "important": {"bg": "#fffbeb", "border": "#fde68a", "text": "#92400e", "icon": "⚠️", "label": "สำคัญ"},
+        "urgent": {"bg": "#fef2f2", "border": "#fecaca", "text": "#991b1b", "icon": "🚨", "label": "ด่วนมาก"},
+    }
+
+    cards = ""
+    for id_, title, body, level, created_at, is_active in rows:
+        m = level_meta.get(level, level_meta["normal"])
+        opacity = "1" if is_active else "0.5"
+        status_label = "🟢 กำลังแสดง" if is_active else "⚪ ซ่อนอยู่"
+        cards += f"""
+        <div style="background:{m['bg']}; border:1px solid {m['border']}; border-left:4px solid {m['text']}; border-radius:14px; padding:16px; margin-bottom:12px; opacity:{opacity};">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px; margin-bottom:6px;">
+                <div style="font-weight:800; font-size:14.5px; color:{m['text']};">{m['icon']} {title}</div>
+                <span style="font-size:10.5px; font-weight:700; color:{m['text']}; white-space:nowrap;">{status_label}</span>
+            </div>
+            <div style="font-size:13px; color:#475569; line-height:1.6; margin-bottom:10px;">{body}</div>
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+                <span style="font-size:11px; color:#94a3b8; font-weight:600;">🕐 {created_at} · ระดับ: {m['label']}</span>
+                <div style="display:flex; gap:6px;">
+                    <a href="/api/admin/announcement/toggle?id={id_}" class="btn btn-secondary" style="padding:5px 10px; font-size:11px;">{"🙈 ซ่อน" if is_active else "👁️ แสดง"}</a>
+                    <a href="/api/admin/announcement/delete?id={id_}" class="btn btn-danger" style="padding:5px 10px; font-size:11px;" onclick="return confirm('ยืนยันลบประกาศนี้?')">🗑️ ลบ</a>
+                </div>
+            </div>
+        </div>
+        """
+
+    return f"""
+    <html>{STYLE_HEADER}
+    <body>
+        <div class="navbar">
+            <h1><img src="{LOGO_URL}" class="nav-logo"> 📢 ประกาศข่าวสาร</h1>
+            <a href="/admin/dashboard" class="btn btn-secondary">⬅ กลับหน้าควบคุม</a>
+        </div>
+        <div class="main-container">
+            <div class="card">
+                <h2>➕ เพิ่มประกาศใหม่</h2>
+                <form action="/api/admin/announcement/add" method="post">
+                    <label style="font-size:12.5px; font-weight:700; color:#475569;">หัวข้อประกาศ:</label>
+                    <input type="text" name="title" placeholder="เช่น แจ้งปิดเรียนกรณีพิเศษ" required>
+                    <label style="font-size:12.5px; font-weight:700; color:#475569;">รายละเอียด:</label>
+                    <textarea name="body" placeholder="รายละเอียดประกาศ" required style="min-height:80px;"></textarea>
+                    <label style="font-size:12.5px; font-weight:700; color:#475569;">ระดับความสำคัญ:</label>
+                    <select name="level" required>
+                        <option value="normal">📣 ทั่วไป</option>
+                        <option value="important">⚠️ สำคัญ</option>
+                        <option value="urgent">🚨 ด่วนมาก</option>
+                    </select>
+                    <button type="submit" class="btn-submit">📢 เผยแพร่ประกาศ</button>
+                </form>
+            </div>
+            <div class="card">
+                <h2>📋 ประกาศทั้งหมด ({len(rows)})</h2>
+                {cards if cards else "<p style='color:#94a3b8; text-align:center; padding:20px 0;'>ยังไม่มีประกาศในระบบ</p>"}
+            </div>
+        </div>
+    </body></html>
+    """
+
+@app.post("/api/admin/announcement/add")
+async def api_add_announcement(title: str = Form(...), body: str = Form(...), level: str = Form(...), user_session: Optional[str] = Cookie(None)):
+    if user_session != "admin": return HTMLResponse("Unauthorized", status_code=401)
+    created_at = datetime.now().strftime("%d/%m/%Y %H:%M")
+    conn = sqlite3.connect("attendance_pro.db")
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO announcements (title, body, level, created_at, is_active) VALUES (?,?,?,?,1)", (title.strip(), body.strip(), level, created_at))
+    conn.commit()
+    conn.close()
+
+    # 🔴 แจ้งเตือนแบบเรียลไทม์ให้นักเรียนทุกคนทราบทันทีว่ามีประกาศใหม่
+    level_icon = {"urgent": "🚨", "important": "⚠️"}.get(level, "📣")
+    await push_student_notify(
+        title=f"{level_icon} ประกาศใหม่: {title.strip()}",
+        message=body.strip()[:120] + ("…" if len(body.strip()) > 120 else ""),
+        tone="danger" if level == "urgent" else ("info" if level == "important" else "info"),
+        all_students=True,
+    )
+
+    return alert_redirect("เพิ่มประกาศเรียบร้อยแล้ว", type="success", url="/admin/announcements")
+
+@app.get("/api/admin/announcement/toggle")
+async def api_toggle_announcement(id: int, user_session: Optional[str] = Cookie(None)):
+    if user_session != "admin":
+        return HTMLResponse("Unauthorized", status_code=401)
+    conn = sqlite3.connect("attendance_pro.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT is_active FROM announcements WHERE id=?", (id,))
+    row = cursor.fetchone()
+    if row:
+        cursor.execute("UPDATE announcements SET is_active=? WHERE id=?", (0 if row[0] else 1, id))
+        conn.commit()
+    conn.close()
+    return RedirectResponse(url="/admin/announcements", status_code=303)
+
+@app.get("/api/admin/announcement/delete")
+async def api_delete_announcement(id: int, user_session: Optional[str] = Cookie(None)):
+    if user_session != "admin":
+        return HTMLResponse("Unauthorized", status_code=401)
+    conn = sqlite3.connect("attendance_pro.db")
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM announcements WHERE id=?", (id,))
+    conn.commit()
+    conn.close()
+    return RedirectResponse(url="/admin/announcements", status_code=303)
+
+def _parse_dt_flex(s: str) -> datetime:
+    """🕐 พาร์สวันเวลาจากหลายรูปแบบที่ใช้กระจายอยู่ในระบบ (ประกาศ/คะแนนความประพฤติ/การบ้าน/ใบลา) ให้เรียงลำดับร่วมกันได้"""
+    if not s:
+        return datetime.min
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%d/%m/%Y %H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+    return datetime.min
+
+@app.get("/app/notifications", response_class=HTMLResponse)
+async def app_notifications_page(user_session: Optional[str] = Cookie(None)):
+    """🔔 หน้าแจ้งเตือน สไตล์รายการ์ด (ไอคอนซ้าย / หัวข้อสีน้ำเงิน / รายละเอียดใต้หัวข้อ / วันเวลา / ลูกศรขวา)
+    ฝั่งนักเรียน: รวมทุกอีเวนต์ที่เกี่ยวกับตัวเอง (คะแนนความประพฤติ / การบ้านใหม่ / ผลใบลา / ประกาศทั่วไป) เรียงตามเวลาล่าสุด
+    ฝั่งครู: แสดงเฉพาะประกาศทั่วไป (เหมือนเดิม)"""
+    if not user_session or not (user_session.startswith("student_") or user_session.startswith("teacher_")):
+        return RedirectResponse(url="/login", status_code=303)
+    role = "student" if user_session.startswith("student_") else "teacher"
+    back_url = "/student/dashboard" if role == "student" else None
+    teacher_user = urllib.parse.unquote(user_session.replace("teacher_", "", 1)) if role == "teacher" else None
+    if role == "teacher":
+        back_url = f"/app/dashboard?user={urllib.parse.quote(teacher_user)}"
+
+    level_meta = {
+        "normal": {"bg": "#eff6ff", "text": "#1e40af", "icon": "📣"},
+        "important": {"bg": "#fffbeb", "text": "#92400e", "icon": "⚠️"},
+        "urgent": {"bg": "#fef2f2", "text": "#991b1b", "icon": "🚨"},
+    }
+
+    conn = sqlite3.connect("attendance_pro.db")
+    cursor = conn.cursor()
+
+    # 📣 ประกาศทั่วไป — ใช้ร่วมกันทั้งครูและนักเรียน
+    cursor.execute("SELECT title, body, level, created_at FROM announcements WHERE is_active=1")
+    feed = []
+    for title, body, level, created_at in cursor.fetchall():
+        m = level_meta.get(level, level_meta["normal"])
+        feed.append({"icon": m["icon"], "bg": m["bg"], "text": m["text"], "title": title, "desc": body, "time": created_at, "sort": _parse_dt_flex(created_at)})
+
+    if role == "student":
+        uid = urllib.parse.unquote(user_session.replace("student_", "", 1))
+        me = next((s for s in get_sorted_master_students() if s['uid'] == uid), None)
+
+        # 🎖️ คะแนนความประพฤติ (หัก/เพิ่ม/คืน) — ของตัวเองทั้งหมด
+        for h in get_conduct_history(uid):
+            is_plus = h['points'] >= 0
+            sign = "+" if is_plus else ""
+            feed.append({
+                "icon": "🏅", "bg": "#f0fdf4" if is_plus else "#fef2f2", "text": "#15803d" if is_plus else "#b91c1c",
+                "title": f"{'ได้รับ' if is_plus else 'ถูกหัก'}คะแนนความประพฤติ {sign}{h['points']} คะแนน",
+                "desc": f"{h['reason']} · โดย: {h['recorded_by']}",
+                "time": h['created_at'], "sort": _parse_dt_flex(h['created_at']),
+            })
+
+        # 📚 การบ้านใหม่ — เฉพาะกลุ่มวิชาที่ตัวเองอยู่
+        if me:
+            cursor.execute("""
+                SELECT a.title, a.due_date, a.created_at, cg.group_name
+                FROM assignments a
+                JOIN group_assignments ga ON ga.group_id = a.group_id
+                JOIN course_groups cg ON cg.group_id = a.group_id
+                WHERE ga.student_uid = ? AND a.is_active = 1
+            """, (uid,))
+            for title, due_date, created_at, group_name in cursor.fetchall():
+                due_txt = f" (กำหนดส่ง {due_date})" if due_date else ""
+                feed.append({
+                    "icon": "📚", "bg": "#eff6ff", "text": "#1d4ed8",
+                    "title": f"การบ้านใหม่: {group_name}",
+                    "desc": f"{title}{due_txt}",
+                    "time": created_at, "sort": _parse_dt_flex(created_at),
+                })
+
+            # 📋 ผลการพิจารณาใบลาของตัวเอง (อนุมัติ/ปฏิเสธ)
+            cursor.execute("""
+                SELECT group_name, leave_date, status, reviewed_at, reason
+                FROM leave_requests
+                WHERE student_name=? AND student_no=? AND classroom=? AND status IN ('approved','rejected') AND reviewed_at IS NOT NULL
+            """, (me['name'], me['no'], me['class']))
+            for group_name, leave_date, status, reviewed_at, reason in cursor.fetchall():
+                approved = status == "approved"
+                feed.append({
+                    "icon": "✅" if approved else "❌", "bg": "#f0fdf4" if approved else "#fef2f2", "text": "#15803d" if approved else "#b91c1c",
+                    "title": f"ใบลา{'ได้รับการอนุมัติ' if approved else 'ไม่ได้รับการอนุมัติ'}",
+                    "desc": f"{group_name} · วันที่ {leave_date}" + (f" ({reason})" if reason else ""),
+                    "time": reviewed_at, "sort": _parse_dt_flex(reviewed_at),
+                })
+
+    conn.close()
+    feed.sort(key=lambda x: x["sort"], reverse=True)
+
+    items_html = ""
+    for it in feed:
+        items_html += f"""
+        <div class="nt-item">
+            <div class="nt-icon" style="background:{it['bg']};color:{it['text']};">{it['icon']}</div>
+            <div class="nt-body">
+                <div class="nt-title">{it['title']}</div>
+                <div class="nt-desc">{it['desc']}</div>
+                <div class="nt-time">🗓️ {it['time']}</div>
+            </div>
+            <div class="nt-chevron">›</div>
+        </div>"""
+
+    return f"""
+    <html>{STYLE_HEADER}
+    <style>
+        body {{ background: var(--surface-muted); }}
+        .nt-header {{
+            display:flex; align-items:center; gap:14px; padding: calc(env(safe-area-inset-top,0px) + 16px) 16px 16px;
+            background: var(--surface); border-bottom: 1px solid var(--border);
+        }}
+        .nt-header a {{ font-size:20px; color: var(--navy-800); text-decoration:none; }}
+        .nt-header h1 {{ margin:0; font-size:17px; font-weight:800; color: var(--navy-800); flex:1; text-align:center; margin-right:20px; }}
+        .nt-list {{ max-width:640px; margin:0 auto; padding: 8px 0 24px; }}
+        .nt-item {{
+            display:flex; align-items:flex-start; gap:12px; padding:16px;
+            background: var(--surface); border-bottom: 1px solid var(--border);
+        }}
+        .nt-icon {{
+            width:44px; height:44px; border-radius:50%; flex-shrink:0;
+            display:flex; align-items:center; justify-content:center; font-size:19px;
+        }}
+        .nt-body {{ flex:1; min-width:0; }}
+        .nt-title {{ font-size:14.5px; font-weight:800; color:#2563eb; margin-bottom:4px; }}
+        .nt-desc {{ font-size:12.5px; color:#475569; line-height:1.5; margin-bottom:6px; }}
+        .nt-time {{ font-size:11px; color:#94a3b8; font-weight:600; }}
+        .nt-chevron {{ font-size:20px; color:#cbd5e1; flex-shrink:0; padding-top:8px; }}
+    </style>
+    <body>
+        <div class="nt-header">
+            <a href="{back_url}">‹</a>
+            <h1>แจ้งเตือน</h1>
+        </div>
+        <div class="nt-list">
+            {items_html if items_html else "<p style='color:#94a3b8;text-align:center;padding:40px 0;'>ยังไม่มีการแจ้งเตือน</p>"}
+        </div>
+    </body></html>
+    """
+
+@app.get("/api/announcements")
+async def api_get_announcements():
+    """API ดึงประกาศที่แสดงอยู่ (ใช้ในหน้าครู)"""
+    conn = sqlite3.connect("attendance_pro.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, title, body, level FROM announcements WHERE is_active=1 ORDER BY id DESC LIMIT 5")
+    rows = cursor.fetchall()
+    conn.close()
+    return JSONResponse([{"id": r[0], "title": r[1], "body": r[2], "level": r[3]} for r in rows])
+
+# ==========================================
+# 🆕 ROUND 1: ผลการเรียน/คะแนนเก็บ · ตารางเรียน · การบ้าน · ชำระเงิน
+# (นักเรียน + ครู เป็นผู้ใช้หลัก / ชำระเงินให้แอดมินเป็นผู้บันทึกสถานะ)
+# ==========================================
+
+# ---------- 🏫 ครู: ศูนย์กลางรายวิชา (เลือกเข้าเช็กชื่อ/ตารางเรียน/การบ้าน/ผลการเรียน) ----------
+@app.get("/app/classroom/{group_id}", response_class=HTMLResponse)
+async def app_classroom_hub(group_id: int, user: str, user_session: Optional[str] = Cookie(None)):
+    if not user_session or user_session != f"teacher_{urllib.parse.quote(user)}":
+        return RedirectResponse(url="/login", status_code=303)
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT group_name, teacher_username FROM course_groups WHERE group_id=?", (group_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return alert_redirect("ไม่พบกลุ่มวิชานี้", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
+    group_name, owner = row
+    if owner != user:
+        return alert_redirect("คุณไม่มีสิทธิ์เข้าถึงกลุ่มวิชานี้", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
+
+    qs = f"?user={urllib.parse.quote(user)}"
+    return f"""
+    <html>{STYLE_HEADER}
+    {ADMIN_HOME_STYLE}
+    <body>
+        <div class="navbar">
+            <h1><img src="{LOGO_URL}" class="nav-logo"> 📚 {group_name}</h1>
+            <a href="/app/dashboard{qs}" class="btn btn-secondary">⬅ กลับ</a>
+        </div>
+        <div class="main-container">
+            <div class="ah-grid3">
+                <a href="/app/rollcall/{group_id}{qs}" class="ah-cell">
+                    <div class="ah-cell-icon-wrap" style="background:#eff6ff;color:#1d4ed8;">📶</div>
+                    <span class="ah-cell-label">เช็กชื่อ</span>
+                </a>
+                <a href="/app/timetable/{group_id}{qs}" class="ah-cell">
+                    <div class="ah-cell-icon-wrap" style="background:#fef9c3;color:#a16207;">🗓️</div>
+                    <span class="ah-cell-label">ตารางเรียน</span>
+                </a>
+                <a href="/app/homework/{group_id}{qs}" class="ah-cell">
+                    <div class="ah-cell-icon-wrap" style="background:#fdf4ff;color:#a21caf;">📖</div>
+                    <span class="ah-cell-label">การบ้าน</span>
+                </a>
+                <a href="/app/grades/{group_id}{qs}" class="ah-cell">
+                    <div class="ah-cell-icon-wrap" style="background:#f0fdf4;color:#15803d;">📊</div>
+                    <span class="ah-cell-label">ผลการเรียน</span>
+                </a>
+            </div>
+        </div>
+    </body></html>
+    """
+
+# ---------- 🗓️ ตารางเรียน (ครูจัดการ / นักเรียนดู) ----------
+@app.get("/app/timetable/{group_id}", response_class=HTMLResponse)
+async def app_timetable_manage(group_id: int, user: str, user_session: Optional[str] = Cookie(None)):
+    if not user_session or user_session != f"teacher_{urllib.parse.quote(user)}":
+        return RedirectResponse(url="/login", status_code=303)
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT group_name, teacher_username FROM course_groups WHERE group_id=?", (group_id,))
+    row = cursor.fetchone()
+    if not row or row[1] != user:
+        conn.close()
+        return alert_redirect("ไม่มีสิทธิ์เข้าถึง", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
+    group_name = row[0]
+    cursor.execute("SELECT slot_id, day_of_week, start_time, end_time, room FROM timetable_slots WHERE group_id=? ORDER BY day_of_week, start_time", (group_id,))
+    slots = cursor.fetchall()
+    conn.close()
+
+    uq = urllib.parse.quote(user)
+    rows_html = "".join([f"""
+        <tr>
+            <td style="text-align:left;">วัน{THAI_WEEKDAYS.get(s[1], s[1])}</td>
+            <td>{s[2]} - {s[3]}</td>
+            <td>{s[4] or '-'}</td>
+            <td><a href="/api/teacher/timetable/delete?slot_id={s[0]}&user={uq}&group_id={group_id}" class="btn btn-danger" style="padding:4px 10px;font-size:11px;" onclick="return confirm('ลบคาบเรียนนี้?')">ลบ</a></td>
+        </tr>""" for s in slots])
+
+    day_options = "".join([f'<option value="{k}">วัน{v}</option>' for k, v in THAI_WEEKDAYS.items()])
+
+    return f"""
+    <html>{STYLE_HEADER}
+    <body>
+        <div class="navbar">
+            <h1><img src="{LOGO_URL}" class="nav-logo"> 🗓️ ตารางเรียน — {group_name}</h1>
+            <a href="/app/classroom/{group_id}?user={uq}" class="btn btn-secondary">⬅ กลับ</a>
+        </div>
+        <div class="main-container">
+            <div class="card">
+                <h2>➕ เพิ่มคาบเรียน</h2>
+                <form action="/api/teacher/timetable/add" method="post">
+                    <input type="hidden" name="group_id" value="{group_id}">
+                    <input type="hidden" name="user" value="{user}">
+                    <label style="font-size:12.5px;font-weight:700;color:#475569;">วัน:</label>
+                    <select name="day_of_week" required>{day_options}</select>
+                    <label style="font-size:12.5px;font-weight:700;color:#475569;">เวลาเริ่ม:</label>
+                    <input type="time" name="start_time" required>
+                    <label style="font-size:12.5px;font-weight:700;color:#475569;">เวลาสิ้นสุด:</label>
+                    <input type="time" name="end_time" required>
+                    <label style="font-size:12.5px;font-weight:700;color:#475569;">ห้อง/สถานที่:</label>
+                    <input type="text" name="room" placeholder="เช่น ห้อง 204">
+                    <button type="submit" class="btn-submit">💾 บันทึกคาบเรียน</button>
+                </form>
+            </div>
+            <div class="card">
+                <h2>📋 ตารางเรียนทั้งหมด ({len(slots)})</h2>
+                <table><thead><tr><th style="text-align:left;">วัน</th><th>เวลา</th><th>ห้อง</th><th>จัดการ</th></tr></thead>
+                <tbody>{rows_html if rows_html else "<tr><td colspan='4' style='color:#94a3b8;text-align:center;'>ยังไม่มีตารางเรียน</td></tr>"}</tbody></table>
+            </div>
+        </div>
+    </body></html>
+    """
+
+@app.post("/api/teacher/timetable/add")
+async def api_timetable_add(group_id: int = Form(...), user: str = Form(...), day_of_week: int = Form(...),
+                             start_time: str = Form(...), end_time: str = Form(...), room: str = Form(""),
+                             user_session: Optional[str] = Cookie(None)):
+    if not user_session or user_session != f"teacher_{urllib.parse.quote(user)}":
+        return HTMLResponse("Unauthorized", status_code=401)
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (group_id,))
+    row = cursor.fetchone()
+    if not row or row[0] != user:
+        conn.close()
+        return alert_redirect("ไม่มีสิทธิ์", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
+    cursor.execute("INSERT INTO timetable_slots (group_id, day_of_week, start_time, end_time, room, created_by, created_at) VALUES (?,?,?,?,?,?,?)",
+                   (group_id, day_of_week, start_time, end_time, room.strip(), user, datetime.now().strftime("%d/%m/%Y %H:%M")))
+    conn.commit()
+    conn.close()
+    return alert_redirect("เพิ่มคาบเรียนเรียบร้อยแล้ว", type="success", url=f"/app/timetable/{group_id}?user={urllib.parse.quote(user)}")
+
+@app.get("/api/teacher/timetable/delete")
+async def api_timetable_delete(slot_id: int, group_id: int, user: str, user_session: Optional[str] = Cookie(None)):
+    if not user_session or user_session != f"teacher_{urllib.parse.quote(user)}":
+        return HTMLResponse("Unauthorized", status_code=401)
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (group_id,))
+    row = cursor.fetchone()
+    if row and row[0] == user:
+        cursor.execute("DELETE FROM timetable_slots WHERE slot_id=?", (slot_id,))
+        conn.commit()
+    conn.close()
+    return RedirectResponse(url=f"/app/timetable/{group_id}?user={urllib.parse.quote(user)}", status_code=303)
+
+@app.get("/student/timetable", response_class=HTMLResponse)
+async def student_timetable(user_session: Optional[str] = Cookie(None)):
+    if not user_session or not user_session.startswith("student_"):
+        return RedirectResponse(url="/login", status_code=303)
+    uid = urllib.parse.unquote(user_session.replace("student_", "", 1))
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("""SELECT t.day_of_week, t.start_time, t.end_time, t.room, g.group_name
+        FROM timetable_slots t
+        JOIN group_assignments ga ON ga.group_id = t.group_id
+        JOIN course_groups g ON g.group_id = t.group_id
+        WHERE ga.student_uid = ?
+        ORDER BY t.day_of_week, t.start_time""", (uid,))
+    slots = cursor.fetchall()
+    conn.close()
+
+    by_day = {d: [] for d in range(1, 8)}
+    for s in slots:
+        by_day[s[0]].append(s)
+
+    day_blocks = ""
+    for d in range(1, 6):  # แสดง จันทร์-ศุกร์ เป็นหลัก (วันเรียนปกติ)
+        items = by_day[d]
+        rows = "".join([f"""
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);">
+                <div>
+                    <div style="font-weight:800;font-size:13.5px;">{it[4]}</div>
+                    <div style="font-size:11.5px;color:#94a3b8;">📍 {it[3] or '-'}</div>
+                </div>
+                <div style="font-weight:700;font-size:12.5px;color:#2563eb;white-space:nowrap;">{it[1]} - {it[2]}</div>
+            </div>""" for it in items])
+        day_blocks += f"""
+        <div class="card" style="margin-bottom:12px;">
+            <h2 style="margin-bottom:4px;">📅 วัน{THAI_WEEKDAYS[d]}</h2>
+            {rows if rows else "<p style='color:#94a3b8;font-size:12.5px;padding:8px 0;'>ไม่มีคาบเรียน</p>"}
+        </div>"""
+
+    return f"""
+    <html>{STYLE_HEADER}
+    <body>
+        <div class="navbar">
+            <h1><img src="{LOGO_URL}" class="nav-logo"> 🗓️ ตารางเรียนของฉัน</h1>
+            <a href="/student/dashboard" class="btn btn-secondary">⬅ กลับ</a>
+        </div>
+        <div class="main-container">{day_blocks}</div>
+    </body></html>
+    """
+
+# ---------- 📖 การบ้าน (ครูมอบหมาย/ดูงานที่ส่ง / นักเรียนดู-ส่งงาน) ----------
+@app.get("/app/homework/{group_id}", response_class=HTMLResponse)
+async def app_homework_manage(group_id: int, user: str, user_session: Optional[str] = Cookie(None)):
+    if not user_session or user_session != f"teacher_{urllib.parse.quote(user)}":
+        return RedirectResponse(url="/login", status_code=303)
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT group_name, teacher_username FROM course_groups WHERE group_id=?", (group_id,))
+    row = cursor.fetchone()
+    if not row or row[1] != user:
+        conn.close()
+        return alert_redirect("ไม่มีสิทธิ์เข้าถึง", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
+    group_name = row[0]
+    cursor.execute("SELECT COUNT(*) FROM group_assignments WHERE group_id=?", (group_id,))
+    total_students = cursor.fetchone()[0]
+    cursor.execute("SELECT assignment_id, title, detail, due_date, is_active FROM assignments WHERE group_id=? ORDER BY assignment_id DESC", (group_id,))
+    hw_rows = cursor.fetchall()
+
+    uq = urllib.parse.quote(user)
+    cards = ""
+    for a_id, title, detail, due_date, is_active in hw_rows:
+        cursor.execute("SELECT COUNT(*) FROM assignment_submissions WHERE assignment_id=?", (a_id,))
+        submitted_count = cursor.fetchone()[0]
+        cards += f"""
+        <div class="card" style="margin-bottom:12px;">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+                <h2 style="margin:0;">📖 {title}</h2>
+                <span style="font-size:11px;color:#94a3b8;white-space:nowrap;">ส่งแล้ว {submitted_count}/{total_students}</span>
+            </div>
+            <p style="color:#475569;font-size:13px;line-height:1.6;">{detail}</p>
+            <div style="font-size:11.5px;color:#94a3b8;margin-bottom:10px;">📅 กำหนดส่ง: {due_date or 'ไม่ระบุ'}</div>
+            <div style="display:flex;gap:6px;">
+                <a href="/app/homework/{group_id}/{a_id}/submissions?user={uq}" class="btn btn-secondary" style="padding:6px 12px;font-size:12px;">👁️ ดูงานที่ส่ง</a>
+                <a href="/api/teacher/homework/delete?assignment_id={a_id}&group_id={group_id}&user={uq}" class="btn btn-danger" style="padding:6px 12px;font-size:12px;" onclick="return confirm('ลบการบ้านนี้?')">🗑️ ลบ</a>
+            </div>
+        </div>"""
+    conn.close()
+
+    return f"""
+    <html>{STYLE_HEADER}
+    <body>
+        <div class="navbar">
+            <h1><img src="{LOGO_URL}" class="nav-logo"> 📖 การบ้าน — {group_name}</h1>
+            <a href="/app/classroom/{group_id}?user={uq}" class="btn btn-secondary">⬅ กลับ</a>
+        </div>
+        <div class="main-container">
+            <div class="card">
+                <h2>➕ มอบหมายการบ้านใหม่</h2>
+                <form action="/api/teacher/homework/add" method="post">
+                    <input type="hidden" name="group_id" value="{group_id}">
+                    <input type="hidden" name="user" value="{user}">
+                    <label style="font-size:12.5px;font-weight:700;color:#475569;">หัวข้อ:</label>
+                    <input type="text" name="title" placeholder="เช่น แบบฝึกหัดบทที่ 3" required>
+                    <label style="font-size:12.5px;font-weight:700;color:#475569;">รายละเอียด:</label>
+                    <textarea name="detail" placeholder="รายละเอียดงาน" style="min-height:80px;" required></textarea>
+                    <label style="font-size:12.5px;font-weight:700;color:#475569;">กำหนดส่ง:</label>
+                    <input type="date" name="due_date">
+                    <button type="submit" class="btn-submit">📤 มอบหมายงาน</button>
+                </form>
+            </div>
+            <div class="card"><h2 style="margin:0;">📋 การบ้านทั้งหมด ({len(hw_rows)})</h2></div>
+            {cards if cards else "<p style='color:#94a3b8;text-align:center;padding:20px 0;'>ยังไม่มีการบ้าน</p>"}
+        </div>
+    </body></html>
+    """
+
+@app.post("/api/teacher/homework/add")
+async def api_homework_add(group_id: int = Form(...), user: str = Form(...), title: str = Form(...),
+                            detail: str = Form(...), due_date: str = Form(""), user_session: Optional[str] = Cookie(None)):
+    if not user_session or user_session != f"teacher_{urllib.parse.quote(user)}":
+        return HTMLResponse("Unauthorized", status_code=401)
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT teacher_username, group_name FROM course_groups WHERE group_id=?", (group_id,))
+    row = cursor.fetchone()
+    if not row or row[0] != user:
+        conn.close()
+        return alert_redirect("ไม่มีสิทธิ์", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
+    group_name = row[1]
+    cursor.execute("INSERT INTO assignments (group_id, title, detail, due_date, created_by, created_at, is_active) VALUES (?,?,?,?,?,?,1)",
+                   (group_id, title.strip(), detail.strip(), due_date, user, datetime.now().strftime("%d/%m/%Y %H:%M")))
+    # 🔴 แจ้งเตือนแบบเรียลไทม์ให้นักเรียนทุกคนในกลุ่มวิชานี้ทันที
+    cursor.execute("SELECT student_uid FROM group_assignments WHERE group_id=?", (group_id,))
+    target_uids = [r[0] for r in cursor.fetchall()]
+    conn.commit()
+    conn.close()
+    if target_uids:
+        due_txt = f" (กำหนดส่ง {due_date})" if due_date else ""
+        await push_student_notify(
+            title=f"📚 การบ้านใหม่: {group_name}",
+            message=f"{title.strip()}{due_txt}",
+            tone="info",
+            target_uids=target_uids,
+        )
+    return alert_redirect("มอบหมายการบ้านเรียบร้อยแล้ว", type="success", url=f"/app/homework/{group_id}?user={urllib.parse.quote(user)}")
+
+@app.get("/api/teacher/homework/delete")
+async def api_homework_delete(assignment_id: int, group_id: int, user: str, user_session: Optional[str] = Cookie(None)):
+    if not user_session or user_session != f"teacher_{urllib.parse.quote(user)}":
+        return HTMLResponse("Unauthorized", status_code=401)
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (group_id,))
+    row = cursor.fetchone()
+    if row and row[0] == user:
+        cursor.execute("DELETE FROM assignments WHERE assignment_id=?", (assignment_id,))
+        cursor.execute("DELETE FROM assignment_submissions WHERE assignment_id=?", (assignment_id,))
+        conn.commit()
+    conn.close()
+    return RedirectResponse(url=f"/app/homework/{group_id}?user={urllib.parse.quote(user)}", status_code=303)
+
+@app.get("/app/homework/{group_id}/{assignment_id}/submissions", response_class=HTMLResponse)
+async def app_homework_submissions(group_id: int, assignment_id: int, user: str, user_session: Optional[str] = Cookie(None)):
+    if not user_session or user_session != f"teacher_{urllib.parse.quote(user)}":
+        return RedirectResponse(url="/login", status_code=303)
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (group_id,))
+    row = cursor.fetchone()
+    if not row or row[0] != user:
+        conn.close()
+        return alert_redirect("ไม่มีสิทธิ์", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
+    cursor.execute("SELECT title FROM assignments WHERE assignment_id=?", (assignment_id,))
+    title_row = cursor.fetchone()
+    title = title_row[0] if title_row else "การบ้าน"
+    cursor.execute("SELECT student_uid FROM group_assignments WHERE group_id=?", (group_id,))
+    group_uids = {r[0] for r in cursor.fetchall()}
+    cursor.execute("SELECT student_uid, content, submitted_at FROM assignment_submissions WHERE assignment_id=?", (assignment_id,))
+    subs = {r[0]: {"content": r[1], "submitted_at": r[2]} for r in cursor.fetchall()}
+    conn.close()
+
+    all_students = [s for s in get_sorted_master_students() if s['uid'] in group_uids]
+    rows = ""
+    for s in all_students:
+        sub = subs.get(s['uid'])
+        if sub:
+            rows += f"""<tr>
+                <td style="text-align:left;">{s['name']}<br><span style="font-size:11px;color:#94a3b8;">{s['class']} เลขที่ {s['no']}</span></td>
+                <td style="text-align:left;font-size:12.5px;">{sub['content']}</td>
+                <td style="font-size:11px;color:#15803d;font-weight:800;white-space:nowrap;">✅ ส่งแล้ว<br>{sub['submitted_at']}</td>
+            </tr>"""
+        else:
+            rows += f"""<tr>
+                <td style="text-align:left;">{s['name']}<br><span style="font-size:11px;color:#94a3b8;">{s['class']} เลขที่ {s['no']}</span></td>
+                <td style="text-align:left;color:#94a3b8;">-</td>
+                <td style="font-size:11px;color:#b91c1c;font-weight:800;">⏳ ยังไม่ส่ง</td>
+            </tr>"""
+
+    return f"""
+    <html>{STYLE_HEADER}
+    <body>
+        <div class="navbar">
+            <h1><img src="{LOGO_URL}" class="nav-logo"> 👁️ งานที่ส่ง — {title}</h1>
+            <a href="/app/homework/{group_id}?user={urllib.parse.quote(user)}" class="btn btn-secondary">⬅ กลับ</a>
+        </div>
+        <div class="main-container">
+            <div class="card" style="overflow-x:auto;">
+                <table><thead><tr><th style="text-align:left;">นักเรียน</th><th style="text-align:left;">คำตอบ</th><th>สถานะ</th></tr></thead>
+                <tbody>{rows if rows else "<tr><td colspan='3' style='color:#94a3b8;text-align:center;'>ยังไม่มีนักเรียนในกลุ่มนี้</td></tr>"}</tbody></table>
+            </div>
+        </div>
+    </body></html>
+    """
+
+@app.get("/student/homework", response_class=HTMLResponse)
+async def student_homework(user_session: Optional[str] = Cookie(None)):
+    if not user_session or not user_session.startswith("student_"):
+        return RedirectResponse(url="/login", status_code=303)
+    uid = urllib.parse.unquote(user_session.replace("student_", "", 1))
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("""SELECT a.assignment_id, a.title, a.detail, a.due_date, g.group_name,
+                       s.content, s.submitted_at
+        FROM assignments a
+        JOIN course_groups g ON g.group_id = a.group_id
+        JOIN group_assignments ga ON ga.group_id = a.group_id AND ga.student_uid = ?
+        LEFT JOIN assignment_submissions s ON s.assignment_id = a.assignment_id AND s.student_uid = ?
+        WHERE a.is_active = 1
+        ORDER BY a.assignment_id DESC""", (uid, uid))
+    hw_rows = cursor.fetchall()
+    conn.close()
+
+    cards = ""
+    for a_id, title, detail, due_date, group_name, content, submitted_at in hw_rows:
+        if content:
+            status_html = f"""<div style='font-size:11.5px;color:#15803d;font-weight:800;margin-bottom:8px;'>✅ ส่งแล้วเมื่อ {submitted_at}</div>
+            <div style='background:#f0fdf4;border-radius:10px;padding:10px;font-size:12.5px;color:#334155;'>{content}</div>"""
+        else:
+            status_html = f"""
+            <form action="/api/student/homework/submit" method="post">
+                <input type="hidden" name="assignment_id" value="{a_id}">
+                <textarea name="content" placeholder="พิมพ์คำตอบ/บันทึกงานของคุณที่นี่" style="min-height:70px;" required></textarea>
+                <button type="submit" class="btn-submit">📤 ส่งงาน</button>
+            </form>"""
+        cards += f"""
+        <div class="card" style="margin-bottom:12px;">
+            <div style="font-size:11px;color:#94a3b8;font-weight:700;margin-bottom:2px;">{group_name}</div>
+            <h2 style="margin:0 0 6px;">📖 {title}</h2>
+            <p style="color:#475569;font-size:13px;line-height:1.6;">{detail}</p>
+            <div style="font-size:11.5px;color:#94a3b8;margin-bottom:10px;">📅 กำหนดส่ง: {due_date or 'ไม่ระบุ'}</div>
+            {status_html}
+        </div>"""
+
+    return f"""
+    <html>{STYLE_HEADER}
+    <body>
+        <div class="navbar">
+            <h1><img src="{LOGO_URL}" class="nav-logo"> 📖 การบ้านของฉัน</h1>
+            <a href="/student/dashboard" class="btn btn-secondary">⬅ กลับ</a>
+        </div>
+        <div class="main-container">
+            {cards if cards else "<p style='color:#94a3b8;text-align:center;padding:20px 0;'>ยังไม่มีการบ้าน</p>"}
+        </div>
+    </body></html>
+    """
+
+@app.post("/api/student/homework/submit")
+async def api_student_homework_submit(assignment_id: int = Form(...), content: str = Form(...), user_session: Optional[str] = Cookie(None)):
+    if not user_session or not user_session.startswith("student_"):
+        return HTMLResponse("Unauthorized", status_code=401)
+    uid = urllib.parse.unquote(user_session.replace("student_", "", 1))
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("""INSERT INTO assignment_submissions (assignment_id, student_uid, content, submitted_at)
+        VALUES (?,?,?,?)
+        ON CONFLICT(assignment_id, student_uid) DO UPDATE SET content=excluded.content, submitted_at=excluded.submitted_at""",
+        (assignment_id, uid, content.strip(), datetime.now().strftime("%d/%m/%Y %H:%M")))
+    conn.commit()
+    conn.close()
+    return alert_redirect("ส่งงานเรียบร้อยแล้ว", type="success", url="/student/homework")
+
+# ---------- 📊 ผลการเรียน/คะแนนเก็บ (ครูจัดการ / นักเรียนดู) ----------
+@app.get("/app/grades/{group_id}", response_class=HTMLResponse)
+async def app_grades_manage(group_id: int, user: str, user_session: Optional[str] = Cookie(None)):
+    if not user_session or user_session != f"teacher_{urllib.parse.quote(user)}":
+        return RedirectResponse(url="/login", status_code=303)
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT group_name, teacher_username, grades_visibility FROM course_groups WHERE group_id=?", (group_id,))
+    row = cursor.fetchone()
+    if not row or row[1] != user:
+        conn.close()
+        return alert_redirect("ไม่มีสิทธิ์เข้าถึง", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
+    group_name = row[0]
+    visibility = row[2] or "hidden"
+    cursor.execute("SELECT item_id, item_name, max_score, category FROM grade_items WHERE group_id=? ORDER BY item_id", (group_id,))
+    items = cursor.fetchall()
+    cursor.execute("SELECT student_uid FROM group_assignments WHERE group_id=?", (group_id,))
+    group_uids = {r[0] for r in cursor.fetchall()}
+    if items:
+        item_ids = [it[0] for it in items]
+        placeholders = ",".join("?" * len(item_ids))
+        cursor.execute(f"SELECT item_id, student_uid, score FROM grade_scores WHERE item_id IN ({placeholders})", item_ids)
+        score_map = {(r[0], r[1]): r[2] for r in cursor.fetchall()}
+    else:
+        score_map = {}
+    conn.close()
+
+    students = [s for s in get_sorted_master_students() if s['uid'] in group_uids]
+    uq = urllib.parse.quote(user)
+
+    visibility_labels = {"all": "🟢 นักเรียนดูคะแนนได้ทุกคน", "hidden": "🔒 นักเรียนยังดูคะแนนไม่ได้", "custom": "🟡 เปิดดูได้เฉพาะบางคน"}
+    visibility_note = f"""
+    <div class="card" style="background:#f8fafc;border:1px solid #e2e8f0;">
+        <p style="margin:0;font-size:12.5px;color:#475569;">
+            👁️ สถานะการดูคะแนนของนักเรียน: <b>{visibility_labels.get(visibility, visibility)}</b><br>
+            <span style="color:#94a3b8;">การเปิด/ปิดให้นักเรียนดูคะแนนวิชานี้ ตั้งค่าได้ที่หน้าแอดมิน ➜ จัดการการมองเห็นคะแนน</span>
+        </p>
+    </div>"""
+
+    # 📊 ตารางคะแนนแบบกรอกสด (คล้าย Excel) แยกหมวด: คะแนนเก็บ / กลางภาค / ปลายภาค
+    # แต่ละช่องคือ <input> ตัวเลขที่ auto-save ทันทีตอนออกจากช่อง (blur) ผ่าน AJAX ทีละช่อง
+    # ไม่ใช้ฟอร์มเดียวยิงทีเดียวทั้งตาราง เพื่อเลี่ยงปัญหาฟอร์มมี field เกิน 1000 ช่องตอนนักเรียน/รายการคะแนนเยอะ
+    collect_items = [it for it in items if it[3] == "คะแนนเก็บ"]
+    midterm_items = [it for it in items if it[3] == "กลางภาค"]
+    final_items = [it for it in items if it[3] == "ปลายภาค"]
+    collect_max_total = sum(it[2] for it in collect_items)
+    midterm_max_total = sum(it[2] for it in midterm_items)
+    final_max_total = sum(it[2] for it in final_items)
+
+    def item_th(it):
+        return f"""<th class="gr-th">
+                <div style="display:flex;align-items:center;justify-content:center;gap:6px;">
+                    <span>{it[1]}</span>
+                    <a href="/app/grades/{group_id}/edit_item?item_id={it[0]}&user={uq}"
+                       title="แก้ไขชื่อ/คะแนนเต็ม"
+                       style="color:#2563eb;text-decoration:none;font-size:11px;font-weight:800;">✎</a>
+                    <a href="/api/teacher/grades/delete_item?item_id={it[0]}&group_id={group_id}&user={uq}"
+                       onclick="return confirm('ลบรายการคะแนนนี้? (ลบแล้วคะแนนของทุกคนในคอลัมน์นี้จะหายไปด้วย)')"
+                       style="color:#f87171;text-decoration:none;font-size:11px;font-weight:800;">✕</a>
+                </div>
+                <a href="/app/grades/{group_id}/edit_item?item_id={it[0]}&user={uq}" style="text-decoration:none;">
+                    <span style="font-weight:600;color:#94a3b8;font-size:10.5px;">เต็ม {it[2]:g} ✎</span>
+                </a>
+            </th>"""
+
+    # แถวหัวตารางบรรทัดที่ 1 (หมวดใหญ่แบบ merge cell)
+    top_header = '<th class="gr-th" rowspan="2" style="text-align:left;position:sticky;left:0;background:#f1f5f9;">นักเรียน</th>'
+    if collect_items:
+        top_header += f'<th class="gr-th" colspan="{len(collect_items)}">คะแนนเก็บ</th><th class="gr-th" rowspan="2">คะแนนเก็บเต็ม<br><span style="font-weight:600;color:#94a3b8;">{collect_max_total:g}</span></th>'
+    if midterm_items:
+        top_header += f'<th class="gr-th" colspan="{len(midterm_items)}">ผลสอบกลางภาค</th><th class="gr-th" rowspan="2">กลางภาคเต็ม<br><span style="font-weight:600;color:#94a3b8;">{midterm_max_total:g}</span></th>'
+    if final_items:
+        top_header += f'<th class="gr-th" colspan="{len(final_items)}">ผลสอบปลายภาค</th><th class="gr-th" rowspan="2">ปลายภาคเต็ม<br><span style="font-weight:600;color:#94a3b8;">{final_max_total:g}</span></th>'
+    if collect_items:
+        top_header += '<th class="gr-th" rowspan="2">ผลรวม<br>คะแนนเก็บ</th>'
+    top_header += '<th class="gr-th" rowspan="2">ผลรวม<br>คะแนน</th>'
+
+    sub_header = "".join(item_th(it) for it in collect_items) + "".join(item_th(it) for it in midterm_items) + "".join(item_th(it) for it in final_items)
+
+    def make_cell(it, uid, css_class):
+        item_id, item_name, max_score, category = it
+        cur_score = score_map.get((item_id, uid))
+        return f"""<td class="gr-td">
+            <div class="gr-cell-wrap">
+                <input type="number" step="0.5" min="0" max="{max_score:g}"
+                       class="gr-input {css_class}" data-item-id="{item_id}" data-uid="{uid}" data-max="{max_score:g}"
+                       value="{'' if cur_score is None else f'{cur_score:g}'}"
+                       oninput="updateRowTotals(this)" onblur="saveGradeCell(this)">
+                <span class="gr-max">/{max_score:g}</span>
+            </div>
+        </td>"""
+
+    # จัดกลุ่มนักเรียนเป็นรายห้อง (ขึ้นเป็นรายห้องตามที่ต้องการ)
+    students_by_class = {}
+    for s in students:
+        students_by_class.setdefault(s['class'], []).append(s)
+
+    classroom_tables = ""
+    for classroom, class_students in students_by_class.items():
+        table_rows = ""
+        for s in class_students:
+            uid = s['uid']
+            collect_cells = "".join(make_cell(it, uid, "gr-collect") for it in collect_items)
+            midterm_cells = "".join(make_cell(it, uid, "gr-mid") for it in midterm_items)
+            final_cells = "".join(make_cell(it, uid, "gr-final") for it in final_items)
+
+            collect_got = sum(score_map.get((it[0], uid)) or 0 for it in collect_items)
+            midterm_got = sum(score_map.get((it[0], uid)) or 0 for it in midterm_items)
+            final_got = sum(score_map.get((it[0], uid)) or 0 for it in final_items)
+            grand_got = collect_got + midterm_got + final_got
+
+            extra_cells = ""
+            if collect_items:
+                extra_cells += f'<td class="gr-td gr-computed" data-row-sum="collect">{collect_got:g}/{collect_max_total:g}</td>'
+            extra_cells += f'<td class="gr-td gr-computed" data-row-sum="grand">{grand_got:g}</td>'
+
+            table_rows += f"""<tr data-uid="{uid}">
+                <td class="gr-td" style="text-align:left;position:sticky;left:0;background:#fff;">
+                    {s['name']}<br><span style="font-size:11px;color:#94a3b8;">เลขที่ {s['no']}</span>
+                </td>{collect_cells}
+                {f'<td class="gr-td gr-static">{collect_max_total:g}</td>' if collect_items else ''}
+                {midterm_cells}
+                {f'<td class="gr-td gr-static">{midterm_max_total:g}</td>' if midterm_items else ''}
+                {final_cells}
+                {f'<td class="gr-td gr-static">{final_max_total:g}</td>' if final_items else ''}
+                {extra_cells}
+            </tr>"""
+
+        classroom_tables += f"""
+        <div class="card" style="overflow-x:auto;">
+            <h2>🏫 ห้อง {classroom} ({len(class_students)} คน)</h2>
+            <table class="gr-table">
+                <thead><tr>{top_header}</tr><tr>{sub_header}</tr></thead>
+                <tbody>{table_rows if table_rows else "<tr><td style='color:#94a3b8;text-align:center;'>ไม่มีนักเรียนในห้องนี้</td></tr>"}</tbody>
+            </table>
+        </div>"""
+
+    if not items:
+        classroom_tables = "<div class='card'><p style='color:#94a3b8;text-align:center;padding:20px 0;'>ยังไม่มีรายการคะแนน — เพิ่มรายการด้านบนก่อน แล้วตารางกรอกคะแนนจะปรากฏที่นี่</p></div>"
+    elif not students:
+        classroom_tables = "<div class='card'><p style='color:#94a3b8;text-align:center;padding:20px 0;'>ยังไม่มีนักเรียนในกลุ่มนี้</p></div>"
+
+    return f"""
+    <html>{STYLE_HEADER}
+    <style>
+        .gr-table {{ border-collapse:collapse; width:100%; font-size:13px; }}
+        .gr-table .gr-th, .gr-table .gr-td {{ border:1px solid #e2e8f0; padding:6px 4px; text-align:center; white-space:nowrap; }}
+        .gr-table .gr-th {{ background:#f1f5f9; font-size:12px; color:#334155; }}
+        .gr-cell-wrap {{ display:flex; align-items:center; justify-content:center; gap:2px; }}
+        .gr-input {{ width:48px; border:1px solid #cbd5e1; border-radius:5px; padding:4px 2px; text-align:center; font-size:13px; }}
+        .gr-input.gr-saved {{ border-color:#22c55e; background:#f0fdf4; }}
+        .gr-input.gr-error {{ border-color:#ef4444; background:#fef2f2; }}
+        .gr-max {{ font-size:11px; color:#94a3b8; font-weight:700; }}
+        .gr-static {{ color:#64748b; font-weight:700; background:#f8fafc; }}
+        .gr-computed {{ color:#1d4ed8; font-weight:800; background:#eff6ff; }}
+    </style>
+    <body>
+        <div class="navbar">
+            <h1><img src="{LOGO_URL}" class="nav-logo"> 📊 ผลการเรียน — {group_name}</h1>
+            <a href="/app/classroom/{group_id}?user={uq}" class="btn btn-secondary">⬅ กลับ</a>
+        </div>
+        <div class="main-container">
+            {visibility_note}
+            <div class="card">
+                <h2>➕ เพิ่มรายการคะแนน (คอลัมน์เดียว)</h2>
+                <form action="/api/teacher/grades/add_item" method="post">
+                    <input type="hidden" name="group_id" value="{group_id}">
+                    <input type="hidden" name="user" value="{user}">
+                    <label style="font-size:12.5px;font-weight:700;color:#475569;">ชื่อรายการ:</label>
+                    <input type="text" name="item_name" placeholder="เช่น ครั้งที่ 1, สอบกลางภาค" required>
+                    <label style="font-size:12.5px;font-weight:700;color:#475569;">คะแนนเต็ม:</label>
+                    <input type="number" step="0.5" name="max_score" placeholder="เช่น 10" required>
+                    <label style="font-size:12.5px;font-weight:700;color:#475569;">หมวดหมู่:</label>
+                    <select name="category">
+                        <option value="คะแนนเก็บ">คะแนนเก็บ</option>
+                        <option value="กลางภาค">กลางภาค</option>
+                        <option value="ปลายภาค">ปลายภาค</option>
+                    </select>
+                    <button type="submit" class="btn-submit">💾 เพิ่มรายการ</button>
+                </form>
+            </div>
+
+            <div class="card">
+                <h2>⚡ เพิ่มหลายคอลัมน์พร้อมกัน (แบบเร็ว)</h2>
+                <p style="font-size:12px;color:#64748b;margin:0 0 8px;">
+                    พิมพ์เป็น <b>ชื่อ:คะแนนเต็ม</b> คั่นด้วยจุลภาค เช่น
+                    <code>ครั้งที่1:10, ครั้งที่2:10, ครั้งที่3:10</code> (แล้วค่อยเพิ่ม "กลางภาค" กับ "ปลายภาค" แยกหมวดต่างหากด้านบน)
+                </p>
+                <form action="/api/teacher/grades/bulk_add_items" method="post">
+                    <input type="hidden" name="group_id" value="{group_id}">
+                    <input type="hidden" name="user" value="{user}">
+                    <label style="font-size:12.5px;font-weight:700;color:#475569;">รายการ (ชื่อ:คะแนนเต็ม, ...):</label>
+                    <textarea name="items_bulk" rows="2" placeholder="เช่น ครั้งที่1:10, ครั้งที่2:10, ครั้งที่3:10" required style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13.5px;"></textarea>
+                    <label style="font-size:12.5px;font-weight:700;color:#475569;margin-top:8px;display:block;">หมวดหมู่ (ของทุกรายการที่พิมพ์):</label>
+                    <select name="category">
+                        <option value="คะแนนเก็บ">คะแนนเก็บ</option>
+                        <option value="กลางภาค">กลางภาค</option>
+                        <option value="ปลายภาค">ปลายภาค</option>
+                    </select>
+                    <button type="submit" class="btn-submit">⚡ เพิ่มทั้งหมด</button>
+                </form>
+            </div>
+
+            <div class="card" style="background:#eff6ff;border:1px solid #bfdbfe;">
+                <p style="margin:0;font-size:12.5px;color:#1e40af;">
+                    💡 กรอกคะแนนในตารางด้านล่างได้เหมือน Excel เลย — พิมพ์ตัวเลขแล้วกด Tab/Enter หรือคลิกออกจากช่อง ระบบจะคำนวณ "ผลรวมคะแนนเก็บ" กับ "ผลรวมคะแนน" ให้ทันที แล้วบันทึกอัตโนมัติ (ช่องจะขึ้นกรอบเขียวเมื่อบันทึกสำเร็จ)
+                </p>
+            </div>
+
+            {classroom_tables}
+        </div>
+        <script>
+        function updateRowTotals(input) {{
+            const tr = input.closest('tr');
+            if (!tr) return;
+            const sum = (sel) => Array.from(tr.querySelectorAll(sel)).reduce((acc, el) => acc + (parseFloat(el.value) || 0), 0);
+            const collectGot = sum('.gr-collect');
+            const midGot = sum('.gr-mid');
+            const finalGot = sum('.gr-final');
+            const grand = collectGot + midGot + finalGot;
+
+            const collectCell = tr.querySelector('[data-row-sum="collect"]');
+            if (collectCell) {{
+                const maxTxt = collectCell.textContent.split('/')[1] || '0';
+                collectCell.textContent = (Math.round(collectGot * 100) / 100) + '/' + maxTxt;
+            }}
+            const grandCell = tr.querySelector('[data-row-sum="grand"]');
+            if (grandCell) {{
+                grandCell.textContent = (Math.round(grand * 100) / 100);
+            }}
+        }}
+
+        async function saveGradeCell(input) {{
+            const itemId = input.dataset.itemId;
+            const uid = input.dataset.uid;
+            const maxVal = parseFloat(input.dataset.max);
+            let val = input.value.trim();
+
+            if (val !== "" && parseFloat(val) > maxVal) {{
+                input.classList.remove('gr-saved');
+                input.classList.add('gr-error');
+                alert('คะแนนที่กรอก (' + val + ') เกินคะแนนเต็ม (' + maxVal + ')');
+                return;
+            }}
+
+            const body = new URLSearchParams();
+            body.set('group_id', '{group_id}');
+            body.set('user', '{user}');
+            body.set('item_id', itemId);
+            body.set('student_uid', uid);
+            body.set('score', val);
+
+            try {{
+                const res = await fetch('/api/teacher/grades/ajax_set_score', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/x-www-form-urlencoded' }},
+                    body: body.toString()
+                }});
+                const data = await res.json();
+                if (data.ok) {{
+                    input.classList.remove('gr-error');
+                    input.classList.add('gr-saved');
+                    setTimeout(() => input.classList.remove('gr-saved'), 1200);
+                }} else {{
+                    input.classList.add('gr-error');
+                }}
+            }} catch (e) {{
+                input.classList.add('gr-error');
+            }}
+        }}
+        </script>
+    </body></html>
+    """
+
+
+@app.post("/api/teacher/grades/add_item")
+async def api_grades_add_item(group_id: int = Form(...), user: str = Form(...), item_name: str = Form(...),
+                               max_score: float = Form(...), category: str = Form("คะแนนเก็บ"), user_session: Optional[str] = Cookie(None)):
+    if not user_session or user_session != f"teacher_{urllib.parse.quote(user)}":
+        return HTMLResponse("Unauthorized", status_code=401)
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (group_id,))
+    row = cursor.fetchone()
+    if not row or row[0] != user:
+        conn.close()
+        return alert_redirect("ไม่มีสิทธิ์", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
+    cursor.execute("INSERT INTO grade_items (group_id, item_name, max_score, category, created_by, created_at) VALUES (?,?,?,?,?,?)",
+                   (group_id, item_name.strip(), max_score, category, user, datetime.now().strftime("%d/%m/%Y %H:%M")))
+    conn.commit()
+    conn.close()
+    return alert_redirect("เพิ่มรายการคะแนนเรียบร้อยแล้ว", type="success", url=f"/app/grades/{group_id}?user={urllib.parse.quote(user)}")
+
+@app.get("/app/grades/{group_id}/edit_item", response_class=HTMLResponse)
+async def app_grades_edit_item_page(group_id: int, item_id: int, user: str, user_session: Optional[str] = Cookie(None)):
+    """✎ หน้าแก้ไขรายการคะแนนที่มีอยู่แล้ว — เปลี่ยนชื่อ / คะแนนเต็ม / หมวดหมู่ได้อิสระ ไม่ล็อกไว้ที่ค่าใดค่าหนึ่ง"""
+    if not user_session or user_session != f"teacher_{urllib.parse.quote(user)}":
+        return RedirectResponse(url="/login", status_code=303)
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (group_id,))
+    row = cursor.fetchone()
+    if not row or row[0] != user:
+        conn.close()
+        return alert_redirect("ไม่มีสิทธิ์เข้าถึง", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
+    cursor.execute("SELECT item_id, item_name, max_score, category FROM grade_items WHERE item_id=? AND group_id=?", (item_id, group_id))
+    it = cursor.fetchone()
+    if not it:
+        conn.close()
+        return alert_redirect("ไม่พบรายการคะแนนนี้", type="error", url=f"/app/grades/{group_id}?user={urllib.parse.quote(user)}")
+    # 🔎 หาคะแนนสูงสุดที่นักเรียนคนใดคนหนึ่งกรอกไว้แล้วในรายการนี้ (เตือนถ้าตั้งคะแนนเต็มใหม่ต่ำกว่านี้)
+    cursor.execute("SELECT MAX(score) FROM grade_scores WHERE item_id=?", (item_id,))
+    highest_entered = cursor.fetchone()[0]
+    conn.close()
+
+    _, item_name, max_score, category = it
+    uq = urllib.parse.quote(user)
+    warn_html = ""
+    if highest_entered is not None:
+        warn_html = f"""<div class="card" style="background:#fffbeb;border:1px solid #fde68a;">
+            <p style="margin:0;font-size:12.5px;color:#92400e;">
+                ⚠️ ตอนนี้มีนักเรียนที่ได้คะแนนสูงสุด <b>{highest_entered:g}</b> ในรายการนี้แล้ว —
+                ถ้าตั้งคะแนนเต็มใหม่ให้ต่ำกว่านี้ ระบบจะปรับลดคะแนนที่เกินให้เท่ากับคะแนนเต็มใหม่โดยอัตโนมัติ
+            </p>
+        </div>"""
+
+    category_options = "".join([
+        f'<option value="{c}" {"selected" if c == category else ""}>{c}</option>'
+        for c in ["คะแนนเก็บ", "กลางภาค", "ปลายภาค"]
+    ])
+
+    return f"""
+    <html>{STYLE_HEADER}
+    <body>
+        <div class="navbar">
+            <h1><img src="{LOGO_URL}" class="nav-logo"> ✎ แก้ไขรายการคะแนน</h1>
+            <a href="/app/grades/{group_id}?user={uq}" class="btn btn-secondary">⬅ กลับ</a>
+        </div>
+        <div class="main-container">
+            {warn_html}
+            <div class="card">
+                <h2>✎ {item_name}</h2>
+                <form action="/api/teacher/grades/edit_item" method="post">
+                    <input type="hidden" name="group_id" value="{group_id}">
+                    <input type="hidden" name="user" value="{user}">
+                    <input type="hidden" name="item_id" value="{item_id}">
+                    <label style="font-size:12.5px;font-weight:700;color:#475569;">ชื่อรายการ:</label>
+                    <input type="text" name="item_name" value="{item_name}" required>
+                    <label style="font-size:12.5px;font-weight:700;color:#475569;">คะแนนเต็ม (ตั้งได้ตามต้องการ ไม่จำกัดค่า):</label>
+                    <input type="number" step="0.5" min="0.5" name="max_score" value="{max_score:g}" required>
+                    <label style="font-size:12.5px;font-weight:700;color:#475569;">หมวดหมู่:</label>
+                    <select name="category">{category_options}</select>
+                    <button type="submit" class="btn-submit">💾 บันทึกการแก้ไข</button>
+                </form>
+            </div>
+        </div>
+    </body></html>
+    """
+
+@app.post("/api/teacher/grades/edit_item")
+async def api_grades_edit_item(group_id: int = Form(...), user: str = Form(...), item_id: int = Form(...),
+                                item_name: str = Form(...), max_score: float = Form(...),
+                                category: str = Form("คะแนนเก็บ"), user_session: Optional[str] = Cookie(None)):
+    """✎ แก้ไขชื่อ/คะแนนเต็ม/หมวดหมู่ของรายการคะแนนที่มีอยู่แล้ว — ครูปรับคะแนนเต็มใหม่ได้อิสระ ไม่ตายตัว"""
+    if not user_session or user_session != f"teacher_{urllib.parse.quote(user)}":
+        return HTMLResponse("Unauthorized", status_code=401)
+    item_name = item_name.strip()
+    if not item_name:
+        return alert_redirect("กรุณาระบุชื่อรายการ", type="error", url=f"/app/grades/{group_id}?user={urllib.parse.quote(user)}")
+    if max_score <= 0:
+        return alert_redirect("คะแนนเต็มต้องมากกว่า 0", type="error", url=f"/app/grades/{group_id}?user={urllib.parse.quote(user)}")
+
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (group_id,))
+    row = cursor.fetchone()
+    if not row or row[0] != user:
+        conn.close()
+        return alert_redirect("ไม่มีสิทธิ์", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
+    cursor.execute("SELECT item_id FROM grade_items WHERE item_id=? AND group_id=?", (item_id, group_id))
+    if not cursor.fetchone():
+        conn.close()
+        return alert_redirect("ไม่พบรายการคะแนนนี้", type="error", url=f"/app/grades/{group_id}?user={urllib.parse.quote(user)}")
+
+    # 🧮 ถ้าคะแนนเต็มใหม่ต่ำกว่าคะแนนที่นักเรียนบางคนได้ไปแล้ว ให้ปรับลดคะแนนส่วนเกินลงมาเท่ากับคะแนนเต็มใหม่ (กันคะแนนเกินเต็ม)
+    cursor.execute("UPDATE grade_scores SET score=? WHERE item_id=? AND score>?", (max_score, item_id, max_score))
+    clamped = cursor.rowcount
+
+    cursor.execute("UPDATE grade_items SET item_name=?, max_score=?, category=? WHERE item_id=? AND group_id=?",
+                   (item_name, max_score, category, item_id, group_id))
+    conn.commit()
+    conn.close()
+
+    msg = f"แก้ไขรายการคะแนนเรียบร้อยแล้ว (คะแนนเต็มใหม่: {max_score:g})"
+    if clamped:
+        msg += f" — ปรับลดคะแนนของนักเรียน {clamped} คนที่เกินคะแนนเต็มใหม่ให้แล้ว"
+    return alert_redirect(msg, type="success", url=f"/app/grades/{group_id}?user={urllib.parse.quote(user)}")
+
+@app.post("/api/teacher/grades/set_score")
+async def api_grades_set_score(group_id: int = Form(...), user: str = Form(...), item_id: int = Form(...),
+                                student_uid: str = Form(...), score: float = Form(...), user_session: Optional[str] = Cookie(None)):
+    if not user_session or user_session != f"teacher_{urllib.parse.quote(user)}":
+        return HTMLResponse("Unauthorized", status_code=401)
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (group_id,))
+    row = cursor.fetchone()
+    if not row or row[0] != user:
+        conn.close()
+        return alert_redirect("ไม่มีสิทธิ์", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
+    cursor.execute("""INSERT INTO grade_scores (item_id, student_uid, score) VALUES (?,?,?)
+        ON CONFLICT(item_id, student_uid) DO UPDATE SET score=excluded.score""", (item_id, student_uid, score))
+    conn.commit()
+    conn.close()
+    return alert_redirect("บันทึกคะแนนเรียบร้อยแล้ว", type="success", url=f"/app/grades/{group_id}?user={urllib.parse.quote(user)}")
+
+@app.post("/api/teacher/grades/bulk_add_items")
+async def api_grades_bulk_add_items(group_id: int = Form(...), user: str = Form(...), items_bulk: str = Form(...),
+                                     category: str = Form("คะแนนเก็บ"), user_session: Optional[str] = Cookie(None)):
+    """⚡ เพิ่มรายการคะแนนหลายคอลัมน์พร้อมกัน เช่น 'ครั้งที่1:10, ครั้งที่2:10, กลางภาค:30/30' """
+    if not user_session or user_session != f"teacher_{urllib.parse.quote(user)}":
+        return HTMLResponse("Unauthorized", status_code=401)
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (group_id,))
+    row = cursor.fetchone()
+    if not row or row[0] != user:
+        conn.close()
+        return alert_redirect("ไม่มีสิทธิ์", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
+
+    added = 0
+    skipped = []
+    created_at = datetime.now().strftime("%d/%m/%Y %H:%M")
+    for chunk in items_bulk.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        if ":" not in chunk:
+            skipped.append(chunk)
+            continue
+        name_part, score_part = chunk.rsplit(":", 1)
+        name_part = name_part.strip()
+        score_part = score_part.strip()
+        # รองรับทั้ง "10" และ "30/30" (เอาตัวเลขหลัง / เป็นคะแนนเต็ม)
+        if "/" in score_part:
+            score_part = score_part.split("/")[-1].strip()
+        try:
+            max_score = float(score_part)
+        except ValueError:
+            skipped.append(chunk)
+            continue
+        if not name_part or max_score <= 0:
+            skipped.append(chunk)
+            continue
+        cursor.execute("INSERT INTO grade_items (group_id, item_name, max_score, category, created_by, created_at) VALUES (?,?,?,?,?,?)",
+                       (group_id, name_part, max_score, category, user, created_at))
+        added += 1
+    conn.commit()
+    conn.close()
+
+    if added and not skipped:
+        return alert_redirect(f"เพิ่มรายการคะแนนสำเร็จ {added} รายการ", type="success", url=f"/app/grades/{group_id}?user={urllib.parse.quote(user)}")
+    elif added and skipped:
+        return alert_redirect(f"เพิ่มสำเร็จ {added} รายการ (ข้าม {len(skipped)} รายการที่รูปแบบไม่ถูกต้อง)", type="warning", url=f"/app/grades/{group_id}?user={urllib.parse.quote(user)}")
+    else:
+        return alert_redirect("ไม่พบรายการที่ถูกต้อง กรุณาใช้รูปแบบ 'ชื่อ:คะแนนเต็ม' คั่นด้วยจุลภาค", type="error", url=f"/app/grades/{group_id}?user={urllib.parse.quote(user)}")
+
+@app.post("/api/teacher/grades/ajax_set_score")
+async def api_grades_ajax_set_score(group_id: int = Form(...), user: str = Form(...), item_id: int = Form(...),
+                                     student_uid: str = Form(...), score: str = Form(""), user_session: Optional[str] = Cookie(None)):
+    """✏️ บันทึกคะแนนทีละช่องแบบ AJAX (ใช้กับตารางกรอกคะแนนสไตล์ Excel) — คืนค่าเป็น JSON เสมอ"""
+    if not user_session or user_session != f"teacher_{urllib.parse.quote(user)}":
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (group_id,))
+    row = cursor.fetchone()
+    if not row or row[0] != user:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+
+    score = score.strip()
+    if score == "":
+        # ✅ เคลียร์ช่องคะแนน (ลบแถวคะแนนของนักเรียนคนนี้ในรายการนี้)
+        cursor.execute("DELETE FROM grade_scores WHERE item_id=? AND student_uid=?", (item_id, student_uid))
+        conn.commit()
+        conn.close()
+        return JSONResponse({"ok": True, "cleared": True})
+
+    try:
+        score_val = float(score)
+    except ValueError:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "invalid_score"}, status_code=400)
+
+    cursor.execute("SELECT max_score FROM grade_items WHERE item_id=? AND group_id=?", (item_id, group_id))
+    item_row = cursor.fetchone()
+    if not item_row:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "item_not_found"}, status_code=404)
+    if score_val < 0 or score_val > item_row[0]:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "out_of_range"}, status_code=400)
+
+    cursor.execute("""INSERT INTO grade_scores (item_id, student_uid, score) VALUES (?,?,?)
+        ON CONFLICT(item_id, student_uid) DO UPDATE SET score=excluded.score""", (item_id, student_uid, score_val))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True, "score": score_val})
+
+@app.get("/api/teacher/grades/delete_item")
+async def api_grades_delete_item(item_id: int, group_id: int, user: str, user_session: Optional[str] = Cookie(None)):
+    if not user_session or user_session != f"teacher_{urllib.parse.quote(user)}":
+        return HTMLResponse("Unauthorized", status_code=401)
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (group_id,))
+    row = cursor.fetchone()
+    if not row or row[0] != user:
+        conn.close()
+        return alert_redirect("ไม่มีสิทธิ์", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
+    cursor.execute("DELETE FROM grade_scores WHERE item_id=?", (item_id,))
+    cursor.execute("DELETE FROM grade_items WHERE item_id=? AND group_id=?", (item_id, group_id))
+    conn.commit()
+    conn.close()
+    return alert_redirect("ลบรายการคะแนนเรียบร้อยแล้ว", type="success", url=f"/app/grades/{group_id}?user={urllib.parse.quote(user)}")
+
+@app.get("/student/grades", response_class=HTMLResponse)
+async def student_grades(user_session: Optional[str] = Cookie(None)):
+    if not user_session or not user_session.startswith("student_"):
+        return RedirectResponse(url="/login", status_code=303)
+    uid = urllib.parse.unquote(user_session.replace("student_", "", 1))
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("""SELECT g.group_id, g.group_name, g.grades_visibility FROM course_groups g
+        WHERE g.group_id IN (SELECT group_id FROM group_assignments WHERE student_uid=?)""", (uid,))
+    my_groups = cursor.fetchall()
+
+    rows_html = ""
+    for g_id, g_name, visibility in my_groups:
+        visibility = visibility or "hidden"
+        can_view = visibility == "all"
+        if visibility == "custom":
+            cursor.execute("SELECT 1 FROM grade_visible_students WHERE group_id=? AND student_uid=?", (g_id, uid))
+            can_view = cursor.fetchone() is not None
+
+        if not can_view:
+            rows_html += f"""<tr>
+                <td style="text-align:left;">📘 {g_name}</td>
+                <td colspan="3" style="color:#94a3b8;font-size:12px;">🔒 ยังไม่เปิดให้ดูคะแนน</td>
+            </tr>"""
+            continue
+
+        cursor.execute("""SELECT gi.item_id, gi.max_score, gi.category, gs.score
+            FROM grade_items gi
+            LEFT JOIN grade_scores gs ON gs.item_id = gi.item_id AND gs.student_uid = ?
+            WHERE gi.group_id = ?""", (uid, g_id))
+        items = cursor.fetchall()
+
+        collect_got = sum(sc or 0 for _, mx, cat, sc in items if cat == "คะแนนเก็บ")
+        collect_max = sum(mx for _, mx, cat, sc in items if cat == "คะแนนเก็บ")
+        mid_got = sum(sc or 0 for _, mx, cat, sc in items if cat == "กลางภาค")
+        mid_max = sum(mx for _, mx, cat, sc in items if cat == "กลางภาค")
+        final_got = sum(sc or 0 for _, mx, cat, sc in items if cat == "ปลายภาค")
+        final_max = sum(mx for _, mx, cat, sc in items if cat == "ปลายภาค")
+        grand_got = collect_got + mid_got + final_got
+        grand_max = collect_max + mid_max + final_max
+
+        final_col = f"""<td>{final_got:g}/{final_max:g}</td>""" if final_max else ""
+        rows_html += f"""<tr>
+            <td style="text-align:left;">📘 {g_name}</td>
+            <td>{collect_got:g}/{collect_max:g}</td>
+            <td>{mid_got:g}/{mid_max:g}</td>
+            {final_col}
+            <td style="font-weight:800;color:#2563eb;">{grand_got:g}/{grand_max:g}</td>
+        </tr>"""
+    conn.close()
+
+    return f"""
+    <html>{STYLE_HEADER}
+    <style>
+        .my-grades-table {{ border-collapse:collapse; width:100%; font-size:13px; }}
+        .my-grades-table th, .my-grades-table td {{ border:1px solid #e2e8f0; padding:10px 8px; text-align:center; }}
+        .my-grades-table th {{ background:#f1f5f9; color:#334155; font-size:12px; }}
+    </style>
+    <body>
+        <div class="navbar">
+            <h1><img src="{LOGO_URL}" class="nav-logo"> 📊 ผลการเรียนของฉัน</h1>
+            <a href="/student/dashboard" class="btn btn-secondary">⬅ กลับ</a>
+        </div>
+        <div class="main-container">
+            <div class="card" style="overflow-x:auto;">
+                <table class="my-grades-table">
+                    <thead><tr>
+                        <th style="text-align:left;">วิชา</th>
+                        <th>คะแนนเก็บ</th>
+                        <th>กลางภาค</th>
+                        <th>รวมทั้งหมด</th>
+                    </tr></thead>
+                    <tbody>{rows_html if rows_html else "<tr><td colspan='4' style='color:#94a3b8;text-align:center;'>ยังไม่มีข้อมูลผลการเรียน</td></tr>"}</tbody>
+                </table>
+            </div>
+        </div>
+    </body></html>
+    """
+
+# ---------- 💳 ชำระเงิน (แอดมินบันทึกรายการ/สถานะ / นักเรียนดูยอด) ----------
+@app.get("/admin/payments", response_class=HTMLResponse)
+async def admin_payments_page(user_session: Optional[str] = Cookie(None)):
+    if user_session != "admin":
+        return RedirectResponse(url="/login", status_code=303)
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT payment_id, student_uid, item_name, amount, status, due_date FROM payments ORDER BY payment_id DESC")
+    rows = cursor.fetchall()
+    conn.close()
+
+    students = get_sorted_master_students()
+    student_map = {s['uid']: s for s in students}
+    student_options = "".join([f'<option value="{s["uid"]}">{s["name"]} ({s["class"]} เลขที่ {s["no"]})</option>' for s in students])
+
+    cards = ""
+    for p_id, uid, item_name, amount, status, due_date in rows:
+        s = student_map.get(uid, {"name": uid, "class": "-", "no": "-"})
+        is_paid = status == "paid"
+        cards += f"""
+        <div class="card" style="margin-bottom:10px; border-left:4px solid {'#15803d' if is_paid else '#b91c1c'};">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+                <div>
+                    <div style="font-weight:800;font-size:14px;">{item_name}</div>
+                    <div style="font-size:12px;color:#64748b;">{s['name']} · {s['class']} เลขที่ {s['no']}</div>
+                </div>
+                <span style="font-weight:800;color:{'#15803d' if is_paid else '#b91c1c'};font-size:12.5px;white-space:nowrap;">{'✅ ชำระแล้ว' if is_paid else '⏳ ยังไม่ชำระ'}</span>
+            </div>
+            <div style="font-size:13px;margin:8px 0;">💰 {amount:g} บาท · กำหนดชำระ: {due_date or 'ไม่ระบุ'}</div>
+            <div style="display:flex;gap:6px;">
+                <a href="/api/admin/payment/toggle?payment_id={p_id}" class="btn btn-secondary" style="padding:5px 10px;font-size:11px;">{'↩️ ยกเลิกชำระ' if is_paid else '✅ บันทึกว่าชำระแล้ว'}</a>
+                <a href="/api/admin/payment/delete?payment_id={p_id}" class="btn btn-danger" style="padding:5px 10px;font-size:11px;" onclick="return confirm('ลบรายการนี้?')">🗑️ ลบ</a>
+            </div>
+        </div>"""
+
+    return f"""
+    <html>{STYLE_HEADER}
+    <body>
+        <div class="navbar">
+            <h1><img src="{LOGO_URL}" class="nav-logo"> 💳 ชำระเงิน</h1>
+            <a href="/admin/dashboard" class="btn btn-secondary">⬅ กลับหน้าควบคุม</a>
+        </div>
+        <div class="main-container">
+            <div class="card">
+                <h2>➕ เพิ่มรายการเรียกเก็บเงิน</h2>
+                <form action="/api/admin/payment/add" method="post">
+                    <label style="font-size:12.5px;font-weight:700;color:#475569;">นักเรียน:</label>
+                    <select name="student_uid" required>{student_options}</select>
+                    <label style="font-size:12.5px;font-weight:700;color:#475569;">รายการ:</label>
+                    <input type="text" name="item_name" placeholder="เช่น ค่าเทอม 1/2569" required>
+                    <label style="font-size:12.5px;font-weight:700;color:#475569;">จำนวนเงิน (บาท):</label>
+                    <input type="number" step="0.01" name="amount" required>
+                    <label style="font-size:12.5px;font-weight:700;color:#475569;">กำหนดชำระ:</label>
+                    <input type="date" name="due_date">
+                    <button type="submit" class="btn-submit">💾 เพิ่มรายการ</button>
+                </form>
+            </div>
+            <div class="card"><h2 style="margin:0;">📋 รายการทั้งหมด ({len(rows)})</h2></div>
+            {cards if cards else "<p style='color:#94a3b8;text-align:center;padding:20px 0;'>ยังไม่มีรายการ</p>"}
+        </div>
+    </body></html>
+    """
+
+@app.post("/api/admin/payment/add")
+async def api_payment_add(student_uid: str = Form(...), item_name: str = Form(...), amount: float = Form(...),
+                           due_date: str = Form(""), user_session: Optional[str] = Cookie(None)):
+    if user_session != "admin": return HTMLResponse("Unauthorized", status_code=401)
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO payments (student_uid, item_name, amount, status, due_date, recorded_by, created_at) VALUES (?,?,?,?,?,?,?)",
+                   (student_uid, item_name.strip(), amount, "unpaid", due_date, "admin", datetime.now().strftime("%d/%m/%Y %H:%M")))
+    conn.commit()
+    conn.close()
+    return alert_redirect("เพิ่มรายการเรียบร้อยแล้ว", type="success", url="/admin/payments")
+
+@app.get("/api/admin/payment/toggle")
+async def api_payment_toggle(payment_id: int, user_session: Optional[str] = Cookie(None)):
+    if user_session != "admin": return HTMLResponse("Unauthorized", status_code=401)
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT status FROM payments WHERE payment_id=?", (payment_id,))
+    row = cursor.fetchone()
+    if row:
+        new_status = "unpaid" if row[0] == "paid" else "paid"
+        paid_at = datetime.now().strftime("%d/%m/%Y %H:%M") if new_status == "paid" else None
+        cursor.execute("UPDATE payments SET status=?, paid_at=? WHERE payment_id=?", (new_status, paid_at, payment_id))
+        conn.commit()
+    conn.close()
+    return RedirectResponse(url="/admin/payments", status_code=303)
+
+@app.get("/api/admin/payment/delete")
+async def api_payment_delete(payment_id: int, user_session: Optional[str] = Cookie(None)):
+    if user_session != "admin": return HTMLResponse("Unauthorized", status_code=401)
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM payments WHERE payment_id=?", (payment_id,))
+    conn.commit()
+    conn.close()
+    return RedirectResponse(url="/admin/payments", status_code=303)
+
+@app.get("/student/payments", response_class=HTMLResponse)
+async def student_payments(user_session: Optional[str] = Cookie(None)):
+    if not user_session or not user_session.startswith("student_"):
+        return RedirectResponse(url="/login", status_code=303)
+    uid = urllib.parse.unquote(user_session.replace("student_", "", 1))
+    conn = sqlite3.connect('attendance_pro.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT item_name, amount, status, due_date, paid_at FROM payments WHERE student_uid=? ORDER BY payment_id DESC", (uid,))
+    rows = cursor.fetchall()
+    conn.close()
+
+    total_unpaid = sum(r[1] for r in rows if r[2] != "paid")
+    cards = ""
+    for item_name, amount, status, due_date, paid_at in rows:
+        is_paid = status == "paid"
+        cards += f"""
+        <div class="card" style="margin-bottom:10px;border-left:4px solid {'#15803d' if is_paid else '#b91c1c'};">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+                <div style="font-weight:800;font-size:14px;">{item_name}</div>
+                <span style="font-weight:800;color:{'#15803d' if is_paid else '#b91c1c'};font-size:12.5px;white-space:nowrap;">{'✅ ชำระแล้ว' if is_paid else '⏳ ยังไม่ชำระ'}</span>
+            </div>
+            <div style="font-size:13px;color:#475569;margin-top:6px;">💰 {amount:g} บาท</div>
+            <div style="font-size:11.5px;color:#94a3b8;margin-top:4px;">{'ชำระเมื่อ ' + paid_at if is_paid and paid_at else 'กำหนดชำระ: ' + (due_date or 'ไม่ระบุ')}</div>
+        </div>"""
+
+    return f"""
+    <html>{STYLE_HEADER}
+    <body>
+        <div class="navbar">
+            <h1><img src="{LOGO_URL}" class="nav-logo"> 💳 การชำระเงินของฉัน</h1>
+            <a href="/student/dashboard" class="btn btn-secondary">⬅ กลับ</a>
+        </div>
+        <div class="main-container">
+            <div class="card" style="text-align:center;margin-bottom:14px;">
+                <div style="font-size:13px;color:#64748b;">ยอดค้างชำระทั้งหมด</div>
+                <div style="font-size:24px;font-weight:800;color:{'#15803d' if total_unpaid==0 else '#b91c1c'};">{total_unpaid:g} บาท</div>
+            </div>
+            {cards if cards else "<p style='color:#94a3b8;text-align:center;padding:20px 0;'>ยังไม่มีรายการชำระเงิน</p>"}
+        </div>
+    </body></html>
+    """
+
+# ==========================================
+# 🚫 [404 NOT FOUND — K-Techinteractive Style]
+# ==========================================
+from fastapi import Request as _Request
+from fastapi.exceptions import HTTPException as _HTTPException
+from starlette.exceptions import HTTPException as _StarletteHTTPException
+
+NOT_FOUND_PAGE = """<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>404 — K-Techinteractive</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&family=Noto+Sans+Thai:wght@400;600;700;800&display=swap');
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter','Noto Sans Thai',sans-serif;
+    background: #0a0f1e;
+    min-height: 100vh; display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    padding: 24px; overflow: hidden;
+    color: #e2e8f0;
+  }
+  /* animated background grid */
+  body::before {
+    content: ""; position: fixed; inset: 0;
+    background-image:
+      linear-gradient(rgba(96,165,250,0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(96,165,250,0.04) 1px, transparent 1px);
+    background-size: 48px 48px;
+    animation: gridMove 20s linear infinite;
+    pointer-events: none;
+  }
+  @keyframes gridMove { 0%{background-position:0 0} 100%{background-position:48px 48px} }
+  /* glow blobs */
+  .blob1,.blob2 {
+    position: fixed; border-radius: 50%; filter: blur(80px); pointer-events:none; opacity: 0.35;
+  }
+  .blob1 { width:400px;height:400px; background:radial-gradient(circle,#1d4ed8,transparent); top:-80px; right:-80px; animation: float1 8s ease-in-out infinite; }
+  .blob2 { width:300px;height:300px; background:radial-gradient(circle,#7c3aed,transparent); bottom:-60px; left:-60px; animation: float2 10s ease-in-out infinite; }
+  @keyframes float1 { 0%,100%{transform:translate(0,0)} 50%{transform:translate(-30px,20px)} }
+  @keyframes float2 { 0%,100%{transform:translate(0,0)} 50%{transform:translate(20px,-25px)} }
+
+  .container {
+    position: relative; text-align: center; z-index: 1;
+    max-width: 480px; width: 100%;
+  }
+
+  /* Brand badge */
+  .brand {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+    backdrop-filter: blur(12px); border-radius: 100px;
+    padding: 6px 16px; font-size: 12px; font-weight: 700;
+    color: rgba(255,255,255,0.6); letter-spacing: 1.5px; text-transform: uppercase;
+    margin-bottom: 32px;
+  }
+  .brand-dot { width: 7px; height: 7px; background: #3b82f6; border-radius: 50%; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.5;transform:scale(0.8)} }
+
+  /* 404 number */
+  .error-code {
+    font-size: clamp(90px,22vw,140px); font-weight: 900; line-height: 0.9;
+    background: linear-gradient(135deg,#60a5fa,#818cf8,#c084fc);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text; letter-spacing: -4px;
+    filter: drop-shadow(0 0 40px rgba(96,165,250,0.4));
+    animation: shimmer 3s ease-in-out infinite;
+  }
+  @keyframes shimmer {
+    0%,100%{ filter: drop-shadow(0 0 30px rgba(96,165,250,0.3)); }
+    50%{ filter: drop-shadow(0 0 60px rgba(129,140,248,0.6)); }
+  }
+
+  .divider {
+    width: 60px; height: 3px; margin: 24px auto 24px;
+    background: linear-gradient(90deg,#3b82f6,#8b5cf6);
+    border-radius: 100px;
+  }
+
+  .title {
+    font-size: 20px; font-weight: 800; color: #f1f5f9; margin-bottom: 10px;
+  }
+  .desc {
+    font-size: 14px; color: #64748b; line-height: 1.7; margin-bottom: 10px;
+  }
+  .path-badge {
+    display: inline-block; background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 8px; padding: 5px 14px;
+    font-family: 'SF Mono','Fira Code',monospace; font-size: 13px;
+    color: #94a3b8; margin-bottom: 32px; word-break: break-all;
+  }
+
+  .btn-group { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 12px 24px; border-radius: 12px; font-size: 14px; font-weight: 700;
+    text-decoration: none; transition: transform .15s, box-shadow .15s;
+    cursor: pointer; border: none;
+  }
+  .btn:active { transform: scale(0.96); }
+  .btn-primary {
+    background: linear-gradient(135deg,#2563eb,#4f46e5);
+    color: #fff; box-shadow: 0 4px 20px rgba(37,99,235,0.4);
+  }
+  .btn-primary:hover { box-shadow: 0 6px 28px rgba(37,99,235,0.55); }
+  .btn-ghost {
+    background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+    color: #94a3b8;
+  }
+  .btn-ghost:hover { background: rgba(255,255,255,0.1); color: #e2e8f0; }
+
+  .footer-note {
+    margin-top: 48px; font-size: 11px; color: #334155; letter-spacing: 0.5px;
+  }
+  .footer-note span { color: #3b82f6; font-weight: 700; }
+</style>
+</head>
+<body>
+<div class="blob1"></div>
+<div class="blob2"></div>
+<div class="container">
+  <div class="brand">
+    <div class="brand-dot"></div>
+    K-TECHINTERACTIVE
+  </div>
+  <div class="error-code">404</div>
+  <div class="divider"></div>
+  <div class="title">ไม่พบการเรียกใช้ / ที่ไม่พบ</div>
+  <div class="desc">หน้าที่คุณกำลังค้นหาอาจถูกย้าย ลบออก<br>หรือยังไม่ได้รับการพัฒนาในระบบนี้</div>
+  <div class="path-badge" id="req-path">—</div>
+  <div class="btn-group">
+    <a href="/student/dashboard" class="btn btn-primary">
+      <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9,22 9,12 15,12 15,22"/></svg>
+      กลับหน้าหลัก
+    </a>
+    <button onclick="history.back()" class="btn btn-ghost">
+      <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="15,18 9,12 15,6"/></svg>
+      ย้อนกลับ
+    </button>
+  </div>
+  <div class="footer-note">powered by <span>K-Techinteractive</span> · K-School Enterprise</div>
+</div>
+<script>
+  // แสดง path ที่ผู้ใช้พยายามเข้าถึง
+  document.getElementById('req-path').textContent = window.location.pathname + (window.location.search || '');
+</script>
+</body>
+</html>"""
+
+@app.exception_handler(404)
+async def not_found_handler(request: _Request, exc: _StarletteHTTPException):
+    return HTMLResponse(NOT_FOUND_PAGE, status_code=404)
+
+@app.exception_handler(_StarletteHTTPException)
+async def http_exception_handler(request: _Request, exc: _StarletteHTTPException):
+    if exc.status_code == 404:
+        return HTMLResponse(NOT_FOUND_PAGE, status_code=404)
+    # สำหรับ error อื่นๆ แสดงหน้า error ทั่วไป
+    return HTMLResponse(f"""<!DOCTYPE html>
+<html lang="th"><head><meta charset="UTF-8"><title>เกิดข้อผิดพลาด {exc.status_code}</title>
+<style>body{{background:#0a0f1e;color:#e2e8f0;font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;text-align:center;padding:24px;}}.code{{font-size:80px;font-weight:900;color:#3b82f6;margin-bottom:16px;}}.msg{{color:#94a3b8;margin:8px 0 24px;}}.btn{{background:#2563eb;color:#fff;padding:10px 24px;border-radius:10px;text-decoration:none;font-weight:700;}}</style>
+</head><body>
+<div><div class="code">{exc.status_code}</div>
+<h2 style="margin-bottom:8px;">เกิดข้อผิดพลาด</h2>
+<p class="msg">{exc.detail}</p>
+<a href="/" class="btn">กลับหน้าหลัก</a>
+<p style="margin-top:40px;font-size:11px;color:#334155;">powered by <span style="color:#3b82f6;">K-Techinteractive</span></p>
+</div></body></html>""", status_code=exc.status_code)
+
+
+async def main():
+    init_db()
+    # กำหนดค่า uvicorn และรันเซิร์ฟเวอร์
+    config = uvicorn.Config(app, host="0.0.0.0", port=8080, log_level="warning")
+    server = uvicorn.Server(config)
+    
+    # รัน FastAPI server ในลูปหลัก
+    server_task = asyncio.create_task(server.serve())
+    
+    # ลองรัน Discord Bot ในลักษณะ Background Task
+    token = 'MTUxMDQ4NDg2MDg0ODgzNjcxMA.GpTvdb.4Ho5L3eqtzpXvyXlhVEzBnpFMFaPSUv21NyPz0'
+    if token:
+        try:
+            print("📡 [DISCORD BOT] กำลังพยายามเข้าสู่ระบบ...")
+            await bot.start(token)
+        except Exception as e:
+            print(f"⚠️ [DISCORD BOT ERROR] ไม่สามารถเริ่มทำงานบ็อตดิสคอร์ดได้: {e}")
+            print("🚀 [FastAPI SERVER] เว็บไซต์ยังคงรันตามปกติที่ Port 8080")
+            await server_task
+    else:
+        print("⚠️ [DISCORD BOT WARNING] ไม่พบ Token เริ่มต้นเซิร์ฟเวอร์เว็บอย่างเดียว")
+        await server_task
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n🛑 หยุดการทำงานของเซิร์ฟเวอร์เรียบร้อย")
