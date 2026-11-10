@@ -257,6 +257,606 @@ async def websocket_notify_endpoint(websocket: WebSocket):
         manager.disconnect(websocket)
 
 # ==========================================
+# 🧩 KX LAYER — ไอคอน SVG ชุดเดียวทั้งระบบ + UI ของเราเอง (ยืนยัน/ปฏิทิน/ตัวเลือก/หน้าโหลดทันที)
+#   • KX_ICONS  : ไอคอนเส้น 24x24 (วาดเอง) ใช้ผ่าน ic("ชื่อ") ฝั่งเซิร์ฟเวอร์ และแทน emoji อัตโนมัติฝั่งเบราว์เซอร์
+#   • /kx.js    : สคริปต์กลาง (แคชได้) ถูกฝังใน STYLE_HEADER ทุกหน้า
+# ==========================================
+import json as _kxjson
+import hashlib as _kxhash
+
+_P = {}  # ชื่อ -> markup ภายใน <svg viewBox="0 0 24 24">
+
+_P["home"] = '<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>'
+_P["user"] = '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>'
+_P["users"] = '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>'
+_P["user-check"] = '<path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><polyline points="17 11 19 13 23 9"/>'
+_P["user-plus"] = '<path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/>'
+_P["check"] = '<polyline points="20 6 9 17 4 12"/>'
+_P["check-circle"] = '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>'
+_P["x"] = '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>'
+_P["x-circle"] = '<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>'
+_P["octagon-x"] = '<polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>'
+_P["alert-triangle"] = '<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>'
+_P["alert-circle"] = '<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>'
+_P["info"] = '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>'
+_P["help"] = '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>'
+_P["calendar"] = '<rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>'
+_P["clock"] = '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>'
+_P["hourglass"] = '<path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.17a2 2 0 0 0-.59-1.42L12 12l-4.41 4.41A2 2 0 0 0 7 17.83V22"/><path d="M7 2v4.17a2 2 0 0 0 .59 1.42L12 12l4.41-4.41A2 2 0 0 0 17 6.17V2"/>'
+_P["pause"] = '<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>'
+_P["search"] = '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>'
+_P["plus"] = '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>'
+_P["minus"] = '<line x1="5" y1="12" x2="19" y2="12"/>'
+_P["trash"] = '<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>'
+_P["edit"] = '<path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>'
+_P["save"] = '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>'
+_P["file-text"] = '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>'
+_P["clipboard-check"] = '<path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><polyline points="9 14 11 16 15 12"/>'
+_P["bar-chart"] = '<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>'
+_P["trending-up"] = '<polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/>'
+_P["activity"] = '<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>'
+_P["sliders"] = '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>'
+_P["settings"] = '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>'
+_P["lock"] = '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>'
+_P["unlock"] = '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/>'
+_P["key"] = '<path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>'
+_P["shield"] = '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>'
+_P["bell"] = '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>'
+_P["megaphone"] = '<path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/>'
+_P["book"] = '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>'
+_P["book-open"] = '<path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>'
+_P["credit-card"] = '<rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/>'
+_P["eye"] = '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>'
+_P["eye-off"] = '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>'
+_P["download"] = '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>'
+_P["upload"] = '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>'
+_P["star"] = '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>'
+_P["award"] = '<circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/>'
+_P["trophy"] = '<path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2z"/>'
+_P["crown"] = '<path d="M2 18l2-11 5 5 3-8 3 8 5-5 2 11z"/><line x1="2" y1="21" x2="22" y2="21"/>'
+_P["map-pin"] = '<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>'
+_P["map"] = '<polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/>'
+_P["compass"] = '<circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/>'
+_P["smartphone"] = '<rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/>'
+_P["mail"] = '<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>'
+_P["image"] = '<rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>'
+_P["layers"] = '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>'
+_P["list"] = '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>'
+_P["refresh"] = '<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>'
+_P["arrow-right"] = '<line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>'
+_P["arrow-left"] = '<line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/>'
+_P["corner-left"] = '<polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/>'
+_P["chevron-down"] = '<polyline points="6 9 12 15 18 9"/>'
+_P["chevron-left"] = '<polyline points="15 18 9 12 15 6"/>'
+_P["chevron-right"] = '<polyline points="9 18 15 12 9 6"/>'
+_P["zap"] = '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>'
+_P["flag"] = '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/>'
+_P["tag"] = '<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/>'
+_P["target"] = '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>'
+_P["scissors"] = '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/>'
+_P["id-card"] = '<rect x="2" y="5" width="20" height="14" rx="2"/><circle cx="8.5" cy="11" r="2.2"/><path d="M5 16c.4-1.6 1.8-2.4 3.5-2.4S11.6 14.4 12 16"/><line x1="14" y1="10" x2="19" y2="10"/><line x1="14" y1="14" x2="18" y2="14"/>'
+_P["shirt"] = '<path d="M20.38 3.46L16 2a4 4 0 0 1-8 0L3.62 3.46a2 2 0 0 0-1.34 2.23l.58 3.47a1 1 0 0 0 .99.84H6v10c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V10h2.15a1 1 0 0 0 .99-.84l.58-3.47a2 2 0 0 0-1.34-2.23z"/>'
+_P["grad-cap"] = '<path d="M22 10L12 5 2 10l10 5 10-5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/><line x1="22" y1="10" x2="22" y2="16"/>'
+_P["school"] = '<path d="M3 21h18"/><path d="M5 21V8l7-5 7 5v13"/><path d="M9 21v-6h6v6"/><circle cx="12" cy="10" r="1.2"/>'
+_P["building"] = '<rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 22v-4h6v4"/><line x1="8" y1="6" x2="8.01" y2="6"/><line x1="12" y1="6" x2="12.01" y2="6"/><line x1="16" y1="6" x2="16.01" y2="6"/><line x1="8" y1="10" x2="8.01" y2="10"/><line x1="12" y1="10" x2="12.01" y2="10"/><line x1="16" y1="10" x2="16.01" y2="10"/>'
+_P["backpack"] = '<path d="M9 4a3 3 0 0 1 6 0"/><path d="M6 8a3 3 0 0 1 3-3h6a3 3 0 0 1 3 3v12a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2z"/><path d="M9 14h6v4H9z"/>'
+_P["database"] = '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>'
+_P["monitor"] = '<rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>'
+_P["log-out"] = '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>'
+_P["folder"] = '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>'
+_P["globe"] = '<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>'
+_P["wifi"] = '<path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/>'
+_P["signal"] = '<line x1="4" y1="20" x2="4" y2="16"/><line x1="9" y1="20" x2="9" y2="12"/><line x1="14" y1="20" x2="14" y2="8"/><line x1="19" y1="20" x2="19" y2="4"/>'
+_P["heart"] = '<path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>'
+_P["thermometer"] = '<path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z"/>'
+_P["send"] = '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>'
+_P["dollar"] = '<line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>'
+_P["rocket"] = '<path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="M12 15l-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/>'
+_P["wrench"] = '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>'
+_P["flask"] = '<path d="M9 3h6"/><path d="M10 3v6L4.5 19a1.5 1.5 0 0 0 1.3 2.2h12.4a1.5 1.5 0 0 0 1.3-2.2L14 9V3"/><path d="M7.5 15h9"/>'
+_P["bot"] = '<rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="12" cy="3.5" r="1"/><circle cx="9" cy="14" r="1"/><circle cx="15" cy="14" r="1"/>'
+_P["palette"] = '<circle cx="13.5" cy="6.5" r="1"/><circle cx="17.5" cy="10.5" r="1"/><circle cx="8.5" cy="7.5" r="1"/><circle cx="6.5" cy="12.5" r="1"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.93 0 1.5-.67 1.5-1.5 0-.43-.19-.82-.43-1.12-.23-.29-.4-.65-.4-1.04 0-.83.67-1.5 1.5-1.5H16c3.31 0 6-2.69 6-6 0-4.97-4.5-9-10-9z"/>'
+_P["puzzle"] = '<path d="M19.4 11H18V7a2 2 0 0 0-2-2h-4V3.6a2.6 2.6 0 0 0-5.2 0V5H4a2 2 0 0 0-2 2v4h1.4a2.6 2.6 0 0 1 0 5.2H2V20a2 2 0 0 0 2 2h4v-1.4a2.6 2.6 0 0 1 5.2 0V22h4a2 2 0 0 0 2-2v-4h1.4a2.6 2.6 0 0 0 0-5.2z"/>'
+_P["calculator"] = '<rect x="4" y="2" width="16" height="20" rx="2"/><line x1="8" y1="6" x2="16" y2="6"/><line x1="8" y1="11" x2="8.01" y2="11"/><line x1="12" y1="11" x2="12.01" y2="11"/><line x1="16" y1="11" x2="16.01" y2="11"/><line x1="8" y1="15" x2="8.01" y2="15"/><line x1="12" y1="15" x2="12.01" y2="15"/><line x1="16" y1="15" x2="16.01" y2="15"/>'
+_P["receipt"] = '<path d="M5 3v18l2-1.5L9 21l2-1.5 2 1.5 2-1.5 2 1.5V3z"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="9" y1="12" x2="15" y2="12"/>'
+_P["inbox"] = '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>'
+_P["lightbulb"] = '<path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.2 1 2V18h6v-1.3c0-.8.4-1.5 1-2A7 7 0 0 0 12 2z"/>'
+_P["message"] = '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>'
+_P["ban"] = '<circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>'
+_P["sun"] = '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>'
+_P["dot-red"] = '<circle cx="12" cy="12" r="6" fill="#ef4444" stroke="none"/>'
+_P["dot-green"] = '<circle cx="12" cy="12" r="6" fill="#22c55e" stroke="none"/>'
+_P["dot-yellow"] = '<circle cx="12" cy="12" r="6" fill="#eab308" stroke="none"/>'
+_P["dot-orange"] = '<circle cx="12" cy="12" r="6" fill="#f97316" stroke="none"/>'
+_P["dot-gray"] = '<circle cx="12" cy="12" r="6" fill="#cbd5e1" stroke="none"/>'
+_P["diamond"] = '<path d="M12 3l9 9-9 9-9-9z" fill="#3b82f6" stroke="none"/>'
+_P["medal-gold"] = '<path d="M8.5 14L7 22l5-3 5 3-1.5-8" stroke="#b45309" fill="none"/><circle cx="12" cy="9" r="6" fill="#fbbf24" stroke="#b45309"/>'
+_P["medal-silver"] = '<path d="M8.5 14L7 22l5-3 5 3-1.5-8" stroke="#475569" fill="none"/><circle cx="12" cy="9" r="6" fill="#e2e8f0" stroke="#475569"/>'
+_P["medal-bronze"] = '<path d="M8.5 14L7 22l5-3 5 3-1.5-8" stroke="#7c2d12" fill="none"/><circle cx="12" cy="9" r="6" fill="#fdba74" stroke="#7c2d12"/>'
+
+KX_ICONS = _P
+
+# emoji -> (ชื่อไอคอน, สีเฉพาะ | None)  (สีใช้เฉพาะตอนอยู่ในข้อความทั่วไป; ในกล่องไอคอนจะใช้สีของกล่อง)
+_E = {}
+def _m(name, color, *emojis):
+    for e in emojis:
+        _E[e] = (name, color)
+_m("check-circle", "#16a34a", "✅", "✔", "☑")
+_m("check", None, "✓")
+_m("x-circle", "#dc2626", "❌", "❎")
+_m("x", None, "✗", "✕", "✖")
+_m("alert-triangle", "#d97706", "⚠", "△")
+_m("alert-circle", "#dc2626", "🚨")
+_m("info", "#2563eb", "ℹ")
+_m("clipboard-check", None, "📋")
+_m("bar-chart", None, "📊")
+_m("trending-up", None, "📈")
+_m("arrow-left", None, "⬅")
+_m("arrow-right", None, "➔", "➜", "➡")
+_m("corner-left", None, "↩")
+_m("zap", None, "⚡", "🔌")
+_m("save", None, "💾")
+_m("backpack", None, "🎒")
+_m("school", None, "🏫")
+_m("building", None, "🏢")
+_m("grad-cap", None, "🎓")
+_m("dot-red", None, "🔴")
+_m("dot-green", None, "🟢")
+_m("dot-yellow", None, "🟡")
+_m("dot-orange", None, "🟠")
+_m("dot-gray", None, "⚪")
+_m("diamond", None, "🔷")
+_m("lock", None, "🔒", "🔐")
+_m("unlock", None, "🔓")
+_m("key", None, "🔑")
+_m("calendar", None, "📅", "🗓", "📆")
+_m("clock", None, "⏰", "⏱", "🕐", "🕑", "🕒", "⌚")
+_m("hourglass", None, "⏳", "⌛")
+_m("pause", None, "⏸")
+_m("plus", None, "➕")
+_m("minus", None, "➖")
+_m("award", None, "🎖", "🏅")
+_m("medal-gold", None, "🥇")
+_m("medal-silver", None, "🥈")
+_m("medal-bronze", None, "🥉")
+_m("trophy", None, "🏆")
+_m("crown", None, "👑")
+_m("edit", None, "📝", "✏", "✎")
+_m("eye", None, "👁")
+_m("eye-off", None, "🙈")
+_m("trash", None, "🗑")
+_m("octagon-x", None, "🛑")
+_m("ban", None, "🚫", "⛔")
+_m("shield", None, "🛡")
+_m("bell", None, "🔔")
+_m("megaphone", None, "📣", "📢")
+_m("search", None, "🔍", "🔎")
+_m("book", None, "📘", "📖")
+_m("book-open", None, "📚")
+_m("file-text", None, "📜", "📄", "📃")
+_m("user", None, "👤", "👩", "👨", "🧑", "👧", "👦", "👩‍🏫", "👨‍🏫", "🧑‍🏫")
+_m("users", None, "👥", "🧑‍🤝‍🧑", "🤝")
+_m("map-pin", None, "📍", "📌")
+_m("map", None, "🗺")
+_m("compass", None, "🧭")
+_m("smartphone", None, "📱")
+_m("mail", None, "📩", "✉", "📧")
+_m("upload", None, "📤")
+_m("download", None, "📥")
+_m("refresh", None, "🔄")
+_m("image", None, "🖼")
+_m("sliders", None, "⚙", "🎛")
+_m("wrench", None, "🔧", "🛠", "🏗", "🚧")
+_m("flask", None, "🧪")
+_m("puzzle", None, "🧩")
+_m("bot", None, "🤖")
+_m("palette", None, "🎨")
+_m("calculator", None, "🧮")
+_m("receipt", None, "🧾")
+_m("credit-card", None, "💳")
+_m("dollar", None, "💰", "💵")
+_m("inbox", None, "📭", "📬")
+_m("lightbulb", None, "💡")
+_m("message", None, "💬")
+_m("target", None, "🎯")
+_m("star", None, "🌟", "✨", "⭐", "🎉")
+_m("rocket", None, "🚀")
+_m("activity", None, "🩺")
+_m("thermometer", None, "🤒")
+_m("globe", None, "🌐")
+_m("wifi", None, "📡")
+_m("signal", None, "📶")
+_m("monitor", None, "🖥")
+_m("database", None, "🗄")
+_m("folder", None, "📁", "🗂")
+_m("tag", None, "🏷")
+_m("log-out", None, "🚪")
+_m("scissors", None, "💈")
+_m("id-card", None, "🪪")
+_m("shirt", None, "👔")
+_m("sun", None, "🏖")
+KX_EMOJI = _E
+
+
+def ic(name: str, size: int = 18, color: str = "currentColor", cls: str = "") -> str:
+    """ไอคอน SVG ฝั่งเซิร์ฟเวอร์ (เส้น 2px สีตามตัวอักษร)"""
+    inner = KX_ICONS.get(name, KX_ICONS["info"])
+    return (f'<svg class="{cls}" viewBox="0 0 24 24" width="{size}" height="{size}" fill="none" stroke="{color}" '
+            f'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{inner}</svg>')
+
+
+KX_CSS = r"""
+<style>
+/* ── ไอคอน SVG แทน emoji ── */
+.kx-i { display:inline-flex; width:1.15em; height:1.15em; vertical-align:-0.2em; flex:none; }
+.kx-i svg { width:100%; height:100%; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+.dk-stat-ico .kx-i, .dk-ico-box .kx-i, .dk-hi .kx-i, .dk-empty .em .kx-i, .kx-lead .kx-i, .kx-card-ic .kx-i { color:inherit !important; }
+.dk-stat-ico .kx-i { width:22px; height:22px; } .dk-ico-box .kx-i { width:22px; height:22px; }
+.dk-hi .kx-i { width:22px; height:22px; }
+.dk-empty .em { display:flex; width:68px; height:68px; margin:0 auto 12px; border-radius:20px; background:#eef2ff; color:#4f46e5; align-items:center; justify-content:center; font-size:0; }
+.dk-empty .em .kx-i { width:32px; height:32px; }
+.dk-hi { display:inline-flex; width:40px; height:40px; flex:none; border-radius:12px; background:rgba(255,255,255,.14); border:1px solid rgba(255,255,255,.25); align-items:center; justify-content:center; color:#fff; font-size:0; }
+/* ไอคอนนำหน้าหัวข้อเก่า ๆ → กล่องสี */
+.navbar h1 > .kx-i:first-child, .app-header h1 > .kx-i:first-child { width:34px; height:34px; padding:7px; border-radius:11px; background:rgba(255,255,255,.14); border:1px solid rgba(255,255,255,.25); color:#fff !important; vertical-align:middle; }
+.card h2 > .kx-i:first-child { width:30px; height:30px; padding:6px; border-radius:10px; background:#eef2ff; color:#4338ca !important; }
+.card h2:has(> .kx-i:first-child)::before { display:none; }
+.card h2:has(> .kx-i:first-child) { justify-content:flex-start; gap:10px; }
+
+/* ── หน้าโหลดทันที ── */
+.kx-load { position:fixed; inset:0; z-index:100000; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:20px;
+    background:radial-gradient(circle at 50% 35%, rgba(13,58,102,.95) 0%, rgba(10,36,71,.97) 45%, rgba(6,14,31,.98) 100%);
+    opacity:0; visibility:hidden; transition:opacity .1s ease, visibility .1s; }
+.kx-load.on { opacity:1; visibility:visible; }
+.kx-load-rings { position:relative; width:120px; height:120px; display:flex; align-items:center; justify-content:center; }
+.kx-load-rings i { position:absolute; border-radius:50%; border:2px solid transparent; }
+.kx-load-rings .r1 { width:120px; height:120px; border-top-color:#60a5fa; border-right-color:#60a5fa33; animation:kxSpin 1.2s linear infinite; }
+.kx-load-rings .r2 { width:94px; height:94px; border-bottom-color:#93c5fd; border-left-color:#93c5fd22; animation:kxSpin 1.8s linear infinite reverse; }
+.kx-load-rings img { width:62px; height:62px; object-fit:contain; border-radius:16px; background:#0a4a7a; padding:5px; box-shadow:0 0 26px 3px rgba(96,165,250,.45); animation:kxPulse 1.6s ease-in-out infinite; }
+.kx-load-text { color:#e2e8f0; font-weight:700; font-size:14px; letter-spacing:.3px; font-family:'Sarabun','Inter',sans-serif; }
+.kx-load-bar { width:150px; height:4px; border-radius:4px; background:#1e3a5f; overflow:hidden; }
+.kx-load-bar i { display:block; width:40%; height:100%; border-radius:4px; background:linear-gradient(90deg,#3b82f6,#93c5fd); animation:kxBar 1s ease-in-out infinite; }
+@keyframes kxSpin { to { transform:rotate(360deg); } }
+@keyframes kxPulse { 0%,100% { transform:scale(1); } 50% { transform:scale(1.06); } }
+@keyframes kxBar { 0% { transform:translateX(-100%); } 100% { transform:translateX(350%); } }
+
+/* ── กล่องยืนยัน / sheet ของเราเอง ── */
+.kx-ov { position:fixed; inset:0; z-index:99990; background:rgba(11,17,32,.55); backdrop-filter:blur(5px); display:flex; align-items:center; justify-content:center; padding:20px; opacity:0; transition:opacity .18s; }
+.kx-ov.on { opacity:1; }
+.kx-ov.sheet { align-items:flex-end; padding:0; }
+.kx-card { background:#fff; width:100%; max-width:380px; border-radius:24px; padding:26px 22px 20px; text-align:center; box-shadow:0 24px 48px -12px rgba(15,23,42,.45); transform:scale(.93); transition:transform .22s cubic-bezier(.34,1.56,.64,1); font-family:'Sarabun','Inter',sans-serif; }
+.kx-ov.on .kx-card { transform:scale(1); }
+.kx-card-ic { width:60px; height:60px; border-radius:18px; margin:0 auto 14px; display:flex; align-items:center; justify-content:center; font-size:0; }
+.kx-card-ic .kx-i { width:28px; height:28px; }
+.kx-card-ic.bad { background:#fee2e2; color:#dc2626; } .kx-card-ic.info { background:#dbeafe; color:#1d4ed8; } .kx-card-ic.warn { background:#fef3c7; color:#d97706; }
+.kx-card-t { font-size:18px; font-weight:800; color:#0f172a; margin-bottom:6px; }
+.kx-card-m { font-size:14px; color:#64748b; line-height:1.65; margin-bottom:20px; white-space:pre-line; }
+.kx-card-b { display:flex; gap:10px; } .kx-card-b.col { flex-direction:column; }
+.kx-b { flex:1; border:none; border-radius:13px; padding:13px 12px; font-family:inherit; font-size:14.5px; font-weight:800; cursor:pointer; }
+.kx-b:active { transform:translateY(1px); }
+.kx-b.light { background:#f1f5f9; color:#475569; } .kx-b.red { background:linear-gradient(135deg,#ef4444,#dc2626); color:#fff; box-shadow:0 8px 16px -8px rgba(220,38,38,.6); }
+.kx-b.blue { background:linear-gradient(135deg,#1d4ed8,#1e3a8a); color:#fff; box-shadow:0 8px 16px -8px rgba(30,58,138,.6); }
+.kx-b.green { background:linear-gradient(135deg,#16a34a,#15803d); color:#fff; box-shadow:0 8px 16px -8px rgba(21,128,61,.6); }
+.kx-panel { background:#fff; width:100%; max-width:520px; margin:0 auto; border-radius:24px 24px 0 0; padding:10px 16px calc(18px + env(safe-area-inset-bottom,0px)); max-height:78vh; display:flex; flex-direction:column; transform:translateY(30px); transition:transform .22s ease; font-family:'Sarabun','Inter',sans-serif; box-shadow:0 -12px 40px -10px rgba(15,23,42,.4); }
+.kx-ov.on .kx-panel { transform:translateY(0); }
+.kx-grab { width:44px; height:5px; border-radius:5px; background:#d5dbe6; margin:2px auto 12px; flex:none; }
+.kx-p-t { font-size:15px; font-weight:800; color:#0f172a; margin:0 4px 10px; flex:none; }
+.kx-list { overflow-y:auto; margin:0 -4px; padding:0 4px; }
+.kx-opt { width:100%; display:flex; align-items:center; justify-content:space-between; gap:10px; text-align:left; background:#fff; border:1.5px solid #e6eaf1; border-radius:14px; padding:13px 14px; margin-bottom:8px; font-family:inherit; font-size:14.5px; font-weight:600; color:#0f172a; cursor:pointer; }
+.kx-opt.on { border-color:#1d4ed8; background:#eff6ff; color:#1d4ed8; font-weight:800; }
+.kx-opt.dis { opacity:.4; pointer-events:none; }
+.kx-optg { font-size:11.5px; font-weight:800; color:#94a3b8; margin:10px 4px 6px; }
+.kx-opt .kx-i { width:18px; height:18px; }
+.kx-q { width:100%; padding:11px 13px; border:1.5px solid #dbe2ec; border-radius:12px; font-family:inherit; font-size:14px; margin-bottom:10px; flex:none; box-sizing:border-box; }
+@media (min-width:720px) { .kx-ov.sheet { align-items:center; padding:20px; } .kx-panel { border-radius:24px; max-width:420px; } }
+
+/* ── ช่องเลือก (select / date) ของเราเอง ── */
+.kx-sel { position:relative; }
+.kx-native { position:absolute !important; left:0; top:0; width:100% !important; height:100% !important; opacity:0 !important; pointer-events:none !important; margin:0 !important; }
+.kx-trigger { width:100%; display:flex; align-items:center; justify-content:space-between; gap:8px; text-align:left; cursor:pointer; font-family:'Sarabun','Inter',sans-serif; box-sizing:border-box; min-height:42px; }
+.kx-trigger > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex:1; }
+.kx-trigger > .kx-i { width:16px; height:16px; color:#64748b; }
+.kx-trigger.ph > span { color:#94a3b8; }
+.kx-trigger:disabled { opacity:.55; cursor:not-allowed; }
+
+/* ── ปฏิทิน ── */
+.kx-cal-h { display:flex; align-items:center; justify-content:space-between; gap:6px; margin-bottom:10px; flex:none; }
+.kx-cal-h b { font-size:15.5px; font-weight:800; color:#0f172a; flex:1; text-align:center; }
+.kx-cal-n { width:38px; height:38px; border:none; border-radius:11px; background:#f1f5f9; color:#334155; font-size:15px; font-weight:800; cursor:pointer; display:flex; align-items:center; justify-content:center; font-family:inherit; }
+.kx-cal-n .kx-i { width:18px; height:18px; }
+.kx-cal-w, .kx-cal-g { display:grid; grid-template-columns:repeat(7,1fr); gap:4px; }
+.kx-cal-w span { text-align:center; font-size:11.5px; font-weight:800; color:#94a3b8; padding:4px 0; }
+.kx-cal-d { aspect-ratio:1; border:none; border-radius:12px; background:transparent; font-family:inherit; font-size:14.5px; font-weight:700; color:#0f172a; cursor:pointer; }
+.kx-cal-d.t { background:#eff6ff; color:#1d4ed8; }
+.kx-cal-d.s { background:linear-gradient(135deg,#1d4ed8,#1e3a8a); color:#fff; box-shadow:0 6px 12px -6px rgba(30,58,138,.7); }
+.kx-cal-d.x { opacity:.3; pointer-events:none; }
+.kx-cal-d.e { visibility:hidden; }
+.kx-cal-f { display:flex; gap:8px; margin-top:14px; flex:none; }
+</style>
+"""
+
+KX_JS = r"""
+(function () {
+'use strict';
+var ICONS = __ICONS__, EMOJI = __EMOJI__;
+var KX = window.KX = window.KX || {};
+function svg(n) { var p = ICONS[n]; return p ? '<svg viewBox="0 0 24 24" aria-hidden="true">' + p + '</svg>' : ''; }
+function ich(n) { return '<span class="kx-i">' + svg(n) + '</span>'; }
+function eh(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+KX.icon = ich;
+
+/* ───────── emoji → ไอคอน SVG ───────── */
+var keys = Object.keys(EMOJI).sort(function (a, b) { return b.length - a.length; });
+var RE = new RegExp('(' + keys.map(function (k) { return k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }).join('|') + ')\\uFE0F?', 'g');
+var SKIP = { SCRIPT: 1, STYLE: 1, TEXTAREA: 1, TITLE: 1, NOSCRIPT: 1, svg: 1, SVG: 1 };
+function convText(node) {
+    var t = node.nodeValue; if (!t || t.search(RE) < 0) return;
+    var p = node.parentNode; if (!p || SKIP[p.nodeName]) return;
+    if (p.nodeName === 'OPTION') { node.nodeValue = t.replace(RE, '').replace(/^\s+/, ''); return; }
+    if (p.closest && p.closest('[data-noicon]')) return;
+    var frag = document.createDocumentFragment(), last = 0, m; RE.lastIndex = 0;
+    while ((m = RE.exec(t))) {
+        if (m.index > last) frag.appendChild(document.createTextNode(t.slice(last, m.index)));
+        var info = EMOJI[m[1]]; var s = document.createElement('span'); s.className = 'kx-i';
+        if (info[1]) s.style.color = info[1]; s.innerHTML = svg(info[0]); frag.appendChild(s); last = RE.lastIndex;
+    }
+    if (last < t.length) frag.appendChild(document.createTextNode(t.slice(last)));
+    p.replaceChild(frag, node);
+}
+function convTree(root) {
+    if (!root) return;
+    if (root.nodeType === 3) { convText(root); return; }
+    if (root.nodeType !== 1 || SKIP[root.nodeName]) return;
+    var w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, { acceptNode: function (n) { var p = n.parentNode; return (p && !SKIP[p.nodeName]) ? 1 : 2; } });
+    var list = [], n; while ((n = w.nextNode())) list.push(n);
+    list.forEach(convText);
+    var els = root.querySelectorAll ? root.querySelectorAll('[placeholder],input[type=submit],input[type=button]') : [];
+    Array.prototype.forEach.call(els, function (el) {
+        var v = el.getAttribute('placeholder'); if (v && v.search(RE) >= 0) el.setAttribute('placeholder', v.replace(RE, '').trim());
+        if (el.tagName === 'INPUT' && /submit|button/.test(el.type) && el.value && el.value.search(RE) >= 0) el.value = el.value.replace(RE, '').trim();
+    });
+}
+
+/* ───────── หน้าโหลดทันที ───────── */
+var iconSrc = null, loaderEl = null, loaderTimer = null;
+function grabIcon() {
+    var im = document.querySelector('.ktech-loader-icon');
+    if (im && im.src) { iconSrc = im.src; try { sessionStorage.setItem('kxIcon', iconSrc); } catch (e) {} }
+    else { try { iconSrc = sessionStorage.getItem('kxIcon'); } catch (e) {} }
+}
+KX.loading = function (on, text) {
+    if (on) {
+        if (!document.body) return;
+        if (!loaderEl) {
+            loaderEl = document.createElement('div'); loaderEl.className = 'kx-load';
+            loaderEl.innerHTML = '<div class="kx-load-rings"><i class="r1"></i><i class="r2"></i>' + (iconSrc ? '<img src="' + iconSrc + '" alt="">' : '') + '</div><div class="kx-load-text"></div><div class="kx-load-bar"><i></i></div>';
+            document.body.appendChild(loaderEl);
+        }
+        loaderEl.querySelector('.kx-load-text').textContent = text || 'กำลังโหลด...';
+        void loaderEl.offsetWidth; loaderEl.classList.add('on');
+        clearTimeout(loaderTimer); loaderTimer = setTimeout(function () { KX.loading(false); }, 12000);
+    } else if (loaderEl) { loaderEl.classList.remove('on'); clearTimeout(loaderTimer); }
+};
+KX.go = function (href) { KX.loading(true); setTimeout(function () { window.location.href = href; }, 0); };
+var DL = /(\/export|\/download|\.(csv|xlsx|xls|pdf|zip)(\?|$))/i;
+function isNav(a) {
+    var h = a.getAttribute('href');
+    if (!h || h.charAt(0) === '#' || /^(javascript:|mailto:|tel:|data:|blob:)/i.test(h)) return false;
+    if (a.target && a.target !== '_self') return false;
+    if (a.hasAttribute('download') || a.hasAttribute('data-noload')) return false;
+    try { var u = new URL(a.href, location.href); if (u.pathname === location.pathname && u.search === location.search && u.hash) return false; } catch (e) { return false; }
+    return true;
+}
+document.addEventListener('click', function (e) {
+    if (e.defaultPrevented || e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    var a = e.target.closest && e.target.closest('a[href]'); if (!a || !isNav(a)) return;
+    KX.loading(true);
+    if (DL.test(a.href)) setTimeout(function () { KX.loading(false); }, 3500);
+});
+document.addEventListener('submit', function (e) {
+    var f = e.target; if (e.defaultPrevented || !f || (f.target && f.target !== '_self') || f.hasAttribute('data-noload')) return;
+    KX.loading(true, 'กำลังดำเนินการ...');
+});
+window.addEventListener('beforeunload', function () { KX.loading(true); });
+window.addEventListener('pageshow', function (e) { if (e.persisted) KX.loading(false); });
+
+/* ───────── กล่อง / sheet ของเราเอง ───────── */
+function overlay(html, cls) {
+    var o = document.createElement('div'); o.className = 'kx-ov ' + (cls || ''); o.innerHTML = html; document.body.appendChild(o);
+    convTree(o); requestAnimationFrame(function () { o.classList.add('on'); }); return o;
+}
+function closeOv(o) { o.classList.remove('on'); setTimeout(function () { if (o.parentNode) o.parentNode.removeChild(o); }, 200); }
+KX.dialog = function (opt) {
+    return new Promise(function (res) {
+        var btns = (opt.buttons || []).map(function (b, i) { return '<button type="button" class="kx-b ' + b.cls + '" data-i="' + i + '">' + eh(b.text) + '</button>'; }).join('');
+        var o = overlay('<div class="kx-card"><div class="kx-card-ic ' + (opt.tone || 'info') + '">' + ich(opt.icon || 'help') + '</div><div class="kx-card-t">' + eh(opt.title) + '</div><div class="kx-card-m">' + eh(opt.message || '') + '</div><div class="kx-card-b ' + (opt.col ? 'col' : '') + '">' + btns + '</div></div>');
+        o.addEventListener('click', function (e) {
+            var b = e.target.closest('[data-i]');
+            if (b) { closeOv(o); res(+b.getAttribute('data-i')); } else if (e.target === o) { closeOv(o); res(-1); }
+        });
+    });
+};
+KX.confirm = function (opt) {
+    var d = !!opt.danger;
+    return KX.dialog({ title: opt.title || (d ? 'ยืนยันการลบ' : 'ยืนยันการทำรายการ'), message: opt.message, tone: d ? 'bad' : 'info', icon: d ? 'trash' : 'help',
+        buttons: [{ text: opt.cancelText || 'ยกเลิก', cls: 'light' }, { text: opt.okText || (d ? 'ลบ' : 'ยืนยัน'), cls: d ? 'red' : 'blue' }] }).then(function (i) { return i === 1; });
+};
+function confirmOpts(el) {
+    var m = el.getAttribute('data-confirm') || '';
+    return { message: m, danger: el.hasAttribute('data-danger') || /ลบ|ปฏิเสธ/.test(m), okText: el.getAttribute('data-ok') || (/ปฏิเสธ/.test(m) ? 'ปฏิเสธ' : (/อนุมัติ/.test(m) ? 'อนุมัติ' : null)) };
+}
+document.addEventListener('click', function (e) {
+    var el = e.target.closest && e.target.closest('[data-confirm]'); if (!el || el.tagName === 'FORM') return;
+    if (el.__kxok) { el.__kxok = false; return; }
+    e.preventDefault(); e.stopPropagation();
+    KX.confirm(confirmOpts(el)).then(function (ok) {
+        if (!ok) return;
+        if (el.tagName === 'A') KX.go(el.href); else { el.__kxok = true; el.click(); }
+    });
+}, true);
+document.addEventListener('submit', function (e) {
+    var f = e.target; if (!f || !f.hasAttribute || !f.hasAttribute('data-confirm')) return;
+    if (f.__kxok) { f.__kxok = false; return; }
+    e.preventDefault(); e.stopPropagation();
+    KX.confirm(confirmOpts(f)).then(function (ok) { if (ok) { f.__kxok = true; KX.loading(true, 'กำลังดำเนินการ...'); f.submit(); } });
+}, true);
+
+/* ───────── กันออกจากหน้าตอนมีของยังไม่บันทึก (แทน dialog ของเบราว์เซอร์) ───────── */
+var G = null;
+function askLeave(go) {
+    KX.dialog({ title: 'ยังไม่ได้บันทึก', message: G && G.message || 'มีการเปลี่ยนแปลงที่ยังไม่ได้บันทึก', tone: 'warn', icon: 'alert-triangle', col: true,
+        buttons: [{ text: 'บันทึกแล้วออก', cls: 'green' }, { text: 'ออกโดยไม่บันทึก', cls: 'red' }, { text: 'อยู่หน้านี้ต่อ', cls: 'light' }] }).then(function (i) {
+        if (i === 0 && G && G.save) { G.save().then(function (ok) { if (ok) { var g = G; G = null; go(); } }); }
+        else if (i === 1) { G = null; go(); }
+    });
+}
+KX.guard = function (cfg) {
+    G = cfg; try { history.pushState({ kxg: 1 }, '', location.href); } catch (e) {}
+    document.addEventListener('click', function (e) {
+        if (!G || !G.dirty() || e.defaultPrevented) return;
+        var a = e.target.closest && e.target.closest('a[href]'); if (!a || !isNav(a)) return;
+        e.preventDefault(); e.stopPropagation(); askLeave(function () { KX.go(a.href); });
+    }, true);
+    window.addEventListener('popstate', function () {
+        if (!G) return;
+        if (G.dirty()) { try { history.pushState({ kxg: 1 }, '', location.href); } catch (e) {} askLeave(function () { history.go(-2); }); }
+        else { G = null; history.back(); }
+    });
+};
+
+/* ───────── แผ่นเลือกจากด้านล่าง ───────── */
+function sheet(inner) {
+    var o = overlay('<div class="kx-panel"><div class="kx-grab"></div>' + inner + '</div>', 'sheet');
+    o.addEventListener('click', function (e) { if (e.target === o) closeOv(o); }); return o;
+}
+function copyLook(el, btn) {
+    var cs = getComputedStyle(el);
+    btn.style.padding = cs.padding; btn.style.fontSize = cs.fontSize; btn.style.fontWeight = cs.fontWeight;
+    btn.style.borderRadius = cs.borderTopLeftRadius; btn.style.border = cs.borderTopWidth + ' ' + cs.borderTopStyle + ' ' + cs.borderTopColor;
+    btn.style.background = cs.backgroundColor; btn.style.color = cs.color; btn.style.minHeight = cs.height;
+}
+function makeWrap(el) {
+    var cs = getComputedStyle(el), par = el.parentNode, w = document.createElement('div'); w.className = 'kx-sel';
+    w.style.margin = cs.margin; if (cs.flex && cs.flex !== '0 1 auto') w.style.flex = cs.flex;
+    if (el.style.width) w.style.width = el.style.width;
+    else if (par && par.clientWidth && el.offsetWidth >= par.clientWidth * 0.9) w.style.width = '100%';
+    else w.style.width = el.offsetWidth + 'px';
+    if (el.style.maxWidth) w.style.maxWidth = el.style.maxWidth;
+    var gc = cs.gridColumnStart; if (gc && gc !== 'auto') w.style.gridColumn = cs.gridColumnStart + ' / ' + cs.gridColumnEnd;
+    return w;
+}
+function buildTrigger(el) {
+    var btn = document.createElement('button'); btn.type = 'button'; btn.className = 'kx-trigger ' + el.className.replace(/kx-native/g, '');
+    copyLook(el, btn); btn.style.margin = '0'; btn.style.width = '100%'; btn.style.height = 'auto';
+    return btn;
+}
+function needsLoader(el) { var a = el.getAttribute('onchange') || ''; return /location|submit/.test(a); }
+function fire(el) { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }
+
+function enhanceSelect(sel) {
+    if (sel.__kx || sel.multiple || sel.size > 1 || sel.hasAttribute('data-native') || sel.closest('#screenlock-overlay,.kx-ov')) return;
+    sel.__kx = 1;
+    var wrap = makeWrap(sel), btn = buildTrigger(sel);
+    sel.parentNode.insertBefore(wrap, sel); wrap.appendChild(sel); sel.classList.add('kx-native'); sel.tabIndex = -1; wrap.appendChild(btn);
+    function label() {
+        var o = sel.options[sel.selectedIndex], txt = o ? o.text.trim() : '';
+        btn.innerHTML = '<span></span>' + ich('chevron-down'); btn.firstChild.textContent = txt || sel.getAttribute('data-ph') || 'เลือก...';
+        btn.classList.toggle('ph', !txt || (o && o.value === '' && !!sel.required)); btn.disabled = sel.disabled;
+    }
+    label();
+    sel.addEventListener('change', label);
+    new MutationObserver(label).observe(sel, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['disabled'] });
+    btn.addEventListener('click', function () {
+        var lab = (sel.id && document.querySelector('label[for="' + sel.id + '"]')) || (wrap.parentNode && wrap.parentNode.querySelector('label'));
+        var title = (lab && lab.textContent.trim()) || sel.getAttribute('aria-label') || sel.getAttribute('data-title') || 'เลือกรายการ';
+        var html = '<div class="kx-p-t">' + eh(title) + '</div>';
+        if (sel.options.length > 10) html += '<input class="kx-q" placeholder="ค้นหา..." type="search">';
+        html += '<div class="kx-list">'; var lastG = null;
+        Array.prototype.forEach.call(sel.options, function (o, i) {
+            if (o.parentNode.tagName === 'OPTGROUP' && o.parentNode !== lastG) { lastG = o.parentNode; html += '<div class="kx-optg">' + eh(lastG.label) + '</div>'; }
+            html += '<button type="button" class="kx-opt' + (i === sel.selectedIndex ? ' on' : '') + (o.disabled ? ' dis' : '') + '" data-i="' + i + '"><span>' + eh(o.text.trim() || '—') + '</span>' + (i === sel.selectedIndex ? ich('check') : '') + '</button>';
+        });
+        html += '</div>';
+        var o = sheet(html), q = o.querySelector('.kx-q');
+        if (q) q.addEventListener('input', function () { var v = q.value.trim().toLowerCase(); Array.prototype.forEach.call(o.querySelectorAll('.kx-opt'), function (b) { b.style.display = b.textContent.toLowerCase().indexOf(v) >= 0 ? '' : 'none'; }); });
+        o.querySelector('.kx-list').addEventListener('click', function (e) {
+            var b = e.target.closest('.kx-opt'); if (!b) return;
+            var i = +b.getAttribute('data-i'); closeOv(o);
+            if (i !== sel.selectedIndex) { sel.selectedIndex = i; if (needsLoader(sel)) KX.loading(true); fire(sel); label(); }
+        });
+    });
+}
+
+/* ───────── ปฏิทิน (ปี พ.ศ.) ───────── */
+var TM = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
+var TD = ['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'];
+function p2(n) { return (n < 10 ? '0' : '') + n; }
+function isoOf(y, m, d) { return y + '-' + p2(m + 1) + '-' + p2(d); }
+function thDate(v) { if (!v) return ''; var p = v.split('-'); return p[2] + '/' + p[1] + '/' + (+p[0] + 543); }
+function enhanceDate(inp) {
+    if (inp.__kx || inp.closest('.kx-ov')) return; inp.__kx = 1;
+    var wrap = makeWrap(inp), btn = buildTrigger(inp);
+    inp.parentNode.insertBefore(wrap, inp); wrap.appendChild(inp); inp.classList.add('kx-native'); inp.tabIndex = -1; wrap.appendChild(btn);
+    function label() { var v = inp.value; btn.innerHTML = '<span></span>' + ich('calendar'); btn.firstChild.textContent = v ? thDate(v) : 'เลือกวันที่'; btn.classList.toggle('ph', !v); btn.disabled = inp.disabled; }
+    label(); inp.addEventListener('change', label);
+    btn.addEventListener('click', function () {
+        var cur = inp.value ? new Date(inp.value + 'T00:00:00') : new Date(); if (isNaN(cur)) cur = new Date();
+        var vy = cur.getFullYear(), vm = cur.getMonth(), now = new Date(), today = isoOf(now.getFullYear(), now.getMonth(), now.getDate());
+        var o = sheet('<div class="kx-cal-h"></div><div class="kx-cal-w">' + TD.map(function (d) { return '<span>' + d + '</span>'; }).join('') + '</div><div class="kx-cal-g"></div><div class="kx-cal-f"></div>');
+        var head = o.querySelector('.kx-cal-h'), grid = o.querySelector('.kx-cal-g'), foot = o.querySelector('.kx-cal-f');
+        function ok(iso) { return !((inp.min && iso < inp.min) || (inp.max && iso > inp.max)); }
+        function draw() {
+            head.innerHTML = '<button type="button" class="kx-cal-n" data-n="-12">«</button><button type="button" class="kx-cal-n" data-n="-1">' + ich('chevron-left') + '</button><b>' + TM[vm] + ' ' + (vy + 543) + '</b><button type="button" class="kx-cal-n" data-n="1">' + ich('chevron-right') + '</button><button type="button" class="kx-cal-n" data-n="12">»</button>';
+            var first = new Date(vy, vm, 1).getDay(), days = new Date(vy, vm + 1, 0).getDate(), h = '';
+            for (var i = 0; i < first; i++) h += '<button type="button" class="kx-cal-d e"></button>';
+            for (var d = 1; d <= days; d++) { var iso = isoOf(vy, vm, d); h += '<button type="button" class="kx-cal-d' + (iso === inp.value ? ' s' : (iso === today ? ' t' : '')) + (ok(iso) ? '' : ' x') + '" data-d="' + iso + '">' + d + '</button>'; }
+            grid.innerHTML = h; convTree(head);
+        }
+        function pick(iso) { closeOv(o); if (iso !== inp.value) { inp.value = iso; if (needsLoader(inp)) KX.loading(true); fire(inp); label(); } }
+        head.addEventListener('click', function (e) { var b = e.target.closest('[data-n]'); if (!b) return; var t = vy * 12 + vm + (+b.getAttribute('data-n')); vy = Math.floor(t / 12); vm = t % 12; draw(); });
+        grid.addEventListener('click', function (e) { var b = e.target.closest('[data-d]'); if (b) pick(b.getAttribute('data-d')); });
+        foot.innerHTML = '<button type="button" class="kx-b light" data-a="today">วันนี้</button>' + (inp.required ? '' : '<button type="button" class="kx-b light" data-a="clear">ล้างค่า</button>') + '<button type="button" class="kx-b blue" data-a="close">ปิด</button>';
+        foot.addEventListener('click', function (e) { var b = e.target.closest('[data-a]'); if (!b) return; var a = b.getAttribute('data-a'); if (a === 'today' && ok(today)) pick(today); else if (a === 'clear') pick(''); else if (a === 'close') closeOv(o); });
+        draw();
+    });
+}
+
+function enhanceAll(root) {
+    if (!root.querySelectorAll) return;
+    Array.prototype.forEach.call(root.querySelectorAll('input[type=date]'), enhanceDate);
+    Array.prototype.forEach.call(root.querySelectorAll('select'), enhanceSelect);
+}
+
+function init() {
+    grabIcon(); convTree(document.body); enhanceAll(document);
+    var queue = [], busy = false;
+    new MutationObserver(function (recs) {
+        recs.forEach(function (r) {
+            if (r.type === 'characterData') queue.push(r.target);
+            else Array.prototype.forEach.call(r.addedNodes, function (n) { if (!(n.nodeType === 1 && (n.classList.contains('kx-i') || n.classList.contains('kx-sel')))) queue.push(n); });
+        });
+        if (busy || !queue.length) return; busy = true;
+        requestAnimationFrame(function () { var q = queue; queue = []; busy = false; q.forEach(function (n) { if (n.isConnected) { convTree(n); enhanceAll(n.nodeType === 1 ? n : document); } }); });
+    }).observe(document.body, { childList: true, subtree: true, characterData: true });
+}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
+})();
+"""
+
+KX_JS_BUILT = (KX_JS.replace("__ICONS__", _kxjson.dumps(KX_ICONS, ensure_ascii=False))
+               .replace("__EMOJI__", _kxjson.dumps({k: [v[0], v[1]] for k, v in KX_EMOJI.items()}, ensure_ascii=False)))
+KX_VERSION = _kxhash.md5(KX_JS_BUILT.encode("utf-8")).hexdigest()[:8]
+KX_HEAD = KX_CSS + f'\n<script src="/kx.js?v={KX_VERSION}" defer></script>\n'
+
+
+@app.get("/kx.js")
+async def kx_js_route():
+    """สคริปต์กลาง (ไอคอน/ยืนยัน/ปฏิทิน/ตัวเลือก/หน้าโหลดทันที) — แคชไว้ในเครื่องผู้ใช้"""
+    return Response(content=KX_JS_BUILT.encode("utf-8"), media_type="application/javascript; charset=utf-8",
+                    headers={"Cache-Control": "public, max-age=86400"})
+
+
+
+# ==========================================
 # 🎨 PREMIUM UI STYLE WITH LIVE WEBSOCKET SCRIPT
 # ==========================================
 STYLE_HEADER = """
@@ -813,6 +1413,7 @@ STYLE_HEADER = """
     </script>
 </head>
 """
+STYLE_HEADER = STYLE_HEADER.replace("</head>", KX_HEAD + "</head>", 1)
 
 # ==========================================
 # 🛠️ HELPER FUNCTIONS
@@ -927,7 +1528,7 @@ def find_student_uid(name: str, no: str, classroom: str) -> Optional[str]:
 # 🔔 ใช้แทน "<script>alert(...); redirect</script>" ทั้งหมด — แสดงเป็นหน้าแจ้งเตือนสไตล์แอปของเราเอง
 # (ไม่พึ่ง STYLE_HEADER เพื่อให้โหลดเร็วและใช้ได้แม้ตอบกลับ POST request แบบเดี่ยวๆ)
 def alert_redirect(message: str, type: str = "info", url: Optional[str] = None, title: Optional[str] = None):
-    icon = {"success": "✅", "error": "❌", "warning": "⚠️", "info": "ℹ️"}.get(type, "ℹ️")
+    icon = ic({"success": "check", "error": "x", "warning": "alert-triangle", "info": "info"}.get(type, "info"), 32, "currentColor")
     bg, fg = {
         "success": ("#f0fdf4", "#10b981"),
         "error": ("#fef2f2", "#ef4444"),
@@ -956,7 +1557,7 @@ def alert_redirect(message: str, type: str = "info", url: Optional[str] = None, 
     }}
     @keyframes arPop {{ from {{ transform: scale(0.9); opacity: 0; }} to {{ transform: scale(1); opacity: 1; }} }}
     .ar-icon {{
-        width: 62px; height: 62px; border-radius: 50%;
+        width: 64px; height: 64px; border-radius: 20px;
         background: {bg}; color: {fg}; font-size: 30px;
         display: flex; align-items: center; justify-content: center; margin: 0 auto 18px;
     }}
@@ -1126,6 +1727,9 @@ TEACHER_ROLES = {
     "teacher":    {"label": "👩‍🏫 ครูผู้สอน",        "desc": "ดูแลเฉพาะคลาสเรียนของตนเอง"},
     "level_head": {"label": "🎓 หัวหน้าระดับ",       "desc": "อนุมัติคำร้องลา/บันทึกความประพฤติ เฉพาะระดับชั้นที่รับผิดชอบ"},
     "affairs":    {"label": "🛡️ ฝ่ายกิจการนักเรียน", "desc": "อนุมัติคำร้องลา/บันทึกความประพฤติ ได้ทุกระดับชั้นทั้งสถาบัน"},
+    "subject_head": {"label": "📚 หัวหน้าวิชา",     "desc": "เช็กชื่อ/จัดการได้ทุกวิชาที่รับผิดชอบ และมอบวิชาให้ครูย่อยได้"},
+    "registrar":  {"label": "🗂️ ฝ่ายทะเบียน",        "desc": "จัดการทะเบียนนักเรียน (เพิ่ม/แก้ไข/ลบ/บัญชีเข้าสู่ระบบ)"},
+    "finance":    {"label": "💳 ฝ่ายการเงิน",        "desc": "จัดการรายการเรียกเก็บและการชำระเงินของนักเรียน"},
 }
 
 def get_access(user_session: Optional[str]) -> dict:
@@ -1168,14 +1772,17 @@ def get_access(user_session: Optional[str]) -> dict:
 PERMISSIONS = {
     "manage_discipline":        {"label": "จัดการคำร้องลา / คะแนนความประพฤติ", "default_roles": ("admin", "affairs", "level_head")},
     "manage_teacher_accounts":  {"label": "จัดการบัญชีครู",                    "default_roles": ("admin", "affairs", "level_head")},
-    "manage_student_profiles":  {"label": "จัดการโปรไฟล์นักเรียน",             "default_roles": ("admin", "affairs", "level_head")},
+    "manage_student_profiles":  {"label": "จัดการโปรไฟล์นักเรียน",             "default_roles": ("admin", "affairs", "level_head", "registrar")},
     "view_analytics":           {"label": "ดูแดชบอร์ดสถิติขั้นสูง",            "default_roles": ("admin", "affairs", "level_head")},
     "manage_inspection":        {"label": "ตรวจระเบียบนักเรียน (ติ๊กผ่าน/ไม่ผ่าน)", "default_roles": ("admin", "affairs", "level_head", "teacher")},
     "view_inspection_report":   {"label": "ดูรายงานผลตรวจระเบียบ",             "default_roles": ("admin", "affairs", "level_head")},
     "manage_inspection_criteria": {"label": "จัดการตัวชี้วัดตรวจระเบียบ (เพิ่ม/ลบ)", "default_roles": ("admin", "affairs")},
+    "manage_student_registry":  {"label": "จัดการทะเบียนนักเรียน (เพิ่ม/แก้ไข/ลบ)", "default_roles": ("admin", "registrar")},
+    "manage_payments":          {"label": "จัดการการเงิน / รายการเรียกเก็บ",   "default_roles": ("admin", "finance")},
+    "manage_subject_scope":     {"label": "จัดการวิชาที่รับผิดชอบ / มอบวิชาให้ครูย่อย", "default_roles": ("admin", "subject_head")},
 }
 # บทบาทที่ปรับสิทธิ์ผ่านตารางได้ (admin มีสิทธิ์ทุกอย่างเสมอ ไม่ต้องตั้งค่า)
-CONFIGURABLE_ROLES = ("teacher", "level_head", "affairs")
+CONFIGURABLE_ROLES = ("teacher", "subject_head", "level_head", "affairs", "registrar", "finance")
 
 def _load_permission_overrides() -> dict:
     """อ่านค่าที่แอดมิน override ไว้ทั้งหมดจาก DB -> {(role, perm_key): 0/1}"""
@@ -1243,6 +1850,59 @@ def can_view_inspection_report(access: dict) -> bool:
 def can_manage_inspection_criteria(access: dict) -> bool:
     """สิทธิ์เพิ่ม/ลบ/เปิด-ปิด ตัวชี้วัดการตรวจระเบียบ (ปรับได้ที่ /admin/permissions)"""
     return has_permission(access, "manage_inspection_criteria")
+
+def can_manage_payments(access: dict) -> bool:
+    return has_permission(access, "manage_payments")
+
+def can_manage_student_registry(access: dict) -> bool:
+    return has_permission(access, "manage_student_registry")
+
+def can_manage_subject_scope(access: dict) -> bool:
+    return has_permission(access, "manage_subject_scope")
+
+def staff_home_url(access: dict) -> str:
+    """หน้าแรกของผู้ใช้ฝั่งบุคลากร: แอดมิน → หน้าควบคุม, ครู/ฝ่ายต่าง ๆ → แดชบอร์ดครู"""
+    if access.get("role") == "admin":
+        return "/admin/dashboard"
+    return f"/app/dashboard?user={urllib.parse.quote(access.get('username') or '')}"
+
+def gate_perm(user_session: Optional[str], checker) -> Optional[dict]:
+    """คืน access ถ้าเป็นแอดมินหรือบทบาทที่ผ่านเงื่อนไข ไม่งั้นคืน None"""
+    access = get_access(user_session)
+    if access["authenticated"] and access["role"] != "student" and (access["role"] == "admin" or checker(access)):
+        return access
+    return None
+
+# ── หัวหน้าวิชา: วิชาที่รับผิดชอบ ──
+def head_scope_group_ids(username: str) -> set:
+    """group_id ทั้งหมดที่หัวหน้าวิชาคนนี้รับผิดชอบ (ว่างถ้าไม่ใช่หัวหน้าวิชา)"""
+    conn = sqlite3.connect('attendance_pro.db')
+    try:
+        rows = conn.execute("""SELECT h.group_id FROM subject_head_groups h JOIN teachers t ON t.username = h.head_username
+                               WHERE h.head_username = ? AND t.role = 'subject_head'""", (username,)).fetchall()
+    finally:
+        conn.close()
+    return {r[0] for r in rows}
+
+def can_access_group(user: str, group_id: int, owner: Optional[str] = None) -> bool:
+    """เจ้าของวิชา หรือหัวหน้าวิชาที่วิชานี้อยู่ในความรับผิดชอบ"""
+    if owner is not None and owner == user:
+        return True
+    return group_id in head_scope_group_ids(user)
+
+def groups_for_user(cursor, user: str) -> list:
+    """วิชาที่ผู้ใช้เห็น/จัดการได้ = วิชาของตัวเอง + วิชาในความรับผิดชอบ (ถ้าเป็นหัวหน้าวิชา) -> [(group_id, group_name)]"""
+    cursor.execute("SELECT group_id, group_name FROM course_groups WHERE teacher_username = ?", (user,))
+    rows = list(cursor.fetchall())
+    seen = {r[0] for r in rows}
+    cursor.execute("""SELECT g.group_id, g.group_name FROM course_groups g
+                      JOIN subject_head_groups h ON h.group_id = g.group_id
+                      JOIN teachers t ON t.username = h.head_username
+                      WHERE h.head_username = ? AND t.role = 'subject_head'""", (user,))
+    for r in cursor.fetchall():
+        if r[0] not in seen:
+            rows.append(r); seen.add(r[0])
+    return rows
 
 def in_inspection_scope(access: dict, classroom: str) -> bool:
     """ขอบเขตห้องที่ตรวจได้: หัวหน้าระดับเฉพาะระดับตัวเอง, บทบาทอื่นที่มีสิทธิ์ตรวจได้ทุกห้อง"""
@@ -2181,7 +2841,6 @@ PAGE_LOADER = """
 <style>
 .ktech-loader{position:fixed;inset:0;z-index:99999;background:radial-gradient(circle at 50% 35%,#0d3a66 0%,#0a2447 45%,#060e1f 100%);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;transition:opacity .5s ease,visibility .5s ease;}
 .ktech-loader.ktech-hide{opacity:0;visibility:hidden;pointer-events:none;}
-.ktech-loader.ktech-instant{transition:none;}
 .ktech-loader-rings{position:relative;width:140px;height:140px;display:flex;align-items:center;justify-content:center;}
 .ktech-ring{position:absolute;border-radius:50%;border:2px solid transparent;}
 .ktech-ring-1{width:140px;height:140px;border-top-color:#60a5fa;border-right-color:#60a5fa33;animation:ktechSpin 1.6s linear infinite;}
@@ -2207,45 +2866,16 @@ PAGE_LOADER = """
     function ktechHide(){
         var el=document.getElementById('ktechLoader');
         if(!el) return;
-        el.classList.remove('ktech-instant');
         el.classList.add('ktech-hide');
-    }
-    function ktechShowInstant(){
-        var el=document.getElementById('ktechLoader');
-        if(!el) return;
-        el.classList.add('ktech-instant');
-        el.classList.remove('ktech-hide');
+        setTimeout(function(){ if(el && el.parentNode) el.remove(); }, 550);
     }
     var ktechStart=Date.now();
     window.addEventListener('load', function(){
         var elapsed=Date.now()-ktechStart;
-        var wait=Math.max(0, 450-elapsed);
+        var wait=Math.max(0, 200-elapsed);
         setTimeout(ktechHide, wait);
     });
     setTimeout(ktechHide, 4000);
-
-    // ── แตะลิงก์/กดส่งฟอร์มแล้วขึ้นหน้าโหลดทันที ไม่ต้องรอหน้าใหม่โหลดเสร็จก่อนค่อยขึ้น ──
-    document.addEventListener('click', function(ev){
-        if(ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
-        var a = ev.target.closest('a[href]');
-        if(!a || a.target === '_blank' || a.hasAttribute('download') || a.hasAttribute('data-no-loader')) return;
-        var href = a.getAttribute('href') || '';
-        if(!href || href.charAt(0) === '#' || /^(javascript:|mailto:|tel:)/i.test(href)) return;
-        try {
-            var url = new URL(href, window.location.href);
-            if(url.origin !== window.location.origin) return;
-        } catch(e) { return; }
-        ktechShowInstant();
-        ev.preventDefault();
-        setTimeout(function(){ window.location.href = href; }, 90);
-    }, true);
-
-    document.addEventListener('submit', function(ev){
-        if(ev.defaultPrevented) return;
-        var f = ev.target;
-        if(!(f instanceof HTMLFormElement) || f.target === '_blank' || f.hasAttribute('data-no-loader')) return;
-        ktechShowInstant();
-    }, true);
 })();
 </script>
 """.replace("__KTECH_ICON_B64__", "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")
@@ -3362,7 +3992,8 @@ async def admin_dashboard(user_session: Optional[str] = Cookie(None)):
 
 @app.get("/admin/students", response_class=HTMLResponse)
 async def admin_students_page(class_filter: Optional[str] = None, user_session: Optional[str] = Cookie(None)):
-    if user_session != "admin":
+    access = gate_perm(user_session, can_manage_student_registry)
+    if not access:
         return RedirectResponse(url="/login", status_code=303)
 
     master_students = get_sorted_master_students()
@@ -3392,27 +4023,27 @@ async def admin_students_page(class_filter: Optional[str] = None, user_session: 
             </div>
             {f'<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px;">{tag_html}</div>' if tag_html else ''}
             <div style="display:flex; gap:8px;">
-                <a href="/admin/edit_student?uid={q_uid}" class="dk-btn light sm" style="flex:1;display:flex;align-items:center;justify-content:center;gap:5px;">{_ic(_SVG_EDIT, 13)} แก้ไข</a>
-                <a href="/api/admin/delete_student?uid={q_uid}" class="dk-btn danger sm" style="flex:1;display:flex;align-items:center;justify-content:center;gap:5px;" onclick="return confirm('ยืนยันที่จะลบข้อมูลนักเรียนคนนี้ออกจากทะเบียนหลัก?')">{_ic(_SVG_TRASH, 13)} ลบ</a>
+                <a href="/admin/edit_student?uid={q_uid}" class="dk-btn light sm" style="flex:1;">📝 แก้ไข</a>
+                <a href="/api/admin/delete_student?uid={q_uid}" class="dk-btn danger sm" style="flex:1;" data-confirm="ยืนยันที่จะลบข้อมูลนักเรียนคนนี้ออกจากทะเบียนหลัก?">🛑 ลบ</a>
             </div>
         </div>"""
 
     all_students_count = len(get_sorted_master_students())
-    stats = (dk_stat("นักเรียนทั้งหมด", all_students_count, _ic(_SVG_BACKPACK), "blue") + dk_stat("ห้องเรียน", len(all_classes), _ic(_SVG_SCHOOL), "violet")
-             + dk_stat("กำลังแสดง", len(master_students), _ic(_SVG_EYE), "green") + dk_stat("มีป้ายเฝ้าระวัง", sum(1 for s in master_students if all_risk_tags.get(s['name'])), _ic(_SVG_ALERT), "amber"))
-    quick = f"""<div class="dk-grid c2" style="margin-bottom:14px;">
-        <a href="/admin/add_student" class="dk-btn green block" style="padding:14px;display:flex;align-items:center;justify-content:center;gap:7px;">{_ic(_SVG_USER_PLUS, 16)} เพิ่มรายชื่อนักเรียนใหม่</a>
-        <a href="/admin/student_accounts" class="dk-btn block" style="padding:14px;background:linear-gradient(135deg,#7c3aed,#5b21b6);display:flex;align-items:center;justify-content:center;gap:7px;">{_ic(_SVG_KEY, 16)} ตั้งค่ารหัส/เบอร์โทร เข้าสู่ระบบนักเรียน</a></div>"""
-    flt = f"""<div class="dk-card"><div class="dk-card-title" style="display:flex;align-items:center;gap:6px;">{_ic(_SVG_FOLDER, 16)} ทะเบียนนักเรียนส่วนกลาง<small>{len(master_students)} รายการ</small></div>
+    stats = (dk_stat("นักเรียนทั้งหมด", all_students_count, "🎒", "blue") + dk_stat("ห้องเรียน", len(all_classes), "🏫", "violet")
+             + dk_stat("กำลังแสดง", len(master_students), "👁️", "green") + dk_stat("มีป้ายเฝ้าระวัง", sum(1 for s in master_students if all_risk_tags.get(s['name'])), "⚠️", "amber"))
+    quick = """<div class="dk-grid c2" style="margin-bottom:14px;">
+        <a href="/admin/add_student" class="dk-btn green block" style="padding:14px;">📥 เพิ่มรายชื่อนักเรียนใหม่</a>
+        <a href="/admin/student_accounts" class="dk-btn block" style="padding:14px;background:linear-gradient(135deg,#7c3aed,#5b21b6);">🔑 ตั้งค่ารหัส/เบอร์โทร เข้าสู่ระบบนักเรียน</a></div>"""
+    flt = f"""<div class="dk-card"><div class="dk-card-title">📁 ทะเบียนนักเรียนส่วนกลาง<small>{len(master_students)} รายการ</small></div>
         <div class="dk-filter" style="grid-template-columns:1fr 1fr;">
-            <div><label class="dk-label" style="display:flex;align-items:center;gap:5px;">{_ic(_SVG_SEARCH, 14)} ค้นหา</label><input id="sdSearch" class="dk-input" placeholder="ชื่อ / เลขที่ / สาขา"></div>
+            <div><label class="dk-label">🔍 ค้นหา</label><input id="sdSearch" class="dk-input" placeholder="ชื่อ / เลขที่ / สาขา"></div>
             <div><label class="dk-label">ห้องเรียน</label><select class="dk-select" onchange="location.href='/admin/students?class_filter='+encodeURIComponent(this.value);">{class_options}</select></div>
         </div></div>"""
-    grid = f'<div class="dk-grid c3" id="sdGrid">{cards}</div>' if cards else f'<div class="dk-card">{dk_empty(_ic(_SVG_FOLDER, 38, 1.5), "ไม่พบข้อมูลนักเรียน")}</div>'
+    grid = f'<div class="dk-grid c3" id="sdGrid">{cards}</div>' if cards else f'<div class="dk-card">{dk_empty("🗂️", "ไม่พบข้อมูลนักเรียน")}</div>'
     js = """<script>(function(){var i=document.getElementById('sdSearch');if(!i)return;i.addEventListener('input',function(){var q=this.value.trim().toLowerCase();
         document.querySelectorAll('.sd-card').forEach(function(c){c.style.display=(!q||c.getAttribute('data-search').indexOf(q)!==-1)?'':'none';});});})();</script>"""
     return dk_page("จัดการนักเรียน", "ทะเบียนนักเรียนส่วนกลาง เพิ่ม แก้ไข ลบ และค้นหา", f'<div class="dk-stats">{stats}</div>{quick}{flt}{grid}',
-                   "/admin/dashboard", extra=js, icon=_ic(_SVG_BACKPACK, 22))
+                   staff_home_url(access), extra=js, icon="🎒 ")
 
 @app.get("/admin/student_accounts", response_class=HTMLResponse)
 async def admin_student_accounts_page(class_filter: Optional[str] = None, user_session: Optional[str] = Cookie(None)):
@@ -3444,60 +4075,75 @@ async def admin_student_accounts_page(class_filter: Optional[str] = None, user_s
 
     scope_note = ""
     if access["role"] == "level_head":
-        scope_note = f'<div class="dk-note" style="display:flex;align-items:center;gap:7px;">{_ic(_SVG_SCHOOL, 15)} คุณกำลังดูเฉพาะนักเรียนระดับชั้น <b>{_he(access["level_scope"])}</b></div>'
+        scope_note = f'<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:10px 16px;margin-bottom:12px;font-size:12.5px;color:#1e40af;">🎓 คุณกำลังดูเฉพาะนักเรียนระดับชั้น <b>{access["level_scope"]}</b></div>'
 
     rows = ""
     for s in master_students:
         acc = accounts.get(s['uid'], {"student_id": "", "phone": "", "photo_url": ""})
-        is_set = bool(acc["student_id"] and acc["phone"])
-        status_badge = (f'<span class="dk-pill ok" style="display:inline-flex;align-items:center;gap:4px;flex-shrink:0;">{_ic(_SVG_CHECK_C, 12)} ตั้งค่าแล้ว</span>'
-                         if is_set else
-                         f'<span class="dk-pill bad" style="display:inline-flex;align-items:center;gap:4px;flex-shrink:0;">{_ic(_SVG_ALERT, 12)} ยังไม่ได้ตั้งค่า</span>')
-        avatar_html = (f'<img src="{acc["photo_url"]}" style="width:44px;height:44px;border-radius:50%;object-fit:cover;border:2px solid #e2e8f0;flex-shrink:0;">'
+        status_badge = ('<span style="background:#f0fdf4;color:#166534;border:1px solid #86efac;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:700;">✅ ตั้งค่าแล้ว</span>'
+                         if acc["student_id"] and acc["phone"] else
+                         '<span style="background:#fef2f2;color:#991b1b;border:1px solid #fecaca;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:700;">⚠️ ยังไม่ได้ตั้งค่า</span>')
+        avatar_html = (f'<img src="{acc["photo_url"]}" style="width:44px;height:44px;border-radius:50%;object-fit:cover;border:2px solid #e2e8f0;">'
                         if acc["photo_url"] else
-                        f'<div style="width:44px;height:44px;border-radius:50%;background:#f1f5f9;display:flex;align-items:center;justify-content:center;color:#94a3b8;border:2px solid #e2e8f0;flex-shrink:0;">{_ic(_SVG_BACKPACK, 20)}</div>')
+                        '<div style="width:44px;height:44px;border-radius:50%;background:#f1f5f9;display:flex;align-items:center;justify-content:center;font-size:20px;border:2px solid #e2e8f0;">🎒</div>')
         rows += f"""
-        <div class="dk-card" style="padding:14px;">
-            <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
-                {avatar_html}
-                <div style="flex:1;min-width:0;">
-                    <div style="font-weight:700;color:#0f172a;">{_he(s['name'])}</div>
-                    <div style="font-size:11.5px;color:#94a3b8;">{_he(s['class'])} · เลขที่ {_he(s['no'])}</div>
+        <tr>
+            <td style="text-align:left;">
+                <div style="display:flex;align-items:center;gap:10px;">
+                    {avatar_html}
+                    <div>
+                        <div style="font-weight:700;color:#0f172a;">{s['name']}</div>
+                        <div style="font-size:11.5px;color:#94a3b8;">{s['class']} · เลขที่ {s['no']}</div>
+                    </div>
                 </div>
-                {status_badge}
-            </div>
-            <form action="/api/admin/student_account/set" method="post" enctype="multipart/form-data" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-                <input type="hidden" name="uid" value="{_he(s['uid'], quote=True)}">
-                <input type="text" name="student_id" value="{_he(acc['student_id'] or '', quote=True)}" placeholder="รหัสประจำตัว" required class="dk-input" style="margin:0;">
-                <input type="text" name="phone" value="{_he(acc['phone'] or '', quote=True)}" placeholder="เบอร์โทร" required class="dk-input" style="margin:0;">
-                <label class="dk-btn light sm sa-file-label" style="grid-column:1/-1;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;">
-                    {_ic(_SVG_IMAGE, 14)}<span class="sa-file-text">แนบรูปโปรไฟล์ (ถ้ามี)</span>
-                    <input type="file" name="photo" accept="image/png,image/jpeg,image/webp" class="sa-file-input" style="position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;">
-                </label>
-                <button type="submit" class="dk-btn green sm" style="grid-column:1/-1;display:flex;align-items:center;justify-content:center;gap:6px;">{_ic(_SVG_SAVE, 14)} บันทึก</button>
-            </form>
-        </div>
+            </td>
+            <td>{status_badge}</td>
+            <td colspan="2">
+                <form action="/api/admin/student_account/set" method="post" enctype="multipart/form-data" style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; justify-content:center;">
+                    <input type="hidden" name="uid" value="{s['uid']}">
+                    <input type="text" name="student_id" value="{acc['student_id'] or ''}" placeholder="รหัสประจำตัว" required style="width:110px; margin:0; padding:6px 8px; font-size:12.5px;">
+                    <input type="text" name="phone" value="{acc['phone'] or ''}" placeholder="เบอร์โทร" required style="width:110px; margin:0; padding:6px 8px; font-size:12.5px;">
+                    <input type="file" name="photo" accept="image/png,image/jpeg,image/webp" style="width:130px; margin:0; padding:4px; font-size:11px;">
+                    <button type="submit" class="btn btn-warning" style="padding:6px 12px; font-size:11.5px;">💾 บันทึก</button>
+                </form>
+            </td>
+        </tr>
         """
 
-    note = f"""<div class="dk-card" style="background:#eff6ff;border:1px solid #bfdbfe;display:flex;gap:10px;align-items:flex-start;">
-        <span style="color:#1d4ed8;flex-shrink:0;margin-top:1px;">{_ic(_SVG_INFO, 18)}</span>
-        <p style="margin:0;font-size:13px;color:#1e40af;line-height:1.7;">
-            นักเรียนจะล็อกอินเข้าระบบด้วย <b>รหัสประจำตัว + เบอร์โทรศัพท์</b> (ไม่ต้องตั้งรหัสผ่าน) และสามารถ <b>แนบรูปโปรไฟล์</b> ให้นักเรียนแต่ละคนได้จากรายการด้านล่าง (รองรับ .jpg .png .webp ไม่เกิน 3MB)
-        </p></div>"""
-    filter_bar = f"""<div class="dk-card"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
-        <div class="dk-card-title" style="margin:0;">รายชื่อนักเรียน<small>{len(master_students)} คน</small></div>
-        <div style="display:flex;align-items:center;gap:8px;">
-            <label class="dk-label" style="margin:0;display:flex;align-items:center;gap:5px;">{_ic(_SVG_SEARCH, 14)} กรองตามห้อง</label>
-            <select class="dk-select" style="width:auto;" onchange="location.href='/admin/student_accounts?class_filter='+encodeURIComponent(this.value);">{class_options}</select>
-        </div></div></div>"""
-
-    body = note + scope_note + filter_bar + (f'<div class="dk-grid c2">{rows}</div>' if rows else f'<div class="dk-card">{dk_empty(_ic(_SVG_FOLDER, 38, 1.5), "ไม่พบข้อมูลนักเรียน")}</div>')
-    js = """<script>document.addEventListener('change', function(ev){
-        var inp = ev.target.closest('.sa-file-input'); if(!inp) return;
-        var t = inp.closest('.sa-file-label').querySelector('.sa-file-text');
-        t.textContent = inp.files && inp.files[0] ? inp.files[0].name : 'แนบรูปโปรไฟล์ (ถ้ามี)';
-    });</script>"""
-    return dk_page("โปรไฟล์บัญชีนักเรียน", "ตั้งรหัสประจำตัวและเบอร์โทรสำหรับให้นักเรียนเข้าสู่ระบบ", body, back_url, extra=js, icon=_ic(_SVG_KEY, 22))
+    return f"""
+    <html>{STYLE_HEADER}
+    <body>
+        <div class="navbar">
+            <h1><img src="{LOGO_URL}" class="nav-logo"> 🔑 โปรไฟล์บัญชีนักเรียน</h1>
+            <a href="{back_url}" class="btn btn-secondary">⬅ กลับ</a>
+        </div>
+        <div class="main-container">
+            <div class="card" style="background:#eff6ff; border:1px solid #bfdbfe;">
+                <p style="margin:0; font-size:13px; color:#1e40af; line-height:1.7;">
+                    📌 นักเรียนจะล็อกอินเข้าระบบด้วย <b>รหัสประจำตัว + เบอร์โทรศัพท์</b> (ไม่ต้องตั้งรหัสผ่าน) และสามารถ <b>แนบรูปโปรไฟล์</b> ให้นักเรียนแต่ละคนได้จากตารางด้านล่าง (รองรับ .jpg .png .webp ไม่เกิน 3MB)
+                </p>
+            </div>
+            {scope_note}
+            <div class="card">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; flex-wrap:wrap; gap:10px;">
+                    <h2 style="margin:0;">รายชื่อนักเรียน</h2>
+                    <div style="display:flex; align-items:center; gap:8px; background:#f1f5f9; padding:8px 12px; border-radius:10px; border:1px solid #e2e8f0;">
+                        <span style="font-size:13px; font-weight:700; color:#475569;">🔍 กรองตามห้อง:</span>
+                        <select onchange="location.href='/admin/student_accounts?class_filter='+this.value;" style="padding:5px; border-radius:6px; border:1px solid #cbd5e1; font-family:'Sarabun'; font-size:13px; font-weight:600;">
+                            {class_options}
+                        </select>
+                    </div>
+                </div>
+                <div style="overflow-x:auto; border-radius:8px; border:1px solid #e2e8f0;">
+                    <table>
+                        <thead><tr><th style="text-align:left;">นักเรียน</th><th>สถานะ</th><th colspan="2">รหัสประจำตัว / เบอร์โทร / รูป</th></tr></thead>
+                        <tbody>{rows if rows else "<tr><td colspan='3'>ไม่พบข้อมูล</td></tr>"}</tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </body></html>
+    """
 
 @app.post("/api/admin/student_account/set")
 async def api_set_student_account(uid: str = Form(...), student_id: str = Form(...), phone: str = Form(...), photo: Optional[UploadFile] = File(None), user_session: Optional[str] = Cookie(None)):
@@ -3760,6 +4406,24 @@ async def admin_system_status(user_session: Optional[str] = Cookie(None)):
 # ==========================================
 # 👤 [INSTRUCTOR VIEW WITH MAINTENANCE BLOCK]
 # ==========================================
+TEACHER_ANN_JS = """<script>
+(async function () {
+    try {
+        const resp = await fetch('/api/announcements'); const data = await resp.json();
+        if (!data || !data.length) return;
+        document.getElementById('announcement-section').style.display = 'block';
+        const list = document.getElementById('announcement-list');
+        const cfg = { normal: { cls: 'normal', ic: '📣', tc: '#1e40af' }, important: { cls: 'important', ic: '⚠️', tc: '#92400e' }, urgent: { cls: 'urgent', ic: '🚨', tc: '#991b1b' } };
+        data.forEach(a => {
+            const c = cfg[a.level] || cfg.normal, div = document.createElement('div');
+            div.className = 'ah-announce ' + c.cls;
+            div.innerHTML = '<div class="ah-announce-title" style="color:' + c.tc + '">' + c.ic + ' ' + a.title + '</div><div class="ah-announce-body">' + a.body + '</div>';
+            list.appendChild(div);
+        });
+    } catch (e) {}
+})();
+</script>"""
+
 @app.get("/app/dashboard", response_class=HTMLResponse)
 async def app_dashboard(user: str, user_session: Optional[str] = Cookie(None)):
     if not user_session or user_session != f"teacher_{urllib.parse.quote(user)}":
@@ -3775,8 +4439,7 @@ async def app_dashboard(user: str, user_session: Optional[str] = Cookie(None)):
     cursor.execute("SELECT fullname FROM teachers WHERE username = ?", (user,))
     t_info = cursor.fetchone()
     display_name = t_info[0] if t_info else user
-    cursor.execute("SELECT group_id, group_name FROM course_groups WHERE teacher_username = ?", (user,))
-    my_groups = cursor.fetchall()
+    my_groups = groups_for_user(cursor, user)
     cursor.execute("SELECT COUNT(*) FROM announcements WHERE is_active=1")
     active_announcements = cursor.fetchone()[0]
     pending_leave = 0
@@ -3789,164 +4452,82 @@ async def app_dashboard(user: str, user_session: Optional[str] = Cookie(None)):
             pending_leave = cursor.fetchone()[0]
     conn.close()
 
-    def badge(n):
-        return f'<span class="ah-badge">{n}</span>' if n > 0 else ""
-    def count_badge(n):
-        return f'<span class="ah-badge-count">{n}</span>' if n > 0 else ""
+    # ───────── ข้อมูลของแดชบอร์ดครู ─────────
+    conn2 = sqlite3.connect('attendance_pro.db')
+    c2 = conn2.cursor()
+    today_th = datetime.now().strftime("%d/%m/%Y")
+    c2.execute("SELECT username, fullname FROM teachers")
+    name_map = dict(c2.fetchall())
+    subjects, total_students, done_today = [], 0, 0
+    for gid, gname in my_groups:
+        c2.execute("SELECT COUNT(*) FROM group_assignments WHERE group_id=?", (gid,))
+        n_stu = c2.fetchone()[0]
+        c2.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (gid,))
+        owner = (c2.fetchone() or [""])[0]
+        try:
+            c2.execute("SELECT COUNT(*) FROM attendance_logs WHERE group_name=? AND date=?", (gname, today_th))
+            checked_today = c2.fetchone()[0] > 0
+        except sqlite3.Error:
+            checked_today = False
+        total_students += n_stu
+        done_today += 1 if checked_today else 0
+        subjects.append((gid, gname, n_stu, owner, checked_today))
+    conn2.close()
 
-    # 🎓📍 แผ่นเช็กชื่อคลาสวิชาภายใต้การกำกับดูแล (SVG icons)
-    room_cells = ""
-    for g in my_groups:
-        target_url = f"/app/classroom/{g[0]}?user={user}"
-        room_cells += f"""
-        <a href="{target_url}" class="ah-cell">
-            <div class="ah-cell-icon-wrap" style="background:#dbeafe;color:#1d4ed8;">
-                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-            </div>
-            <span class="ah-cell-label">{g[1]}</span>
-        </a>"""
+    uq = urllib.parse.quote(user)
+    subj_cards = ""
+    for gid, gname, n_stu, owner, checked in subjects:
+        mine = owner == user
+        owner_txt = "วิชาของคุณ" if mine else f"ครูผู้สอน: {_he(name_map.get(owner, owner or '-'))}"
+        subj_cards += f"""<div class="dk-subj">
+            <div class="dk-subj-top"><div class="dk-ico-box" style="background:#ccfbf1;color:#0f766e;">{ic('book-open', 22)}</div>
+                <div class="grow"><b>{_he(gname)}</b><span class="sub">{owner_txt}</span></div></div>
+            <div class="dk-subj-meta"><span class="dk-pill mute">{ic('users', 13)} {n_stu} คน</span>
+                <span class="dk-pill {'ok' if checked else 'warn'}">{ic('check' if checked else 'clock', 13)} {'เช็กชื่อวันนี้แล้ว' if checked else 'ยังไม่ได้เช็กวันนี้'}</span></div>
+            <div class="dk-subj-act"><a href="/app/rollcall/{gid}?user={uq}" class="dk-btn sm">{ic('clipboard-check', 15)} เช็กชื่อ</a>
+                <a href="/app/classroom/{gid}?user={uq}" class="dk-btn light sm">{ic('school', 15)} ห้องเรียน</a></div></div>"""
+    if not subj_cards:
+        subj_cards = f'<div class="dk-card" style="grid-column:1/-1;">{dk_empty("📚", "ยังไม่มีวิชาที่ได้รับมอบหมาย — ติดต่อผู้ดูแลระบบหรือหัวหน้าวิชา")}</div>'
 
-    # 🔐 เมนูสิทธิ์พิเศษ: หัวหน้าระดับ / ฝ่ายกิจการ (SVG icons)
-    discipline_cells = ""
+    tools = dk_tool(f"/app/history?user={uq}", "file-text", "ประวัติเช็กชื่อ", "blue")
+    if can_manage_subject_scope(access) and access["role"] == "subject_head":
+        tools += dk_tool("/subject-head", "layers", "จัดการวิชา", "violet")
+    if can_manage_inspection(access):
+        tools += dk_tool("/inspection", "clipboard-check", "ตรวจระเบียบ", "green")
+    if can_view_inspection_report(access):
+        tools += dk_tool("/inspection/report", "bar-chart", "รายงานระเบียบ", "blue")
+    if can_manage_inspection_criteria(access):
+        tools += dk_tool("/inspection/criteria", "sliders", "ตัวชี้วัดระเบียบ", "amber")
     if can_manage_discipline(access):
-        discipline_cells += f"""
-        <a href="/admin/leave_requests" class="ah-cell" style="position:relative;">
-            {count_badge(pending_leave)}
-            <div class="ah-cell-icon-wrap" style="background:#eef2ff;color:#4338ca;">
-                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
-            </div>
-            <span class="ah-cell-label">อนุมัติคำร้องลา</span>
-        </a>
-        <a href="/admin/conduct" class="ah-cell">
-            <div class="ah-cell-icon-wrap" style="background:#fff1f2;color:#be123c;">
-                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-            </div>
-            <span class="ah-cell-label">คะแนนประพฤติ</span>
-        </a>"""
+        tools += dk_tool("/admin/leave_requests", "file-text", "อนุมัติคำร้องลา", "violet", pending_leave)
+        tools += dk_tool("/admin/conduct", "shield", "คะแนนประพฤติ", "red")
     if can_view_analytics(access):
-        discipline_cells += f"""
-        <a href="/admin/analytics" class="ah-cell">
-            <div class="ah-cell-icon-wrap" style="background:#eef2ff;color:#4338ca;">
-                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
-            </div>
-            <span class="ah-cell-label">แดชบอร์ดสถิติ</span>
-        </a>"""
+        tools += dk_tool("/admin/analytics", "bar-chart", "แดชบอร์ดสถิติ", "blue")
     if can_manage_teacher_accounts(access):
-        discipline_cells += f"""
-        <a href="/admin/teachers" class="ah-cell">
-            <div class="ah-cell-icon-wrap" style="background:#f0fdf4;color:#15803d;">
-                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-            </div>
-            <span class="ah-cell-label">จัดการบัญชีครู</span>
-        </a>"""
+        tools += dk_tool("/admin/teachers", "users", "จัดการบัญชีครู", "green")
+    if can_manage_student_registry(access):
+        tools += dk_tool("/admin/students", "backpack", "ทะเบียนนักเรียน", "blue")
+        tools += dk_tool("/admin/add_student", "user-plus", "เพิ่มนักเรียน", "green")
     if can_manage_student_profiles(access):
-        discipline_cells += f"""
-        <a href="/admin/student_accounts" class="ah-cell">
-            <div class="ah-cell-icon-wrap" style="background:#f5f3ff;color:#6d28d9;">
-                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-            </div>
-            <span class="ah-cell-label">โปรไฟล์นักเรียน</span>
-        </a>"""
-    discipline_cells = inspection_menu_cells(access) + discipline_cells
-    discipline_section = ""
-    if discipline_cells:
-        scope_tag = f" ({access['level_scope']})" if access["role"] == "level_head" and access["level_scope"] else ""
-        discipline_section = f"""
-        <div class="ah-section-label">{access['role_label']}{scope_tag} · สิทธิ์พิเศษ</div>
-        <div class="ah-grid3">{discipline_cells}</div>
-        """
+        tools += dk_tool("/admin/student_accounts", "lock", "โปรไฟล์นักเรียน", "violet")
+    if can_manage_payments(access):
+        tools += dk_tool("/admin/payments", "credit-card", "การเงิน", "amber")
 
-    return f"""
-    <html>{STYLE_HEADER}
-    {ADMIN_HOME_STYLE}
-    <body class="ah-body">
-        {PAGE_LOADER}
-        <!-- ── Teacher Profile Hero ── -->
-        <div class="ah-profile">
-            <div class="ah-top-row">
-                <div class="ah-brand">K-School</div>
-                <div class="ah-top-icons">
-                    <a href="/app/notifications" class="ah-icon-btn" aria-label="ประกาศ">
-                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-                        {badge(active_announcements)}
-                    </a>
-                    <a href="/logout" class="ah-icon-btn" aria-label="ออกจากระบบ">
-                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16,17 21,12 16,7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-                    </a>
-                </div>
-            </div>
-            <div class="ah-who">
-                <div class="ah-avatar" style="background:linear-gradient(135deg,#0f766e,#0d9488); overflow:hidden; padding:0; border-radius:50%;">
-                    <img src="{TEACHER_DEFAULT_AVATAR}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" alt="{display_name}">
-                </div>
-                <div>
-                    <h1>สวัสดี, {display_name}</h1>
-                    <p>{access['role_label']} · K-School</p>
-                </div>
-            </div>
-            <div class="ah-inst">
-                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9,22 9,12 15,12 15,22"/></svg>
-                วิทยาลัยนาฏศิลป
-            </div>
-        </div>
-
-        <div class="ah-wrap">
-            <!-- ── ประกาศ ── -->
-            <div id="announcement-section" style="margin-bottom:16px; display:none;">
-                <div id="announcement-list"></div>
-            </div>
-            <script>
-                async function loadAnnouncements() {{
-                    try {{
-                        const resp = await fetch('/api/announcements');
-                        const data = await resp.json();
-                        if (data && data.length > 0) {{
-                            document.getElementById('announcement-section').style.display = 'block';
-                            const list = document.getElementById('announcement-list');
-                            const cfg = {{normal:{{cls:'normal',ic:'📣',tc:'#1e40af'}}, important:{{cls:'important',ic:'⚠️',tc:'#92400e'}}, urgent:{{cls:'urgent',ic:'🚨',tc:'#991b1b'}}}};
-                            data.forEach(a => {{
-                                const c = cfg[a.level] || cfg.normal;
-                                const div = document.createElement('div');
-                                div.className = `ah-announce ${{c.cls}}`;
-                                div.innerHTML = `<div class="ah-announce-title" style="color:${{c.tc}}">${{c.ic}} ${{a.title}}</div><div class="ah-announce-body">${{a.body}}</div>`;
-                                list.appendChild(div);
-                            }});
-                        }}
-                    }} catch (e) {{}}
-                }}
-                loadAnnouncements();
-            </script>
-
-            <!-- ── Big Tiles: ประวัติ + คำร้อง ── -->
-            <div class="ah-row2">
-                <a href="/app/history?user={user}" class="ah-tile-big" style="background:linear-gradient(135deg,#0f766e,#0d9488);">
-                    <div class="ah-tile-bg-icon">
-                        <svg viewBox="0 0 24 24" width="52" height="52" fill="none" stroke="rgba(255,255,255,0.9)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10,9 9,9 8,9"/></svg>
-                    </div>
-                    <div class="ah-tile-pill">ดูประวัติทั้งหมด</div>
-                    <span class="ah-tile-label">คลังประวัติ<br>ใบเช็กชื่อ</span>
-                </a>
-                <a href="/leave" class="ah-tile">
-                    <div class="ah-tile-icon-wrap" style="background:#dbeafe;">
-                        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="#1d4ed8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
-                    </div>
-                    <span class="ah-tile-label">ยื่นคำร้องลา <span style="font-size:10px;color:#94a3b8;display:block;font-weight:500;">(สำหรับนักเรียน)</span></span>
-                </a>
-            </div>
-
-            {discipline_section}
-
-            <div class="ah-section-title">คลาสวิชาภายใต้การกำกับดูแล</div>
-            <div class="ah-grid3">
-                {room_cells if room_cells else '<div style="grid-column:1/-1;padding:20px;text-align:center;background:#fff;border-radius:16px;border:1px solid #fecaca;color:#b91c1c;font-weight:700;font-size:13px;">⚠️ ยังไม่มีกลุ่มวิชาที่ได้รับมอบหมาย</div>'}
-            </div>
-
-            <div class="ah-footer">powered by <span>K-Techinteractive</span></div>
-        </div>
-
-        {render_bottom_nav("home", "teacher", user)}
-    </body></html>
-    """
+    stats = (dk_stat("วิชาที่ดูแล", len(subjects), "📚", "green") + dk_stat("นักเรียนในวิชา", total_students, "🎒", "blue")
+             + dk_stat("เช็กชื่อวันนี้", f"{done_today}/{len(subjects)}", "✅", "violet")
+             + (dk_stat("คำร้องรออนุมัติ", pending_leave, "📝", "amber") if can_manage_discipline(access) else dk_stat("ประกาศใหม่", active_announcements, "📣", "amber")))
+    scope_tag = f" · {_he(access['level_scope'])}" if access["role"] == "level_head" and access["level_scope"] else ""
+    hero_actions = (f'<a href="/app/notifications" class="dk-btn hero">{ic("bell", 15)} ประกาศ</a>'
+                    f'<a href="/logout" class="dk-btn hero">{ic("log-out", 15)}</a>')
+    body = (f'<div id="announcement-section" style="margin-bottom:14px;display:none;"><div id="announcement-list"></div></div>'
+            f'<div class="dk-stats">{stats}</div>'
+            f'<div class="dk-section">เมนูของคุณ · {_he(TEACHER_ROLES.get(access["role"], TEACHER_ROLES["teacher"])["label"].split(" ", 1)[-1])}{scope_tag}</div><div class="dk-tools">{tools}</div>'
+            f'<div class="dk-section">วิชาที่ดูแล ({len(subjects)})</div><div class="dk-grid c2">{subj_cards}</div>'
+            f'<div class="ah-footer" style="margin-top:20px;">powered by <span>K-Techinteractive</span></div>')
+    role_text = _he(access["role_label"].split(" ", 1)[-1]) if access["role_label"] else "ครู"
+    subtitle = f'{today_th[:6]}{int(today_th[-4:]) + 543} · วิทยาลัยนาฏศิลป<br><span class="dk-role">{ic("award", 13)} {role_text}{scope_tag}</span>'
+    return dk_page(f"สวัสดี, {_he(display_name)}", subtitle, body, None, hero_actions,
+                   extra=TEACHER_ANN_JS + render_bottom_nav("home", "teacher", user), theme="dk-teal", head_extra=ADMIN_HOME_STYLE)
 
 @app.get("/teacher/profile", response_class=HTMLResponse)
 async def teacher_profile_page(user: str, user_session: Optional[str] = Cookie(None)):
@@ -3960,8 +4541,7 @@ async def teacher_profile_page(user: str, user_session: Optional[str] = Cookie(N
     cursor.execute("SELECT fullname FROM teachers WHERE username = ?", (user,))
     t_info = cursor.fetchone()
     display_name = t_info[0] if t_info else user
-    cursor.execute("SELECT COUNT(*) FROM course_groups WHERE teacher_username = ?", (user,))
-    group_count = cursor.fetchone()[0]
+    group_count = len(groups_for_user(cursor, user))
     conn.close()
     uq = urllib.parse.quote(user)
 
@@ -4113,7 +4693,7 @@ async def admin_history_detail_page(group_name: str, date: str, user_session: Op
         <div class="dk-track" style="margin-bottom:12px;"><i style="width:{present_rate}%"></i></div>
         <div style="font-size:13.5px;line-height:1.9;"><b>วิชาเรียน:</b> {_he(group_name)}<br><b>ประจำรอบวันที่:</b> {_he(date)}<br><b>ผู้กดบันทึก:</b> {_he(str(checked_by_name))}</div>
         <a href="/api/admin/delete_attendance_log?group_name={urllib.parse.quote(group_name)}&date={urllib.parse.quote(date)}" class="dk-btn danger block" style="margin-top:14px;padding:12px;"
-           onclick="return confirm('⚠️ ยืนยันการลบข้อมูลใบเช็คชื่อในรอบวันนี้?')">🛑 ลบข้อมูลประวัติบันทึกซ้ำของรอบคลาสนี้</a></div>"""
+           data-confirm="ยืนยันการลบข้อมูลใบเช็คชื่อในรอบวันนี้?">🛑 ลบข้อมูลประวัติบันทึกซ้ำของรอบคลาสนี้</a></div>"""
     table = f"""<div class="dk-card"><div class="dk-card-title">👥 สถานะรายบุคคล<small>{total} คน</small></div>
         <div class="dk-tablewrap"><table class="dk-table"><thead><tr><th>ชั้นเรียน</th><th>เลขที่</th><th>ชื่อ-นามสกุล</th><th>สถานะ</th></tr></thead>
         <tbody>{table_rows if table_rows else "<tr><td colspan='4' style='text-align:center;color:#94a3b8;'>ไม่พบข้อมูลนักเรียน</td></tr>"}</tbody></table></div></div>"""
@@ -4137,7 +4717,7 @@ async def api_delete_attendance_log(group_name: str, date: str, user_session: Op
 # ==========================================
 @app.get("/admin/edit_student", response_class=HTMLResponse)
 async def admin_edit_student_page(uid: str, user_session: Optional[str] = Cookie(None)):
-    if user_session != "admin": return RedirectResponse(url="/login", status_code=303)
+    if not gate_perm(user_session, can_manage_student_registry): return RedirectResponse(url="/login", status_code=303)
     master_students = get_sorted_master_students()
     target = None
     for s in master_students:
@@ -4166,7 +4746,7 @@ async def admin_edit_student_page(uid: str, user_session: Optional[str] = Cookie
 
 @app.post("/api/admin/edit_student")
 async def api_edit_student(old_uid: str = Form(...), student_name: str = Form(...), student_no: str = Form(...), classroom: str = Form(...), branch: str = Form(...), user_session: Optional[str] = Cookie(None)):
-    if user_session != "admin": return HTMLResponse("Unauthorized", status_code=401)
+    if not gate_perm(user_session, can_manage_student_registry): return HTMLResponse("Unauthorized", status_code=401)
     lines_to_keep = []
     if os.path.exists(TXT_DATABASE_PATH):
         with open(TXT_DATABASE_PATH, "r", encoding="utf-8") as f:
@@ -4182,7 +4762,7 @@ async def api_edit_student(old_uid: str = Form(...), student_name: str = Form(..
 
 @app.get("/api/admin/delete_student")
 async def api_delete_student(uid: str, user_session: Optional[str] = Cookie(None)):
-    if user_session != "admin": return RedirectResponse(url="/login", status_code=303)
+    if not gate_perm(user_session, can_manage_student_registry): return RedirectResponse(url="/login", status_code=303)
     lines_to_keep = []
     if os.path.exists(TXT_DATABASE_PATH):
         with open(TXT_DATABASE_PATH, "r", encoding="utf-8") as f:
@@ -4434,8 +5014,7 @@ async def app_history_page(user: str, group_id: Optional[str] = None, user_sessi
     selected_group_name = ""
     
     try:
-        cursor.execute("SELECT group_id, group_name FROM course_groups WHERE teacher_username = ?", (user,))
-        my_groups = cursor.fetchall()
+        my_groups = groups_for_user(cursor, user)
         if group_id:
             cursor.execute("SELECT group_name FROM course_groups WHERE group_id = ?", (group_id,))
             g_res = cursor.fetchone()
@@ -5134,7 +5713,7 @@ function startCountdown(seconds) {{
         if (timeLeft <= 0) {{
             clearInterval(timerInterval);
             timerDisplay.textContent = "⏱️ หมดเวลาเปิดลงทะเบียนแล้ว";
-            alert("⏰ หมดเวลาลงทะเบียนเช็กชื่อด่วนเรียบร้อยครับ");
+            smartAlert({{ title: 'หมดเวลา', message: 'หมดเวลาลงทะเบียนเช็กชื่อด่วนเรียบร้อยครับ', type: 'warning' }});
             closeOTPModal();
             return;
         }}
@@ -5399,12 +5978,12 @@ async def api_student_checkin(
 
 @app.get("/admin/add_student", response_class=HTMLResponse)
 async def admin_add_student_page(user_session: Optional[str] = Cookie(None)):
-    if user_session != "admin": return RedirectResponse(url="/login", status_code=303)
+    if not gate_perm(user_session, can_manage_student_registry): return RedirectResponse(url="/login", status_code=303)
     return f"""<html>{STYLE_HEADER}<body><div class="navbar"><h1>➕ เพิ่มรายชื่อทะเบียนนักเรียนใหม่</h1><a href="/admin/students" class="btn btn-secondary">⬅ กลับหน้าหลัก</a></div><div class="main-container"><div class="card"><form action="/api/admin/add_student" method="post"><input type="text" name="student_name" placeholder="ชื่อ-นามสกุลนักเรียน" required><input type="text" name="student_no" placeholder="เลขที่ประจำตัว" required><input type="text" name="classroom" placeholder="ระดับชั้นเรียน" required><input type="text" name="branch" placeholder="สาขาวิชาเอก" required><button type="submit" class="btn-submit">💾 ยืนยันบันทึกข้อมูลหลัก</button></form></div></div></body></html>"""
 
 @app.post("/api/admin/add_student")
 async def api_add_student(student_name: str = Form(...), student_no: str = Form(...), classroom: str = Form(...), branch: str = Form(...), user_session: Optional[str] = Cookie(None)):
-    if user_session != "admin": return HTMLResponse("Unauthorized", status_code=401)
+    if not gate_perm(user_session, can_manage_student_registry): return HTMLResponse("Unauthorized", status_code=401)
     new_line = f"{student_name.strip()}, {student_no.strip()}, {classroom.strip()}, {branch.strip()}\n"
     with open(TXT_DATABASE_PATH, "a", encoding="utf-8") as f: f.write(new_line)
     return HTMLResponse(f"""<html>{STYLE_HEADER}<body><script>smartAlert({{title: 'ดำเนินการเสร็จสิ้น!', message: 'บันทึกเพิ่มรายชื่อเรียบร้อย!', type: 'success', callback: () => {{ window.location.href='/admin/add_student'; }} }});</script></body></html>""")
@@ -5757,7 +6336,7 @@ async def admin_conduct_history_page(uid: str, user_session: Optional[str] = Coo
             <td><b>{h['running_total']}</b></td>
             <td>
                 <a href="/api/admin/conduct/delete?entry_id={h['id']}&uid={uid}"
-                   onclick="return confirm('ลบรายการนี้? ระบบจะคืนคะแนนให้นักเรียนอัตโนมัติ')"
+                   data-confirm="ลบรายการนี้? ระบบจะคืนคะแนนให้นักเรียนอัตโนมัติ"
                    class="btn btn-danger" style="padding:4px 9px;font-size:11px;">🗑️ ลบ</a>
             </td>
         </tr>
@@ -5818,6 +6397,7 @@ async def admin_teachers_page(user_session: Optional[str] = Cookie(None)):
                 <div class="nm"><b>{_he(fullname or '-')}</b><span>@{_he(username or '')}</span></div>
             </div>
             <div style="margin-bottom:10px;"><span class="dk-pill {role_tone.get(role, 'mute')}">{_he(role_meta['label'])}{scope_txt}</span></div>
+            {f'<a href="/admin/subject_scope?head={q_user}" class="dk-btn sm" style="width:100%;margin-bottom:8px;background:linear-gradient(135deg,#6d28d9,#5b21b6);">📚 กำหนดวิชาที่รับผิดชอบ</a>' if role == "subject_head" else ""}
             <div style="display:flex;gap:8px;">
                 <a href="/admin/confirm_edit_teacher?target_username={q_user}" class="dk-btn light sm" style="flex:1;">📝 แก้ไข</a>
                 <a href="/admin/confirm_delete_teacher?target_username={q_user}" class="dk-btn danger sm" style="flex:1;">🗑️ ลบ</a>
@@ -6277,6 +6857,10 @@ def init_db():
     )''')
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_payments_student ON payments (student_uid)")
 
+    # 📚 หัวหน้าวิชา: วิชาที่รับผิดชอบ (แอดมินกำหนด / หัวหน้าวิชาสร้างเอง)
+    cursor.execute('''CREATE TABLE IF NOT EXISTS subject_head_groups (
+        head_username TEXT NOT NULL, group_id INTEGER NOT NULL, PRIMARY KEY (head_username, group_id))''')
+
     # 📋 ระบบตรวจระเบียบ: ตัวชี้วัด (แก้ไขได้) + ผลการตรวจรายวันรายคน
     cursor.execute('''CREATE TABLE IF NOT EXISTS inspection_criteria (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -6308,7 +6892,7 @@ def init_db():
     cursor.execute("SELECT COUNT(*) FROM inspection_criteria")
     if cursor.fetchone()[0] == 0:
         _seed_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        for _i, (_n, _ic) in enumerate([("ทรงผม", "💈"), ("บัตรนักเรียน", "🪪"), ("การแต่งกาย", "👔")], start=1):
+        for _i, (_n, _ic) in enumerate([("ทรงผม", "scissors"), ("บัตรนักเรียน", "id-card"), ("การแต่งกาย", "shirt")], start=1):
             cursor.execute(
                 "INSERT INTO inspection_criteria (name, icon, is_active, sort_order, created_by, created_at) VALUES (?,?,1,?,?,?)",
                 (_n, _ic, _i, "system", _seed_now))
@@ -6361,7 +6945,9 @@ DASH_KIT = """
         box-shadow:0 1px 3px rgba(15,23,42,.05); margin-bottom:14px; }
     .dk-card-title { display:flex; align-items:center; justify-content:space-between; gap:8px;
         font-size:14.5px; font-weight:800; margin:0 0 12px; }
-    .dk-card-title small { font-size:11.5px; font-weight:600; color:#64748b; }
+    .dk-card-title { justify-content:flex-start; gap:10px; }
+    .dk-card-title small { font-size:11.5px; font-weight:600; color:#64748b; margin-left:auto; }
+    .dk-card-title > .kx-i:first-child { width:30px; height:30px; padding:6px; border-radius:10px; background:#eef2ff; color:#4338ca !important; }
     .dk-section { font-size:12px; font-weight:800; color:#64748b; letter-spacing:.4px; margin:18px 4px 10px; }
     .dk-grid { display:grid; gap:12px; grid-template-columns:1fr; }
     @media (min-width:720px) { .dk-grid.c2 { grid-template-columns:repeat(2,1fr); } .dk-grid.c3 { grid-template-columns:repeat(3,1fr); } }
@@ -6383,6 +6969,30 @@ DASH_KIT = """
     .dk-input, .dk-select { width:100%; padding:10px 12px; border:1.5px solid #dbe2ec; border-radius:11px; font-family:inherit;
         font-size:14px; background:#fff; color:#0f172a; }
     .dk-body input.dk-input, .dk-body select.dk-select { margin-bottom:0; }
+    .dk-brand { font-size:15px; font-weight:800; letter-spacing:.3px; } .dk-brand span { opacity:.65; font-weight:600; margin-left:4px; }
+    .dk-teal .dk-hero { background:linear-gradient(135deg,#042f2e 0%,#0f766e 55%,#0d9488 100%); }
+    .dk-teal .dk-hero::before { background:radial-gradient(circle at 92% 15%,rgba(94,234,212,.28),transparent 50%),radial-gradient(circle at 8% 90%,rgba(250,204,21,.14),transparent 45%); }
+    .dk-teal .dk-chip.on { background:#0f766e; border-color:#0f766e; }
+    .dk-teal .dk-btn:not(.light):not(.danger):not(.hero):not(.green) { background:linear-gradient(135deg,#0f766e,#115e59); box-shadow:0 6px 14px -6px rgba(15,118,110,.55); }
+    .dk-role { display:inline-flex; align-items:center; gap:6px; margin-top:10px; padding:4px 12px; border-radius:999px; background:rgba(255,255,255,.16); border:1px solid rgba(255,255,255,.25); font-size:12px; font-weight:700; }
+    .dk-tools { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:6px; }
+    @media (min-width:720px) { .dk-tools { grid-template-columns:repeat(6,1fr); } }
+    .dk-tool { position:relative; display:flex; flex-direction:column; align-items:center; gap:8px; text-align:center; text-decoration:none; color:#0f172a;
+        background:#fff; border:1px solid #e6eaf1; border-radius:16px; padding:14px 6px 12px; font-size:12px; font-weight:700; line-height:1.3; box-shadow:0 1px 3px rgba(15,23,42,.05); }
+    .dk-tool:active { transform:scale(.97); }
+    .dk-tool-ic { width:46px; height:46px; border-radius:14px; display:flex; align-items:center; justify-content:center; }
+    .dk-tool-badge { position:absolute; top:6px; right:8px; min-width:20px; height:20px; padding:0 6px; border-radius:999px; background:#ef4444; color:#fff; font-size:11px; font-weight:800; display:flex; align-items:center; justify-content:center; }
+    .dk-subj { background:#fff; border:1px solid #e6eaf1; border-radius:18px; padding:14px; box-shadow:0 1px 3px rgba(15,23,42,.05); }
+    .dk-subj-top { display:flex; align-items:center; gap:12px; margin-bottom:12px; }
+    .dk-subj-top .grow { flex:1; min-width:0; } .dk-subj-top b { display:block; font-size:15.5px; }
+    .dk-subj-top span.sub { font-size:12px; color:#64748b; font-weight:600; }
+    .dk-subj-meta { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:12px; }
+    .dk-subj-act { display:grid; grid-template-columns:repeat(2,1fr); gap:8px; }
+    .dk-iconpick { display:flex; flex-wrap:wrap; gap:8px; }
+    .dk-iconpick label { position:relative; cursor:pointer; margin:0; }
+    .dk-iconpick input { position:absolute; opacity:0; inset:0; }
+    .dk-iconpick span { width:44px; height:44px; border-radius:13px; background:#f1f5f9; border:2px solid transparent; color:#475569; display:flex; align-items:center; justify-content:center; }
+    .dk-iconpick input:checked + span { background:#dbeafe; border-color:#1d4ed8; color:#1d4ed8; }
     .dk-body table.dk-table { border:none; margin:0; }
     .dk-body .dk-hero h1 { color:#fff; }
     .dk-input:focus, .dk-select:focus { outline:none; border-color:#1d4ed8; box-shadow:0 0 0 3px rgba(29,78,216,.12); }
@@ -6463,14 +7073,19 @@ DASH_KIT = """
 """
 
 
-def dk_page(title: str, subtitle: str, body: str, back_url: str, actions: str = "", extra: str = "", icon: str = "") -> str:
-    """ห่อเนื้อหาด้วยโครงหน้าแดชบอร์ดมาตรฐาน (hero + wrap) — body/actions/extra ต้อง escape มาแล้ว"""
+def dk_page(title: str, subtitle: str, body: str, back_url: Optional[str], actions: str = "", extra: str = "", icon: str = "",
+            theme: str = "", head_extra: str = "") -> str:
+    """ห่อเนื้อหาด้วยโครงหน้าแดชบอร์ดมาตรฐาน (hero + wrap) — body/actions/extra ต้อง escape มาแล้ว
+    back_url=None → ไม่มีปุ่มกลับ (ใช้กับหน้าแรก) / theme="teal" → ธีมแดชบอร์ดครู"""
     sub = f"<p>{subtitle}</p>" if subtitle else ""
-    return f"""<html>{STYLE_HEADER}{DASH_KIT}<body class="dk-body">
+    icon = f'<span class="dk-hi">{icon.strip()}</span>' if icon and icon.strip() else ""
+    left = (f'<a href="{back_url}" class="dk-back" aria-label="กลับ">‹</a>' if back_url
+            else '<div class="dk-brand">K-School <span>Teacher</span></div>')
+    return f"""<html>{STYLE_HEADER}{DASH_KIT}{head_extra}<body class="dk-body {theme}">
 {PAGE_LOADER}
 <div class="dk-hero"><div class="dk-hero-in">
     <div class="dk-hero-top">
-        <a href="{back_url}" class="dk-back" aria-label="กลับ">‹</a>
+        {left}
         <div class="dk-hero-actions">{actions}</div>
     </div>
     <h1>{icon}{title}</h1>{sub}
@@ -6478,6 +7093,12 @@ def dk_page(title: str, subtitle: str, body: str, back_url: str, actions: str = 
 <div class="dk-wrap">{body}</div>
 {extra}
 </body></html>"""
+
+
+def dk_tool(href: str, icon_name: str, label: str, tone: str = "blue", badge: int = 0) -> str:
+    """ปุ่มเมนูแบบกล่อง: ไอคอนในกล่องสี + ป้ายชื่อ (ใช้ชุดไอคอน SVG ของระบบ)"""
+    b = f'<span class="dk-tool-badge">{badge}</span>' if badge else ""
+    return f'<a href="{href}" class="dk-tool">{b}<div class="dk-tool-ic t-{tone}">{ic(icon_name, 22)}</div><span>{label}</span></a>'
 
 
 def dk_stat(label: str, value, icon: str, tone: str = "blue") -> str:
@@ -6504,39 +7125,6 @@ _SVG_CLIP = '<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0
 _SVG_BARS = '<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>'
 _SVG_SLIDERS = '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>'
 
-# ── ไอคอนเส้น (ทำเอง แทนอิโมจิ) ใช้กับสถิติ/หัวข้อ/ปุ่มของระบบตรวจระเบียบทั้งหมด ──
-def _ic(svg_inner: str, size: int = 20, stroke: float = 2) -> str:
-    """คืน <svg> เส้น ขนาด/สีปรับได้ — สีจะรับช่วงจาก currentColor ของกล่องที่ห่ออยู่เสมอ"""
-    return (f'<svg viewBox="0 0 24 24" width="{size}" height="{size}" fill="none" '
-            f'stroke="currentColor" stroke-width="{stroke}" stroke-linecap="round" stroke-linejoin="round">{svg_inner}</svg>')
-
-_SVG_SCHOOL    = '<path d="M12 3 21 9v11H3V9Z"/><path d="M9 20v-6h6v6"/><path d="M3 9l9-6 9 6"/>'
-_SVG_BACKPACK  = '<path d="M8 3h8a2 2 0 0 1 2 2v2H6V5a2 2 0 0 1 2-2Z"/><path d="M6 7h12v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V7Z"/><path d="M9 12h6"/><path d="M10 3v2"/><path d="M14 3v2"/>'
-_SVG_USERS     = '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>'
-_SVG_CHECK_C   = '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>'
-_SVG_ALERT     = '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>'
-_SVG_CALENDAR  = '<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>'
-_SVG_SAVE      = '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>'
-_SVG_SEARCH    = '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>'
-_SVG_CLOCK     = '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>'
-_SVG_SETTINGS  = '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/>'
-_SVG_CLIPBOARD = '<path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/><line x1="8" y1="11" x2="16" y2="11"/><line x1="8" y1="15" x2="13" y2="15"/>'
-_SVG_DOWNLOAD  = '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>'
-_SVG_MEDAL     = '<circle cx="12" cy="8" r="6"/><path d="M8.21 13.89 7 23l5-3 5 3-1.21-9.12"/>'
-_SVG_SMILE     = '<circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/>'
-_SVG_INBOX     = '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11Z"/>'
-_SVG_PAUSE     = '<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>'
-_SVG_PLUS      = '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>'
-_SVG_BULB      = '<path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2Z"/>'
-_SVG_INFO      = '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>'
-_SVG_KEY       = '<circle cx="8" cy="15" r="4"/><path d="M10.5 12.5 20 3"/><path d="M17 6l3 3"/><path d="M14 9l2.5 2.5"/>'
-_SVG_FOLDER    = '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2Z"/>'
-_SVG_EDIT      = '<path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5Z"/>'
-_SVG_TRASH     = '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>'
-_SVG_EYE       = '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"/><circle cx="12" cy="12" r="3"/>'
-_SVG_USER_PLUS = '<path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/>'
-_SVG_IMAGE     = '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>'
-
 
 def inspection_menu_cells(access: dict) -> str:
     """เมนูระบบตรวจระเบียบสำหรับหน้าแดชบอร์ดครู/แอดมิน — แสดงเฉพาะที่บทบาทนี้มีสิทธิ์"""
@@ -6555,6 +7143,21 @@ def inspection_menu_cells(access: dict) -> str:
     if can_manage_inspection_criteria(access):
         cells += cell("/inspection/criteria", _SVG_SLIDERS, "#fff7ed", "#c2410c", "ตัวชี้วัดระเบียบ")
     return cells
+
+
+INSPECTION_ICON_CHOICES = ["scissors", "id-card", "shirt", "user", "backpack", "book", "clipboard-check", "shield", "star", "flag",
+                           "tag", "heart", "zap", "clock", "bell", "award", "school", "key", "eye", "check-circle"]
+
+
+def _insp_icon_name(icon: str) -> str:
+    """รับได้ทั้งชื่อไอคอน (ใหม่) และ emoji เดิมที่เคยบันทึกไว้ → ชื่อไอคอนในชุด SVG ของระบบ"""
+    if icon in KX_ICONS:
+        return icon
+    return KX_EMOJI.get((icon or "").replace("\ufe0f", ""), ("check-circle", None))[0]
+
+
+def _insp_icon(icon: str, size: int = 18) -> str:
+    return ic(_insp_icon_name(icon), size)
 
 
 def _insp_back_url(access: dict) -> str:
@@ -6701,7 +7304,7 @@ INSPECTION_JS = """
             var segs = rows[i].querySelectorAll('.dk-seg');
             for (var j = 0; j < segs.length; j++) if (!segs[j].getAttribute('data-v')) { setVal(segs[j], 'pass'); markDirty(rows[i], segs[j]); }
         }
-        refresh(); toast('ติ๊ก “ผ่าน” ให้ช่องที่ยังว่างแล้ว — อย่าลืมกดบันทึก');
+        refresh(); toast('ติ๊ก “ผ่าน” ให้ช่องที่ยังว่างแล้ว อย่าลืมกดบันทึก');
     });
 
     var chips = document.querySelectorAll('.dk-chip');
@@ -6711,25 +7314,32 @@ INSPECTION_JS = """
     });
     document.getElementById('search').addEventListener('input', function () { q = this.value.trim().toLowerCase(); refresh(); });
 
-    document.getElementById('saveBtn').addEventListener('click', function () {
+    function save() {
         var changes = Object.keys(dirty).map(function (k) { return dirty[k]; });
-        if (!changes.length) return;
-        var btn = this; var lbl = document.getElementById('saveBtnLabel');
-        btn.disabled = true; lbl.textContent = 'กำลังบันทึก...';
-        fetch('/api/inspection/save', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        if (!changes.length) return Promise.resolve(true);
+        var btn = document.getElementById('saveBtn'); btn.disabled = true;
+        if (window.KX) KX.loading(true, 'กำลังบันทึกผลตรวจ...');
+        return fetch('/api/inspection/save', { method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ room: ROOM, date: DATE, changes: changes }) })
         .then(function (r) { return r.json(); })
         .then(function (j) {
-            lbl.textContent = 'บันทึกผลตรวจ';
-            if (!j.ok) { btn.disabled = false; toast('❌ ' + (j.error || 'บันทึกไม่สำเร็จ')); return; }
+            if (window.KX) KX.loading(false);
+            if (!j.ok) { btn.disabled = false; toast('บันทึกไม่สำเร็จ: ' + (j.error || '')); return false; }
             var segs = list.querySelectorAll('.dk-seg');
             for (var i = 0; i < segs.length; i++) segs[i].setAttribute('data-orig', segs[i].getAttribute('data-v') || '');
-            dirty = {}; refresh(); toast('✅ บันทึกแล้ว ' + j.saved + ' รายการ');
+            dirty = {}; refresh(); toast('บันทึกแล้ว ' + j.saved + ' รายการ'); return true;
         })
-        .catch(function () { btn.disabled = false; lbl.textContent = 'บันทึกผลตรวจ'; toast('❌ เชื่อมต่อเซิร์ฟเวอร์ไม่ได้'); });
-    });
+        .catch(function () { if (window.KX) KX.loading(false); btn.disabled = false; toast('เชื่อมต่อเซิร์ฟเวอร์ไม่ได้'); return false; });
+    }
+    document.getElementById('saveBtn').addEventListener('click', save);
 
-    window.addEventListener('beforeunload', function (e) { if (Object.keys(dirty).length) { e.preventDefault(); e.returnValue = ''; } });
+    // ออกจากหน้าตอนยังไม่บันทึก → กล่องถามของเราเอง (ไม่ใช้ dialog ของเบราว์เซอร์)
+    function arm() {
+        if (!window.KX || !KX.guard) { setTimeout(arm, 50); return; }
+        KX.guard({ dirty: function () { return Object.keys(dirty).length > 0; }, save: save,
+                   message: 'ผลตรวจที่ติ๊กไว้ยังไม่ถูกบันทึก ต้องการบันทึกก่อนออกจากหน้านี้ไหม?' });
+    }
+    arm();
     refresh();
 })();
 </script>
@@ -6747,14 +7357,14 @@ async def inspection_page(room: Optional[str] = None, date: Optional[str] = None
 
     actions = ""
     if can_view_inspection_report(access):
-        actions += f'<a href="/inspection/report" class="dk-btn hero">{_ic(_SVG_BARS, 15)} รายงาน</a>'
+        actions += '<a href="/inspection/report" class="dk-btn hero">📊 รายงาน</a>'
     if can_manage_inspection_criteria(access):
-        actions += f'<a href="/inspection/criteria" class="dk-btn hero">{_ic(_SVG_SLIDERS, 15)} ตัวชี้วัด</a>'
+        actions += '<a href="/inspection/criteria" class="dk-btn hero">⚙️ ตัวชี้วัด</a>'
 
     if not criteria:
         link = '<br><a href="/inspection/criteria" class="dk-btn" style="margin-top:12px;">ไปเพิ่มตัวชี้วัด</a>' if can_manage_inspection_criteria(access) else ""
-        body = f'<div class="dk-card">{dk_empty(_ic(_SVG_CLIPBOARD, 38, 1.5), "ยังไม่มีตัวชี้วัดที่เปิดใช้งาน — โปรดให้ฝ่ายกิจการ/ผู้ดูแลระบบเพิ่มตัวชี้วัดก่อน" + link)}</div>'
-        return dk_page("ตรวจระเบียบนักเรียน", "ยังไม่มีตัวชี้วัด", body, back, actions, icon=_ic(_SVG_CLIPBOARD, 22))
+        body = f'<div class="dk-card">{dk_empty("🧾", "ยังไม่มีตัวชี้วัดที่เปิดใช้งาน — โปรดให้ฝ่ายกิจการ/ผู้ดูแลระบบเพิ่มตัวชี้วัดก่อน" + link)}</div>'
+        return dk_page("ตรวจระเบียบนักเรียน", "ยังไม่มีตัวชี้วัด", body, back, actions, icon="📋 ")
 
     rooms = sorted(set(s['class'] for s in students))
 
@@ -6777,8 +7387,8 @@ async def inspection_page(room: Optional[str] = None, date: Optional[str] = None
         total_students = len(students)
         checked_total = sum(prog.get(r, (0, 0))[0] for r in rooms)
         fail_total = sum(prog.get(r, (0, 0))[1] for r in rooms)
-        stats = (dk_stat("ห้องที่ดูแล", len(rooms), _ic(_SVG_SCHOOL), "blue") + dk_stat("นักเรียนทั้งหมด", total_students, _ic(_SVG_BACKPACK), "violet")
-                 + dk_stat("ตรวจแล้ว (คน)", checked_total, _ic(_SVG_CHECK_C), "green") + dk_stat("ไม่ผ่าน (รายการ)", fail_total, _ic(_SVG_ALERT), "red"))
+        stats = (dk_stat("ห้องที่ดูแล", len(rooms), "🏫", "blue") + dk_stat("นักเรียนทั้งหมด", total_students, "🎒", "violet")
+                 + dk_stat("ตรวจแล้ว (คน)", checked_total, "✅", "green") + dk_stat("ไม่ผ่าน (รายการ)", fail_total, "⚠️", "red"))
 
         sections = ""
         for lv in sorted(by_level, key=_insp_level_key):
@@ -6796,11 +7406,11 @@ async def inspection_page(room: Optional[str] = None, date: Optional[str] = None
             sections += f'<div class="dk-section">ระดับชั้น {_he(lv)}</div><div class="dk-grid c3">{cards}</div>'
 
         date_form = f"""<div class="dk-card"><form method="get" action="/inspection" class="dk-filter" style="grid-template-columns:1fr auto;">
-            <div><label class="dk-label" style="display:flex;align-items:center;gap:5px;">{_ic(_SVG_CALENDAR, 14)} วันที่ตรวจ</label><input type="date" name="date" value="{date}" class="dk-input"></div>
+            <div><label class="dk-label">📅 วันที่ตรวจ</label><input type="date" name="date" value="{date}" class="dk-input"></div>
             <button class="dk-btn" type="submit">ดูวันนี้</button></form></div>"""
-        body = f'<div class="dk-stats">{stats}</div>{date_form}{sections or dk_empty(_ic(_SVG_SCHOOL, 38, 1.5), "ไม่พบห้องเรียนในขอบเขตของคุณ")}'
+        body = f'<div class="dk-stats">{stats}</div>{date_form}{sections or dk_empty("🏫", "ไม่พบห้องเรียนในขอบเขตของคุณ")}'
         return dk_page("ตรวจระเบียบนักเรียน", f"เลือกห้องเพื่อเริ่มตรวจ · วันที่ {_insp_thai_date(date)} · {len(criteria)} ตัวชี้วัด",
-                       body, back, actions, icon=_ic(_SVG_CLIPBOARD, 22))
+                       body, back, actions, icon="📋 ")
 
     # ───── เลือกห้องแล้ว: ฟอร์มติ๊กผ่าน/ไม่ผ่าน ─────
     if room not in rooms:
@@ -6819,7 +7429,7 @@ async def inspection_page(room: Optional[str] = None, date: Optional[str] = None
             v = existing.get((s['uid'], c['id']), "")
             p_on = " on" if v == "pass" else ""
             f_on = " on" if v == "fail" else ""
-            crit_html += f"""<div class="dk-crit"><span>{_he(c['icon'])} {_he(c['name'])}</span>
+            crit_html += f"""<div class="dk-crit"><span style="display:flex;align-items:center;gap:8px;">{_insp_icon(c['icon'], 17)} {_he(c['name'])}</span>
                 <div class="dk-seg" data-cid="{c['id']}" data-v="{v}" data-orig="{v}">
                     <button type="button" class="p{p_on}" data-v="pass">ผ่าน</button>
                     <button type="button" class="f{f_on}" data-v="fail">ไม่ผ่าน</button>
@@ -6831,27 +7441,24 @@ async def inspection_page(room: Optional[str] = None, date: Optional[str] = None
                 <button type="button" class="dk-btn light sm" data-allpass>ผ่านทั้งหมด</button></div>
             <div class="dk-crits">{crit_html}</div></div>"""
 
-    stats = (dk_stat("นักเรียนในห้อง", len(stu), _ic(_SVG_BACKPACK), "blue") + dk_stat("ตรวจครบแล้ว", '<span id="stDone">0</span>', _ic(_SVG_CHECK_C), "green")
-             + dk_stat("ยังไม่ครบ", '<span id="stTodo">0</span>', _ic(_SVG_CLOCK), "amber") + dk_stat("มีรายการไม่ผ่าน", '<span id="stFail">0</span>', _ic(_SVG_ALERT), "red"))
+    stats = (dk_stat("นักเรียนในห้อง", len(stu), "🎒", "blue") + dk_stat("ตรวจครบแล้ว", '<span id="stDone">0</span>', "✅", "green")
+             + dk_stat("ยังไม่ครบ", '<span id="stTodo">0</span>', "⏳", "amber") + dk_stat("มีรายการไม่ผ่าน", '<span id="stFail">0</span>', "⚠️", "red"))
     tools = f"""<div class="dk-card">
         <div class="dk-track blue" style="margin-bottom:12px;"><i id="prog" style="width:0%"></i></div>
-        <div style="position:relative;margin-bottom:10px;">
-            <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);color:#94a3b8;display:flex;">{_ic(_SVG_SEARCH, 16)}</span>
-            <input id="search" class="dk-input" placeholder="ค้นหาชื่อ หรือเลขที่" style="padding-left:36px;">
-        </div>
+        <input id="search" class="dk-input" placeholder="🔍 ค้นหาชื่อ หรือเลขที่" style="margin-bottom:10px;">
         <div class="dk-chips"><button type="button" class="dk-chip on" data-f="all">ทั้งหมด</button>
             <button type="button" class="dk-chip" data-f="todo">ยังไม่ครบ</button>
             <button type="button" class="dk-chip" data-f="fail">ไม่ผ่าน</button>
-            <button type="button" class="dk-chip" id="passAll" style="border-color:#86efac;color:#15803d;display:inline-flex;align-items:center;gap:5px;">{_ic(_SVG_CHECK_C, 13)} ติ๊กผ่านช่องที่ว่างทั้งหมด</button></div>
+            <button type="button" class="dk-chip" id="passAll" style="border-color:#86efac;color:#15803d;">✓ ติ๊กผ่านช่องที่ว่างทั้งหมด</button></div>
     </div>"""
-    savebar = f"""<div class="dk-savebar"><div class="msg" id="saveMsg">ผลตรวจทั้งหมดถูกบันทึกแล้ว</div>
-        <button type="button" class="dk-btn green" id="saveBtn" disabled style="display:inline-flex;align-items:center;gap:6px;">{_ic(_SVG_SAVE, 16)}<span id="saveBtnLabel">บันทึกผลตรวจ</span></button></div><div class="dk-toast" id="dkToast"></div>"""
+    savebar = """<div class="dk-savebar"><div class="msg" id="saveMsg">ผลตรวจทั้งหมดถูกบันทึกแล้ว</div>
+        <button type="button" class="dk-btn green" id="saveBtn" disabled>💾 บันทึกผลตรวจ</button></div><div class="dk-toast" id="dkToast"></div>"""
     js = INSPECTION_JS.replace("__ROOM__", _json.dumps(room).replace("</", "<\\/")).replace("__DATE__", _json.dumps(date))
     body = (f'<div class="dk-stats">{stats}</div>{tools}<div id="stuList">{rows}</div>'
-            f'<div id="emptyHint" style="display:none;">{dk_empty(_ic(_SVG_SEARCH, 38, 1.5), "ไม่พบรายชื่อตามเงื่อนไขที่เลือก")}</div>')
-    actions = f'<a href="/inspection?date={date}" class="dk-btn hero">{_ic(_SVG_SCHOOL, 15)} เปลี่ยนห้อง</a>'
+            f'<div id="emptyHint" style="display:none;">{dk_empty("🔎", "ไม่พบรายชื่อตามเงื่อนไขที่เลือก")}</div>')
+    actions = f'<a href="/inspection?date={date}" class="dk-btn hero">🏫 เปลี่ยนห้อง</a>'
     return dk_page(f"ห้อง {_he(room)}", f"ตรวจระเบียบวันที่ {_insp_thai_date(date)} · แตะ “ผ่าน/ไม่ผ่าน” ของแต่ละตัวชี้วัด แล้วกดบันทึก",
-                   body, back, actions, savebar + js, icon=_ic(_SVG_CLIPBOARD, 22))
+                   body, back, actions, savebar + js, icon="📋 ")
 
 
 @app.post("/api/inspection/save")
@@ -6941,30 +7548,34 @@ async def inspection_criteria_page(user_session: Optional[str] = Cookie(None)):
         down = f"""<form method="post" action="/api/inspection/criteria/move" style="margin:0;"><input type="hidden" name="cid" value="{c['id']}">
                  <input type="hidden" name="direction" value="down"><button class="dk-btn light sm" {'disabled style="opacity:.35"' if i == len(items) - 1 else ''}>↓</button></form>"""
         rows += f"""<div class="dk-row">
-            <div class="dk-ico-box">{_he(c['icon'])}</div>
+            <div class="dk-ico-box">{_insp_icon(c['icon'], 22)}</div>
             <div class="grow"><b>{_he(c['name'])}</b><span>{state} · ตรวจไปแล้ว {usage.get(c['id'], 0)} ครั้ง</span></div>
             <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">
                 {up}{down}
                 <form method="post" action="/api/inspection/criteria/toggle" style="margin:0;"><input type="hidden" name="cid" value="{c['id']}">
                     <button class="dk-btn light sm">{toggle_label}</button></form>
                 <form method="post" action="/api/inspection/criteria/delete" style="margin:0;"
-                      onsubmit="return confirm('ลบตัวชี้วัด “{_he(c['name'], quote=True)}” ?\\nประวัติผลตรวจเดิมยังคงอยู่ในรายงาน');">
+                      data-confirm="ลบตัวชี้วัด “{_he(c['name'], quote=True)}” ?&#10;ประวัติผลตรวจเดิมยังคงอยู่ในรายงาน">
                     <input type="hidden" name="cid" value="{c['id']}"><button class="dk-btn danger sm">ลบ</button></form>
             </div></div>"""
 
     active_n = sum(1 for c in items if c['is_active'])
-    stats = dk_stat("ตัวชี้วัดทั้งหมด", len(items), _ic(_SVG_CLIPBOARD), "blue") + dk_stat("เปิดใช้งาน", active_n, _ic(_SVG_CHECK_C), "green") + \
-        dk_stat("ปิดอยู่", len(items) - active_n, _ic(_SVG_PAUSE), "slate") + dk_stat("ผลตรวจที่บันทึกแล้ว", sum(usage.values()), _ic(_SVG_BARS), "violet")
-    add_form = f"""<div class="dk-card"><div class="dk-card-title" style="display:flex;align-items:center;gap:6px;">{_ic(_SVG_PLUS, 16)} เพิ่มตัวชี้วัดใหม่</div>
-        <form method="post" action="/api/inspection/criteria/add" style="display:grid;grid-template-columns:70px 1fr auto;gap:10px;align-items:end;">
-            <div><label class="dk-label">ไอคอน</label><input class="dk-input" name="icon" maxlength="4" placeholder="✅" style="text-align:center;"></div>
-            <div><label class="dk-label">ชื่อตัวชี้วัด</label><input class="dk-input" name="name" maxlength="40" required placeholder="เช่น เล็บ, รองเท้า, ถุงเท้า"></div>
-            <button class="dk-btn" type="submit">เพิ่ม</button></form></div>"""
+    stats = dk_stat("ตัวชี้วัดทั้งหมด", len(items), "🧾", "blue") + dk_stat("เปิดใช้งาน", active_n, "✅", "green") + \
+        dk_stat("ปิดอยู่", len(items) - active_n, "⏸️", "slate") + dk_stat("ผลตรวจที่บันทึกแล้ว", sum(usage.values()), "📋", "violet")
+    picks = "".join(
+        f'<label><input type="radio" name="icon" value="{n}" {"checked" if i == 0 else ""}><span>{ic(n, 20)}</span></label>'
+        for i, n in enumerate(INSPECTION_ICON_CHOICES))
+    add_form = f"""<div class="dk-card"><div class="dk-card-title">➕ เพิ่มตัวชี้วัดใหม่</div>
+        <form method="post" action="/api/inspection/criteria/add" style="display:grid;gap:12px;">
+            <div><label class="dk-label">เลือกไอคอน</label><div class="dk-iconpick">{picks}</div></div>
+            <div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end;">
+                <div><label class="dk-label">ชื่อตัวชี้วัด</label><input class="dk-input" name="name" maxlength="40" required placeholder="เช่น เล็บ, รองเท้า, ถุงเท้า"></div>
+                <button class="dk-btn" type="submit">เพิ่ม</button></div></form></div>"""
     body = (f'<div class="dk-stats">{stats}</div>{add_form}'
-            f'<div class="dk-note" style="display:flex;align-items:flex-start;gap:6px;"><span style="flex-shrink:0;margin-top:1px;">{_ic(_SVG_BULB, 15)}</span><span>ตัวชี้วัดที่ “ปิด” จะไม่แสดงในหน้าตรวจ แต่ประวัติเดิมยังอยู่ · ตัวชี้วัดที่ “ลบ” จะหายจากหน้าตรวจ ส่วนประวัติที่เคยบันทึกไว้ยังคงแสดงในรายงาน</span></div>'
-            f'<div class="dk-card-title" style="margin:6px 4px 10px;">รายการตัวชี้วัด</div>{rows or dk_empty(_ic(_SVG_CLIPBOARD, 38, 1.5), "ยังไม่มีตัวชี้วัด")}')
+            f'<div class="dk-note">💡 ตัวชี้วัดที่ “ปิด” จะไม่แสดงในหน้าตรวจ แต่ประวัติเดิมยังอยู่ · ตัวชี้วัดที่ “ลบ” จะหายจากหน้าตรวจ ส่วนประวัติที่เคยบันทึกไว้ยังคงแสดงในรายงาน</div>'
+            f'<div class="dk-card-title" style="margin:6px 4px 10px;">รายการตัวชี้วัด</div>{rows or dk_empty("🧾", "ยังไม่มีตัวชี้วัด")}')
     return dk_page("ตัวชี้วัดการตรวจระเบียบ", "เพิ่ม ลบ เปิด/ปิด และจัดลำดับหัวข้อที่ครูใช้ติ๊กผ่าน/ไม่ผ่าน", body,
-                   "/inspection" if can_manage_inspection(access) else _insp_back_url(access), icon=_ic(_SVG_SLIDERS, 22))
+                   "/inspection" if can_manage_inspection(access) else _insp_back_url(access), icon="⚙️ ")
 
 
 def _insp_criteria_mutation(user_session, fn):
@@ -6982,7 +7593,7 @@ def _insp_criteria_mutation(user_session, fn):
 @app.post("/api/inspection/criteria/add")
 async def api_inspection_criteria_add(name: str = Form(""), icon: str = Form(""), user_session: Optional[str] = Cookie(None)):
     name = " ".join(name.split())[:40]
-    icon = icon.strip()[:4] or "✅"
+    icon = icon.strip() if icon.strip() in KX_ICONS else "check-circle"
     def run(cur, access):
         if not name:
             return "กรุณากรอกชื่อตัวชี้วัด", "error"
@@ -7102,8 +7713,8 @@ async def inspection_report_page(date_from: Optional[str] = None, date_to: Optio
     failed = total - passed
     rate = round(passed * 100 / total) if total else 0
     students_checked = len(set(r['uid'] for r in recs))
-    stats = (dk_stat("ผลตรวจทั้งหมด", total, _ic(_SVG_CLIPBOARD), "blue") + dk_stat("อัตราผ่าน", f"{rate}%", _ic(_SVG_MEDAL), "green")
-             + dk_stat("ไม่ผ่าน (รายการ)", failed, _ic(_SVG_ALERT), "red") + dk_stat("นักเรียนที่ถูกตรวจ", students_checked, _ic(_SVG_BACKPACK), "violet"))
+    stats = (dk_stat("ผลตรวจทั้งหมด", total, "📋", "blue") + dk_stat("อัตราผ่าน", f"{rate}%", "🏅", "green")
+             + dk_stat("ไม่ผ่าน (รายการ)", failed, "⚠️", "red") + dk_stat("นักเรียนที่ถูกตรวจ", students_checked, "🎒", "violet"))
 
     # อัตราผ่านรายตัวชี้วัด
     per_c = {}
@@ -7115,7 +7726,7 @@ async def inspection_report_page(date_from: Optional[str] = None, date_to: Optio
         n = d["p"] + d["f"]
         pct = round(d["p"] * 100 / n) if n else 0
         crit_html += f'<div class="dk-rate-row"><span>{_he(d["name"])}</span><div class="dk-track"><i style="width:{pct}%"></i></div><em>{pct}%</em></div>'
-    crit_card = f'<div class="dk-card"><div class="dk-card-title">อัตราผ่านรายตัวชี้วัด<small>ไม่ผ่าน {failed} / {total}</small></div>{crit_html or dk_empty(_ic(_SVG_INBOX, 38, 1.5), "ไม่มีข้อมูลในช่วงนี้")}</div>'
+    crit_card = f'<div class="dk-card"><div class="dk-card-title">อัตราผ่านรายตัวชี้วัด<small>ไม่ผ่าน {failed} / {total}</small></div>{crit_html or dk_empty("📭", "ไม่มีข้อมูลในช่วงนี้")}</div>'
 
     # แนวโน้มรายวัน (อัตราผ่าน)
     per_day = {}
@@ -7159,14 +7770,14 @@ async def inspection_report_page(date_from: Optional[str] = None, date_to: Optio
         fail_rows += f'<tr><td><b>{_he(d["name"])}</b><br><span style="font-size:11.5px;color:#64748b;">{_he(d["room"])} · เลขที่ {_he(d["no"])}</span></td><td>{len(d["days"])} วัน</td><td>{chips}</td></tr>'
     fail_card = (f'<div class="dk-card"><div class="dk-card-title">นักเรียนที่ไม่ผ่านระเบียบ<small>{len(per_stu)} คน</small></div><div class="dk-tablewrap"><table class="dk-table">'
                  f'<thead><tr><th>นักเรียน</th><th>วันที่ไม่ผ่าน</th><th>หัวข้อที่ไม่ผ่าน</th></tr></thead><tbody>{fail_rows}</tbody></table></div></div>'
-                 if fail_rows else f'<div class="dk-card">{dk_empty(_ic(_SVG_SMILE, 38, 1.5), "ไม่มีนักเรียนที่ไม่ผ่านระเบียบในช่วงนี้")}</div>')
+                 if fail_rows else f'<div class="dk-card">{dk_empty("🎉", "ไม่มีนักเรียนที่ไม่ผ่านระเบียบในช่วงนี้")}</div>')
 
     qs = urllib.parse.urlencode({"date_from": d_from, "date_to": d_to, "level": level, "room": room})
-    actions = f'<a href="/inspection/report.csv?{qs}" class="dk-btn hero">{_ic(_SVG_DOWNLOAD, 15)} CSV</a>'
+    actions = f'<a href="/inspection/report.csv?{qs}" class="dk-btn hero">⬇️ CSV</a>'
     if can_manage_inspection(access):
-        actions += f'<a href="/inspection" class="dk-btn hero">{_ic(_SVG_CLIPBOARD, 15)} ตรวจระเบียบ</a>'
+        actions += '<a href="/inspection" class="dk-btn hero">📋 ตรวจระเบียบ</a>'
     body = f'<div class="dk-stats">{stats}</div>{filter_form}<div class="dk-grid c2">{crit_card}{trend_card}</div>{room_card}{fail_card}'
-    return dk_page("รายงานการตรวจระเบียบ", f"{_insp_thai_date(d_from)} – {_insp_thai_date(d_to)}", body, _insp_back_url(access), actions, icon=_ic(_SVG_BARS, 22))
+    return dk_page("รายงานการตรวจระเบียบ", f"{_insp_thai_date(d_from)} – {_insp_thai_date(d_to)}", body, _insp_back_url(access), actions, icon="📊 ")
 
 
 def _csv_safe(v) -> str:
@@ -7213,8 +7824,8 @@ async def student_inspection_page(user_session: Optional[str] = Cookie(None)):
     total = len(recs)
     fails = sum(1 for r in recs if r[2] == 'fail')
     rate = round((total - fails) * 100 / total) if total else 0
-    stats = (dk_stat("ตรวจแล้ว (30 วัน)", total, _ic(_SVG_CLIPBOARD), "blue") + dk_stat("อัตราผ่าน", f"{rate}%" if total else "-", _ic(_SVG_MEDAL), "green")
-             + dk_stat("ไม่ผ่าน", fails, _ic(_SVG_ALERT), "red") + dk_stat("ห้อง", _he(me['class']), _ic(_SVG_SCHOOL), "violet"))
+    stats = (dk_stat("ตรวจแล้ว (30 วัน)", total, "📋", "blue") + dk_stat("อัตราผ่าน", f"{rate}%" if total else "-", "🏅", "green")
+             + dk_stat("ไม่ผ่าน", fails, "⚠️", "red") + dk_stat("ห้อง", _he(me['class']), "🏫", "violet"))
     by_day = {}
     for d, crit, res, by in recs:
         by_day.setdefault(d, []).append((crit, res, by))
@@ -7224,10 +7835,168 @@ async def student_inspection_page(user_session: Optional[str] = Cookie(None)):
         who = _he(items[0][2] or "-")
         days_html += f'<div class="dk-row"><div class="grow"><b>{_insp_thai_date(d)}</b><span>ผู้ตรวจ: {who}</span><div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">{pills}</div></div></div>'
     body = (f'<div class="dk-stats">{stats}</div>'
-            + (days_html or f'<div class="dk-card">{dk_empty(_ic(_SVG_INBOX, 38, 1.5), "ยังไม่มีผลตรวจระเบียบใน 30 วันที่ผ่านมา")}</div>'))
+            + (days_html or f'<div class="dk-card">{dk_empty("📭", "ยังไม่มีผลตรวจระเบียบใน 30 วันที่ผ่านมา")}</div>'))
     return dk_page("ผลตรวจระเบียบของฉัน", f"{_he(me['name'])} · ย้อนหลัง 30 วัน", body, "/student/dashboard",
-                   extra=realtime_notify_script(uid), icon=_ic(_SVG_CLIPBOARD, 22))
+                   extra=realtime_notify_script(uid), icon="📋 ")
 
+
+
+# ==========================================
+# 📚 หัวหน้าวิชา — จัดการทุกวิชาที่รับผิดชอบ / มอบวิชาให้ครูย่อย / (แอดมิน) กำหนดวิชาให้หัวหน้า
+# ==========================================
+def _sh_gate(user_session: Optional[str]):
+    access = get_access(user_session)
+    if not access["authenticated"] or access["role"] in ("student", "admin") or not can_manage_subject_scope(access):
+        return access, RedirectResponse(url="/login", status_code=303)
+    return access, None
+
+
+@app.get("/subject-head", response_class=HTMLResponse)
+async def subject_head_page(user_session: Optional[str] = Cookie(None)):
+    access, err = _sh_gate(user_session)
+    if err: return err
+    user = access["username"]; uq = urllib.parse.quote(user)
+    scope = head_scope_group_ids(user)
+    conn = sqlite3.connect('attendance_pro.db'); cur = conn.cursor()
+    cur.execute("SELECT username, fullname, role FROM teachers ORDER BY fullname")
+    teachers = cur.fetchall()
+    name_map = {t[0]: t[1] for t in teachers}
+    groups = []
+    if scope:
+        marks = ",".join("?" * len(scope))
+        cur.execute(f"SELECT group_id, group_name, teacher_username, branch FROM course_groups WHERE group_id IN ({marks}) ORDER BY group_name", tuple(scope))
+        groups = cur.fetchall()
+    counts = {}
+    for g in groups:
+        cur.execute("SELECT COUNT(*) FROM group_assignments WHERE group_id=?", (g[0],))
+        counts[g[0]] = cur.fetchone()[0]
+    conn.close()
+
+    teacher_opts = lambda sel: "".join(
+        f'<option value="{_he(t[0], quote=True)}" {"selected" if t[0] == sel else ""}>{_he(t[1] or t[0])}{" (คุณ)" if t[0] == user else ""}</option>' for t in teachers)
+    per_teacher = {}
+    for g in groups:
+        per_teacher[g[2]] = per_teacher.get(g[2], 0) + 1
+
+    cards = ""
+    for gid, gname, owner, branch in groups:
+        cards += f"""<div class="dk-subj">
+            <div class="dk-subj-top"><div class="dk-ico-box" style="background:#ede9fe;color:#6d28d9;">{ic('layers', 22)}</div>
+                <div class="grow"><b>{_he(gname)}</b><span class="sub">{_he(branch or '-')} · {counts.get(gid, 0)} คน</span></div></div>
+            <div class="dk-subj-meta"><span class="dk-pill ok">{ic('user', 13)} ครูผู้สอน: {_he(name_map.get(owner, owner or '-'))}</span></div>
+            <div class="dk-subj-act" style="margin-bottom:10px;"><a href="/app/rollcall/{gid}?user={uq}" class="dk-btn sm">{ic('clipboard-check', 15)} เช็กชื่อ</a>
+                <a href="/app/classroom/{gid}?user={uq}" class="dk-btn light sm">{ic('school', 15)} จัดการวิชา</a></div>
+            <form method="post" action="/api/subject-head/assign" style="display:grid;grid-template-columns:1fr auto;gap:8px;align-items:end;">
+                <input type="hidden" name="group_id" value="{gid}">
+                <div><label class="dk-label">มอบวิชานี้ให้ครู</label><select class="dk-select" name="teacher_username" data-title="เลือกครูผู้สอน">{teacher_opts(owner)}</select></div>
+                <button class="dk-btn green sm" style="padding:11px 14px;">{ic('send', 15)} มอบ</button></form></div>"""
+    if not cards:
+        cards = f'<div class="dk-card" style="grid-column:1/-1;">{dk_empty("📚", "ยังไม่มีวิชาในความรับผิดชอบ — ให้แอดมินกำหนดวิชาให้ หรือเพิ่มวิชาใหม่ด้านล่าง")}</div>'
+
+    team = "".join(
+        f'<div class="dk-row" style="margin:0;"><div class="dk-avatar" style="background:linear-gradient(135deg,#0f766e,#0d9488);">{_he((t[1] or t[0])[:1])}</div>'
+        f'<div class="grow"><b>{_he(t[1] or t[0])}</b><span>@{_he(t[0])}</span></div><span class="dk-pill {"ok" if per_teacher.get(t[0]) else "mute"}">{per_teacher.get(t[0], 0)} วิชา</span></div>'
+        for t in teachers if (t[2] or "teacher") in ("teacher", "subject_head"))
+    create = f"""<div class="dk-card"><div class="dk-card-title">➕ เพิ่มวิชาใหม่ในความรับผิดชอบ</div>
+        <form method="post" action="/api/subject-head/create" class="dk-grid c2" style="align-items:end;">
+            <div><label class="dk-label">ชื่อวิชา</label><input class="dk-input" type="text" name="group_name" required maxlength="80" placeholder="เช่น นาฏศิลป์ไทย 1"></div>
+            <div><label class="dk-label">สาขา</label><input class="dk-input" type="text" name="branch" required maxlength="60" placeholder="เช่น นาฏศิลป์"></div>
+            <div style="grid-column:1/-1;"><label class="dk-label">มอบให้ครู</label><select class="dk-select" name="teacher_username" data-title="เลือกครูผู้สอน">{teacher_opts(user)}</select></div>
+            <button class="dk-btn block" style="grid-column:1/-1;">{ic('plus', 16)} สร้างวิชา</button></form></div>"""
+    stats = (dk_stat("วิชาที่รับผิดชอบ", len(groups), "📚", "violet") + dk_stat("นักเรียนรวม", sum(counts.values()), "🎒", "blue")
+             + dk_stat("ครูย่อยที่ได้รับวิชา", len([k for k in per_teacher if k != user]), "👥", "green") + dk_stat("วิชาที่ถือเอง", per_teacher.get(user, 0), "👤", "amber"))
+    body = (f'<div class="dk-stats">{stats}</div><div class="dk-section">วิชาที่รับผิดชอบ</div><div class="dk-grid c2">{cards}</div>'
+            f'<div class="dk-section">เพิ่มวิชา</div>{create}<div class="dk-section">ครูย่อย / ครูผู้สอน</div><div class="dk-grid c2">{team or dk_empty("👥", "ยังไม่มีครู")}</div>')
+    return dk_page("จัดการวิชาที่รับผิดชอบ", "เช็กชื่อ จัดการ และมอบวิชาให้ครูย่อย", body, staff_home_url(access), icon="📚 ", theme="dk-teal")
+
+
+@app.post("/api/subject-head/assign")
+async def api_subject_head_assign(group_id: int = Form(...), teacher_username: str = Form(...), user_session: Optional[str] = Cookie(None)):
+    access, err = _sh_gate(user_session)
+    if err: return err
+    if group_id not in head_scope_group_ids(access["username"]):
+        return alert_redirect("วิชานี้ไม่อยู่ในความรับผิดชอบของคุณ", type="error", url="/subject-head")
+    conn = sqlite3.connect('attendance_pro.db'); cur = conn.cursor()
+    cur.execute("SELECT fullname FROM teachers WHERE username=?", (teacher_username,))
+    t = cur.fetchone()
+    if not t:
+        conn.close(); return alert_redirect("ไม่พบครูที่เลือก", type="error", url="/subject-head")
+    cur.execute("UPDATE course_groups SET teacher_username=? WHERE group_id=?", (teacher_username, group_id))
+    conn.commit(); conn.close()
+    add_log(f"{access['fullname']} (หัวหน้าวิชา) มอบวิชา #{group_id} ให้ {t[0] or teacher_username}")
+    return alert_redirect(f"มอบวิชาให้ {t[0] or teacher_username} เรียบร้อยแล้ว", type="success", url="/subject-head")
+
+
+@app.post("/api/subject-head/create")
+async def api_subject_head_create(group_name: str = Form(...), branch: str = Form(...), teacher_username: str = Form(...), user_session: Optional[str] = Cookie(None)):
+    access, err = _sh_gate(user_session)
+    if err: return err
+    group_name, branch = " ".join(group_name.split())[:80], " ".join(branch.split())[:60]
+    conn = sqlite3.connect('attendance_pro.db'); cur = conn.cursor()
+    cur.execute("SELECT 1 FROM teachers WHERE username=?", (teacher_username,))
+    if not group_name or not branch or not cur.fetchone():
+        conn.close(); return alert_redirect("กรอกข้อมูลไม่ครบ หรือไม่พบครูที่เลือก", type="error", url="/subject-head")
+    cur.execute("INSERT INTO course_groups (group_name, teacher_username, branch) VALUES (?,?,?)", (group_name, teacher_username, branch))
+    gid = cur.lastrowid
+    cur.execute("INSERT OR IGNORE INTO subject_head_groups (head_username, group_id) VALUES (?,?)", (access["username"], gid))
+    conn.commit(); conn.close()
+    return alert_redirect(f"สร้างวิชา “{group_name}” เรียบร้อยแล้ว", type="success", url="/subject-head")
+
+
+@app.get("/admin/subject_scope", response_class=HTMLResponse)
+async def admin_subject_scope_page(head: str, user_session: Optional[str] = Cookie(None)):
+    access = gate_perm(user_session, can_manage_teacher_accounts)
+    if not access: return RedirectResponse(url="/login", status_code=303)
+    conn = sqlite3.connect('attendance_pro.db'); cur = conn.cursor()
+    cur.execute("SELECT fullname, role FROM teachers WHERE username=?", (head,))
+    t = cur.fetchone()
+    if not t:
+        conn.close(); return alert_redirect("ไม่พบบัญชีครู", type="error", url="/admin/teachers")
+    cur.execute("SELECT group_id FROM subject_head_groups WHERE head_username=?", (head,))
+    mine = {r[0] for r in cur.fetchall()}
+    cur.execute("SELECT group_id, group_name, teacher_username, branch FROM course_groups ORDER BY group_name")
+    groups = cur.fetchall()
+    cur.execute("SELECT username, fullname FROM teachers")
+    nm = dict(cur.fetchall()); conn.close()
+    rows = "".join(
+        f'<label class="dk-row sc-row" data-q="{_he((g[1] + " " + (g[3] or "")).lower(), quote=True)}" style="cursor:pointer;margin:0;">'
+        f'<input type="checkbox" name="gid" value="{g[0]}" {"checked" if g[0] in mine else ""} style="width:20px;height:20px;accent-color:#0f766e;">'
+        f'<div class="grow"><b>{_he(g[1])}</b><span>{_he(g[3] or "-")} · ครูผู้สอน: {_he(nm.get(g[2], g[2] or "-"))}</span></div></label>' for g in groups)
+    warn = "" if t[1] == "subject_head" else '<div class="dk-note" style="background:#fef3c7;border-color:#fde68a;color:#92400e;">บัญชีนี้ยังไม่ได้ตั้งบทบาทเป็น “หัวหน้าวิชา” — วิชาที่เลือกจะมีผลเมื่อเปลี่ยนบทบาทแล้ว</div>'
+    form = f"""<form method="post" action="/api/admin/subject_scope"><input type="hidden" name="head" value="{_he(head, quote=True)}">
+        {warn}<div class="dk-card"><div class="dk-card-title">เลือกวิชาที่ {_he(t[0] or head)} รับผิดชอบ<small id="scCount">{len(mine)} วิชา</small></div>
+        <input id="scSearch" class="dk-input" placeholder="ค้นหาวิชา" style="margin-bottom:12px;">
+        <div style="display:grid;gap:8px;">{rows or dk_empty("📚", "ยังไม่มีวิชาในระบบ")}</div></div>
+        <button class="dk-btn green block" style="padding:14px;">{ic('save', 16)} บันทึกวิชาที่รับผิดชอบ</button></form>"""
+    js = """<script>(function(){var q=document.getElementById('scSearch'),c=document.getElementById('scCount');
+        function cnt(){c.textContent=document.querySelectorAll('input[name=gid]:checked').length+' วิชา';}
+        document.addEventListener('change',function(e){if(e.target.name==='gid')cnt();});
+        q.addEventListener('input',function(){var v=q.value.trim().toLowerCase();document.querySelectorAll('.sc-row').forEach(function(r){r.style.display=(!v||r.getAttribute('data-q').indexOf(v)>=0)?'':'none';});});})();</script>"""
+    return dk_page("กำหนดวิชาที่รับผิดชอบ", f"หัวหน้าวิชา: {_he(t[0] or head)}", form, "/admin/teachers", extra=js, icon="📚 ", theme="dk-teal")
+
+
+@app.post("/api/admin/subject_scope")
+async def api_admin_subject_scope(request: Request, user_session: Optional[str] = Cookie(None)):
+    access = gate_perm(user_session, can_manage_teacher_accounts)
+    if not access: return HTMLResponse("Unauthorized", status_code=401)
+    form = await request.form()
+    head = str(form.get("head", "")).strip()
+    gids = set()
+    for v in form.getlist("gid"):
+        try: gids.add(int(v))
+        except ValueError: pass
+    conn = sqlite3.connect('attendance_pro.db'); cur = conn.cursor()
+    cur.execute("SELECT 1 FROM teachers WHERE username=?", (head,))
+    if not cur.fetchone():
+        conn.close(); return alert_redirect("ไม่พบบัญชีครู", type="error", url="/admin/teachers")
+    cur.execute("SELECT group_id FROM course_groups")
+    valid = {r[0] for r in cur.fetchall()}
+    cur.execute("DELETE FROM subject_head_groups WHERE head_username=?", (head,))
+    for g in gids & valid:
+        cur.execute("INSERT OR IGNORE INTO subject_head_groups (head_username, group_id) VALUES (?,?)", (head, g))
+    conn.commit(); conn.close()
+    add_log(f"{access['fullname']} กำหนดวิชาที่หัวหน้าวิชา {head} รับผิดชอบ ({len(gids & valid)} วิชา)")
+    return alert_redirect(f"บันทึกวิชาที่รับผิดชอบ {len(gids & valid)} วิชาเรียบร้อยแล้ว", type="success", url="/admin/teachers")
 
 
 THAI_WEEKDAYS = {1: "จันทร์", 2: "อังคาร", 3: "พุธ", 4: "พฤหัสบดี", 5: "ศุกร์", 6: "เสาร์", 7: "อาทิตย์"}
@@ -7772,10 +8541,10 @@ async def admin_leave_requests(leave_type: Optional[str] = None, user_session: O
             <div style="display:flex;gap:6px;justify-content:center;">
                 <a href="/api/admin/leave/approve?req_id={req_id}" class="btn"
                    style="background:#10b981;color:white;padding:5px 10px;border-radius:6px;font-size:12px;font-weight:700;"
-                   onclick="return confirm('อนุมัติคำร้องลาของ {name} วันที่ {date}?')">✅ อนุมัติ</a>
+                   data-confirm="อนุมัติคำร้องลาของ {_he(str(name), quote=True)} วันที่ {_he(str(date), quote=True)}?">✅ อนุมัติ</a>
                 <a href="/api/admin/leave/reject?req_id={req_id}" class="btn"
                    style="background:#ef4444;color:white;padding:5px 10px;border-radius:6px;font-size:12px;font-weight:700;"
-                   onclick="return confirm('ปฏิเสธคำร้องนี้?')">❌ ปฏิเสธ</a>
+                   data-confirm="ปฏิเสธคำร้องนี้?">❌ ปฏิเสธ</a>
             </div>"""
         else:
             actions = f'<span style="color:#94a3b8;font-size:12px;">ดำเนินการแล้ว</span>'
@@ -7916,7 +8685,7 @@ async def api_leave_reject(req_id: int, user_session: Optional[str] = Cookie(Non
 # ==========================================
 # 🔐 ADMIN — จัดการสิทธิ์ผู้ใช้แบบ Role-based (ปรับได้จากหน้าเว็บ ไม่ต้องแก้โค้ด)
 # ==========================================
-ROLE_LABEL_TH = {"teacher": "👩‍🏫 ครูผู้สอน", "level_head": "🎓 หัวหน้าระดับ", "affairs": "🛡️ ฝ่ายกิจการนักเรียน"}
+ROLE_LABEL_TH = {r: TEACHER_ROLES[r]["label"] for r in CONFIGURABLE_ROLES}
 
 @app.get("/admin/permissions", response_class=HTMLResponse)
 async def admin_permissions_page(user_session: Optional[str] = Cookie(None)):
@@ -8580,7 +9349,7 @@ async def admin_announcements_page(user_session: Optional[str] = Cookie(None)):
                 <span style="font-size:11px; color:#94a3b8; font-weight:600;">🕐 {created_at} · ระดับ: {m['label']}</span>
                 <div style="display:flex; gap:6px;">
                     <a href="/api/admin/announcement/toggle?id={id_}" class="btn btn-secondary" style="padding:5px 10px; font-size:11px;">{"🙈 ซ่อน" if is_active else "👁️ แสดง"}</a>
-                    <a href="/api/admin/announcement/delete?id={id_}" class="btn btn-danger" style="padding:5px 10px; font-size:11px;" onclick="return confirm('ยืนยันลบประกาศนี้?')">🗑️ ลบ</a>
+                    <a href="/api/admin/announcement/delete?id={id_}" class="btn btn-danger" style="padding:5px 10px; font-size:11px;" data-confirm="ยืนยันลบประกาศนี้?">🗑️ ลบ</a>
                 </div>
             </div>
         </div>
@@ -8832,7 +9601,7 @@ async def app_classroom_hub(group_id: int, user: str, user_session: Optional[str
     if not row:
         return alert_redirect("ไม่พบกลุ่มวิชานี้", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
     group_name, owner = row
-    if owner != user:
+    if not can_access_group(user, group_id, owner):
         return alert_redirect("คุณไม่มีสิทธิ์เข้าถึงกลุ่มวิชานี้", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
 
     qs = f"?user={urllib.parse.quote(user)}"
@@ -8876,7 +9645,7 @@ async def app_timetable_manage(group_id: int, user: str, user_session: Optional[
     cursor = conn.cursor()
     cursor.execute("SELECT group_name, teacher_username FROM course_groups WHERE group_id=?", (group_id,))
     row = cursor.fetchone()
-    if not row or row[1] != user:
+    if not row or not can_access_group(user, group_id, row[1]):
         conn.close()
         return alert_redirect("ไม่มีสิทธิ์เข้าถึง", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
     group_name = row[0]
@@ -8890,7 +9659,7 @@ async def app_timetable_manage(group_id: int, user: str, user_session: Optional[
             <td style="text-align:left;">วัน{THAI_WEEKDAYS.get(s[1], s[1])}</td>
             <td>{s[2]} - {s[3]}</td>
             <td>{s[4] or '-'}</td>
-            <td><a href="/api/teacher/timetable/delete?slot_id={s[0]}&user={uq}&group_id={group_id}" class="btn btn-danger" style="padding:4px 10px;font-size:11px;" onclick="return confirm('ลบคาบเรียนนี้?')">ลบ</a></td>
+            <td><a href="/api/teacher/timetable/delete?slot_id={s[0]}&user={uq}&group_id={group_id}" class="btn btn-danger" style="padding:4px 10px;font-size:11px;" data-confirm="ลบคาบเรียนนี้?">ลบ</a></td>
         </tr>""" for s in slots])
 
     day_options = "".join([f'<option value="{k}">วัน{v}</option>' for k, v in THAI_WEEKDAYS.items()])
@@ -8938,7 +9707,7 @@ async def api_timetable_add(group_id: int = Form(...), user: str = Form(...), da
     cursor = conn.cursor()
     cursor.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (group_id,))
     row = cursor.fetchone()
-    if not row or row[0] != user:
+    if not row or not can_access_group(user, group_id, row[0]):
         conn.close()
         return alert_redirect("ไม่มีสิทธิ์", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
     cursor.execute("INSERT INTO timetable_slots (group_id, day_of_week, start_time, end_time, room, created_by, created_at) VALUES (?,?,?,?,?,?,?)",
@@ -8955,7 +9724,7 @@ async def api_timetable_delete(slot_id: int, group_id: int, user: str, user_sess
     cursor = conn.cursor()
     cursor.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (group_id,))
     row = cursor.fetchone()
-    if row and row[0] == user:
+    if row and can_access_group(user, group_id, row[0]):
         cursor.execute("DELETE FROM timetable_slots WHERE slot_id=?", (slot_id,))
         conn.commit()
     conn.close()
@@ -9018,7 +9787,7 @@ async def app_homework_manage(group_id: int, user: str, user_session: Optional[s
     cursor = conn.cursor()
     cursor.execute("SELECT group_name, teacher_username FROM course_groups WHERE group_id=?", (group_id,))
     row = cursor.fetchone()
-    if not row or row[1] != user:
+    if not row or not can_access_group(user, group_id, row[1]):
         conn.close()
         return alert_redirect("ไม่มีสิทธิ์เข้าถึง", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
     group_name = row[0]
@@ -9042,7 +9811,7 @@ async def app_homework_manage(group_id: int, user: str, user_session: Optional[s
             <div style="font-size:11.5px;color:#94a3b8;margin-bottom:10px;">📅 กำหนดส่ง: {due_date or 'ไม่ระบุ'}</div>
             <div style="display:flex;gap:6px;">
                 <a href="/app/homework/{group_id}/{a_id}/submissions?user={uq}" class="btn btn-secondary" style="padding:6px 12px;font-size:12px;">👁️ ดูงานที่ส่ง</a>
-                <a href="/api/teacher/homework/delete?assignment_id={a_id}&group_id={group_id}&user={uq}" class="btn btn-danger" style="padding:6px 12px;font-size:12px;" onclick="return confirm('ลบการบ้านนี้?')">🗑️ ลบ</a>
+                <a href="/api/teacher/homework/delete?assignment_id={a_id}&group_id={group_id}&user={uq}" class="btn btn-danger" style="padding:6px 12px;font-size:12px;" data-confirm="ลบการบ้านนี้?">🗑️ ลบ</a>
             </div>
         </div>"""
     conn.close()
@@ -9084,7 +9853,7 @@ async def api_homework_add(group_id: int = Form(...), user: str = Form(...), tit
     cursor = conn.cursor()
     cursor.execute("SELECT teacher_username, group_name FROM course_groups WHERE group_id=?", (group_id,))
     row = cursor.fetchone()
-    if not row or row[0] != user:
+    if not row or not can_access_group(user, group_id, row[0]):
         conn.close()
         return alert_redirect("ไม่มีสิทธิ์", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
     group_name = row[1]
@@ -9113,7 +9882,7 @@ async def api_homework_delete(assignment_id: int, group_id: int, user: str, user
     cursor = conn.cursor()
     cursor.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (group_id,))
     row = cursor.fetchone()
-    if row and row[0] == user:
+    if row and can_access_group(user, group_id, row[0]):
         cursor.execute("DELETE FROM assignments WHERE assignment_id=?", (assignment_id,))
         cursor.execute("DELETE FROM assignment_submissions WHERE assignment_id=?", (assignment_id,))
         conn.commit()
@@ -9128,7 +9897,7 @@ async def app_homework_submissions(group_id: int, assignment_id: int, user: str,
     cursor = conn.cursor()
     cursor.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (group_id,))
     row = cursor.fetchone()
-    if not row or row[0] != user:
+    if not row or not can_access_group(user, group_id, row[0]):
         conn.close()
         return alert_redirect("ไม่มีสิทธิ์", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
     cursor.execute("SELECT title FROM assignments WHERE assignment_id=?", (assignment_id,))
@@ -9249,7 +10018,7 @@ async def app_grades_manage(group_id: int, user: str, user_session: Optional[str
     cursor = conn.cursor()
     cursor.execute("SELECT group_name, teacher_username, grades_visibility FROM course_groups WHERE group_id=?", (group_id,))
     row = cursor.fetchone()
-    if not row or row[1] != user:
+    if not row or not can_access_group(user, group_id, row[1]):
         conn.close()
         return alert_redirect("ไม่มีสิทธิ์เข้าถึง", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
     group_name = row[0]
@@ -9297,7 +10066,7 @@ async def app_grades_manage(group_id: int, user: str, user_session: Optional[str
                        title="แก้ไขชื่อ/คะแนนเต็ม"
                        style="color:#2563eb;text-decoration:none;font-size:11px;font-weight:800;">✎</a>
                     <a href="/api/teacher/grades/delete_item?item_id={it[0]}&group_id={group_id}&user={uq}"
-                       onclick="return confirm('ลบรายการคะแนนนี้? (ลบแล้วคะแนนของทุกคนในคอลัมน์นี้จะหายไปด้วย)')"
+                       data-confirm="ลบรายการคะแนนนี้? (ลบแล้วคะแนนของทุกคนในคอลัมน์นี้จะหายไปด้วย)"
                        style="color:#f87171;text-decoration:none;font-size:11px;font-weight:800;">✕</a>
                 </div>
                 <a href="/app/grades/{group_id}/edit_item?item_id={it[0]}&user={uq}" style="text-decoration:none;">
@@ -9481,7 +10250,7 @@ async def app_grades_manage(group_id: int, user: str, user_session: Optional[str
             if (val !== "" && parseFloat(val) > maxVal) {{
                 input.classList.remove('gr-saved');
                 input.classList.add('gr-error');
-                alert('คะแนนที่กรอก (' + val + ') เกินคะแนนเต็ม (' + maxVal + ')');
+                smartAlert({{ title: 'คะแนนเกินคะแนนเต็ม', message: 'คะแนนที่กรอก (' + val + ') เกินคะแนนเต็ม (' + maxVal + ')', type: 'warning' }});
                 return;
             }}
 
@@ -9524,7 +10293,7 @@ async def api_grades_add_item(group_id: int = Form(...), user: str = Form(...), 
     cursor = conn.cursor()
     cursor.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (group_id,))
     row = cursor.fetchone()
-    if not row or row[0] != user:
+    if not row or not can_access_group(user, group_id, row[0]):
         conn.close()
         return alert_redirect("ไม่มีสิทธิ์", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
     cursor.execute("INSERT INTO grade_items (group_id, item_name, max_score, category, created_by, created_at) VALUES (?,?,?,?,?,?)",
@@ -9542,7 +10311,7 @@ async def app_grades_edit_item_page(group_id: int, item_id: int, user: str, user
     cursor = conn.cursor()
     cursor.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (group_id,))
     row = cursor.fetchone()
-    if not row or row[0] != user:
+    if not row or not can_access_group(user, group_id, row[0]):
         conn.close()
         return alert_redirect("ไม่มีสิทธิ์เข้าถึง", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
     cursor.execute("SELECT item_id, item_name, max_score, category FROM grade_items WHERE item_id=? AND group_id=?", (item_id, group_id))
@@ -9616,7 +10385,7 @@ async def api_grades_edit_item(group_id: int = Form(...), user: str = Form(...),
     cursor = conn.cursor()
     cursor.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (group_id,))
     row = cursor.fetchone()
-    if not row or row[0] != user:
+    if not row or not can_access_group(user, group_id, row[0]):
         conn.close()
         return alert_redirect("ไม่มีสิทธิ์", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
     cursor.execute("SELECT item_id FROM grade_items WHERE item_id=? AND group_id=?", (item_id, group_id))
@@ -9647,7 +10416,7 @@ async def api_grades_set_score(group_id: int = Form(...), user: str = Form(...),
     cursor = conn.cursor()
     cursor.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (group_id,))
     row = cursor.fetchone()
-    if not row or row[0] != user:
+    if not row or not can_access_group(user, group_id, row[0]):
         conn.close()
         return alert_redirect("ไม่มีสิทธิ์", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
     cursor.execute("""INSERT INTO grade_scores (item_id, student_uid, score) VALUES (?,?,?)
@@ -9666,7 +10435,7 @@ async def api_grades_bulk_add_items(group_id: int = Form(...), user: str = Form(
     cursor = conn.cursor()
     cursor.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (group_id,))
     row = cursor.fetchone()
-    if not row or row[0] != user:
+    if not row or not can_access_group(user, group_id, row[0]):
         conn.close()
         return alert_redirect("ไม่มีสิทธิ์", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
 
@@ -9717,7 +10486,7 @@ async def api_grades_ajax_set_score(group_id: int = Form(...), user: str = Form(
     cursor = conn.cursor()
     cursor.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (group_id,))
     row = cursor.fetchone()
-    if not row or row[0] != user:
+    if not row or not can_access_group(user, group_id, row[0]):
         conn.close()
         return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
 
@@ -9758,7 +10527,7 @@ async def api_grades_delete_item(item_id: int, group_id: int, user: str, user_se
     cursor = conn.cursor()
     cursor.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (group_id,))
     row = cursor.fetchone()
-    if not row or row[0] != user:
+    if not row or not can_access_group(user, group_id, row[0]):
         conn.close()
         return alert_redirect("ไม่มีสิทธิ์", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
     cursor.execute("DELETE FROM grade_scores WHERE item_id=?", (item_id,))
@@ -9849,7 +10618,8 @@ async def student_grades(user_session: Optional[str] = Cookie(None)):
 # ---------- 💳 ชำระเงิน (แอดมินบันทึกรายการ/สถานะ / นักเรียนดูยอด) ----------
 @app.get("/admin/payments", response_class=HTMLResponse)
 async def admin_payments_page(user_session: Optional[str] = Cookie(None)):
-    if user_session != "admin":
+    access = gate_perm(user_session, can_manage_payments)
+    if not access:
         return RedirectResponse(url="/login", status_code=303)
     conn = sqlite3.connect('attendance_pro.db')
     cursor = conn.cursor()
@@ -9859,60 +10629,40 @@ async def admin_payments_page(user_session: Optional[str] = Cookie(None)):
 
     students = get_sorted_master_students()
     student_map = {s['uid']: s for s in students}
-    student_options = "".join([f'<option value="{s["uid"]}">{s["name"]} ({s["class"]} เลขที่ {s["no"]})</option>' for s in students])
+    student_options = "".join([f'<option value="{_he(s["uid"], quote=True)}">{_he(s["name"])} ({_he(s["class"])} เลขที่ {_he(s["no"])})</option>' for s in students])
 
+    total_amt = sum(r[3] for r in rows)
+    paid_amt = sum(r[3] for r in rows if r[4] == "paid")
+    stats = (dk_stat("รายการทั้งหมด", len(rows), "🧾", "blue") + dk_stat("ยอดเรียกเก็บรวม", f"{total_amt:,.0f}", "💰", "violet")
+             + dk_stat("ชำระแล้ว (บาท)", f"{paid_amt:,.0f}", "✅", "green") + dk_stat("ค้างชำระ (บาท)", f"{total_amt - paid_amt:,.0f}", "⏳", "red"))
     cards = ""
     for p_id, uid, item_name, amount, status, due_date in rows:
         s = student_map.get(uid, {"name": uid, "class": "-", "no": "-"})
         is_paid = status == "paid"
-        cards += f"""
-        <div class="card" style="margin-bottom:10px; border-left:4px solid {'#15803d' if is_paid else '#b91c1c'};">
-            <div style="display:flex;justify-content:space-between;align-items:flex-start;">
-                <div>
-                    <div style="font-weight:800;font-size:14px;">{item_name}</div>
-                    <div style="font-size:12px;color:#64748b;">{s['name']} · {s['class']} เลขที่ {s['no']}</div>
-                </div>
-                <span style="font-weight:800;color:{'#15803d' if is_paid else '#b91c1c'};font-size:12.5px;white-space:nowrap;">{'✅ ชำระแล้ว' if is_paid else '⏳ ยังไม่ชำระ'}</span>
-            </div>
-            <div style="font-size:13px;margin:8px 0;">💰 {amount:g} บาท · กำหนดชำระ: {due_date or 'ไม่ระบุ'}</div>
-            <div style="display:flex;gap:6px;">
-                <a href="/api/admin/payment/toggle?payment_id={p_id}" class="btn btn-secondary" style="padding:5px 10px;font-size:11px;">{'↩️ ยกเลิกชำระ' if is_paid else '✅ บันทึกว่าชำระแล้ว'}</a>
-                <a href="/api/admin/payment/delete?payment_id={p_id}" class="btn btn-danger" style="padding:5px 10px;font-size:11px;" onclick="return confirm('ลบรายการนี้?')">🗑️ ลบ</a>
-            </div>
-        </div>"""
-
-    return f"""
-    <html>{STYLE_HEADER}
-    <body>
-        <div class="navbar">
-            <h1><img src="{LOGO_URL}" class="nav-logo"> 💳 ชำระเงิน</h1>
-            <a href="/admin/dashboard" class="btn btn-secondary">⬅ กลับหน้าควบคุม</a>
-        </div>
-        <div class="main-container">
-            <div class="card">
-                <h2>➕ เพิ่มรายการเรียกเก็บเงิน</h2>
-                <form action="/api/admin/payment/add" method="post">
-                    <label style="font-size:12.5px;font-weight:700;color:#475569;">นักเรียน:</label>
-                    <select name="student_uid" required>{student_options}</select>
-                    <label style="font-size:12.5px;font-weight:700;color:#475569;">รายการ:</label>
-                    <input type="text" name="item_name" placeholder="เช่น ค่าเทอม 1/2569" required>
-                    <label style="font-size:12.5px;font-weight:700;color:#475569;">จำนวนเงิน (บาท):</label>
-                    <input type="number" step="0.01" name="amount" required>
-                    <label style="font-size:12.5px;font-weight:700;color:#475569;">กำหนดชำระ:</label>
-                    <input type="date" name="due_date">
-                    <button type="submit" class="btn-submit">💾 เพิ่มรายการ</button>
-                </form>
-            </div>
-            <div class="card"><h2 style="margin:0;">📋 รายการทั้งหมด ({len(rows)})</h2></div>
-            {cards if cards else "<p style='color:#94a3b8;text-align:center;padding:20px 0;'>ยังไม่มีรายการ</p>"}
-        </div>
-    </body></html>
-    """
+        cards += f"""<div class="dk-stu {'is-done' if is_paid else 'has-fail'}" style="margin:0;">
+            <div class="dk-stu-head" style="margin-bottom:8px;"><div class="dk-ico-box">💳</div>
+                <div class="nm"><b>{_he(item_name)}</b><span>{_he(s['name'])} · {_he(s['class'])} เลขที่ {_he(s['no'])}</span></div>
+                <span class="dk-pill {'ok' if is_paid else 'bad'}">{'ชำระแล้ว' if is_paid else 'ยังไม่ชำระ'}</span></div>
+            <div style="font-size:13px;margin:0 0 10px;color:#475569;font-weight:600;">💰 {amount:,.2f} บาท · กำหนดชำระ: {_he(due_date or 'ไม่ระบุ')}</div>
+            <div style="display:flex;gap:8px;">
+                <a href="/api/admin/payment/toggle?payment_id={p_id}" class="dk-btn light sm" style="flex:1;">{'↩️ ยกเลิกชำระ' if is_paid else '✅ บันทึกว่าชำระแล้ว'}</a>
+                <a href="/api/admin/payment/delete?payment_id={p_id}" class="dk-btn danger sm" data-confirm="ลบรายการนี้?">🗑️ ลบ</a>
+            </div></div>"""
+    form = f"""<div class="dk-card"><div class="dk-card-title">➕ เพิ่มรายการเรียกเก็บเงิน</div>
+        <form action="/api/admin/payment/add" method="post" class="dk-grid c2" style="align-items:end;">
+            <div style="grid-column:1/-1;"><label class="dk-label">นักเรียน</label><select class="dk-select" name="student_uid" data-title="เลือกนักเรียน" required>{student_options}</select></div>
+            <div><label class="dk-label">รายการ</label><input class="dk-input" type="text" name="item_name" placeholder="เช่น ค่าเทอม 1/2569" required></div>
+            <div><label class="dk-label">จำนวนเงิน (บาท)</label><input class="dk-input" type="number" step="0.01" name="amount" required></div>
+            <div><label class="dk-label">กำหนดชำระ</label><input class="dk-input" type="date" name="due_date"></div>
+            <button type="submit" class="dk-btn green">💾 เพิ่มรายการ</button></form></div>"""
+    listing = f'<div class="dk-card-title" style="margin:6px 4px 10px;">รายการทั้งหมด</div><div class="dk-grid c2">{cards}</div>' if cards else f'<div class="dk-card">{dk_empty("🧾", "ยังไม่มีรายการ")}</div>'
+    return dk_page("การเงิน / ชำระเงิน", "รายการเรียกเก็บและสถานะการชำระของนักเรียน", f'<div class="dk-stats">{stats}</div>{form}{listing}',
+                   staff_home_url(access), icon="💳 ")
 
 @app.post("/api/admin/payment/add")
 async def api_payment_add(student_uid: str = Form(...), item_name: str = Form(...), amount: float = Form(...),
                            due_date: str = Form(""), user_session: Optional[str] = Cookie(None)):
-    if user_session != "admin": return HTMLResponse("Unauthorized", status_code=401)
+    if not gate_perm(user_session, can_manage_payments): return HTMLResponse("Unauthorized", status_code=401)
     conn = sqlite3.connect('attendance_pro.db')
     cursor = conn.cursor()
     cursor.execute("INSERT INTO payments (student_uid, item_name, amount, status, due_date, recorded_by, created_at) VALUES (?,?,?,?,?,?,?)",
@@ -9923,7 +10673,7 @@ async def api_payment_add(student_uid: str = Form(...), item_name: str = Form(..
 
 @app.get("/api/admin/payment/toggle")
 async def api_payment_toggle(payment_id: int, user_session: Optional[str] = Cookie(None)):
-    if user_session != "admin": return HTMLResponse("Unauthorized", status_code=401)
+    if not gate_perm(user_session, can_manage_payments): return HTMLResponse("Unauthorized", status_code=401)
     conn = sqlite3.connect('attendance_pro.db')
     cursor = conn.cursor()
     cursor.execute("SELECT status FROM payments WHERE payment_id=?", (payment_id,))
@@ -9938,7 +10688,7 @@ async def api_payment_toggle(payment_id: int, user_session: Optional[str] = Cook
 
 @app.get("/api/admin/payment/delete")
 async def api_payment_delete(payment_id: int, user_session: Optional[str] = Cookie(None)):
-    if user_session != "admin": return HTMLResponse("Unauthorized", status_code=401)
+    if not gate_perm(user_session, can_manage_payments): return HTMLResponse("Unauthorized", status_code=401)
     conn = sqlite3.connect('attendance_pro.db')
     cursor = conn.cursor()
     cursor.execute("DELETE FROM payments WHERE payment_id=?", (payment_id,))
