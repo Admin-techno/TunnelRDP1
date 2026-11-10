@@ -1728,6 +1728,7 @@ TEACHER_ROLES = {
     "level_head": {"label": "🎓 หัวหน้าระดับ",       "desc": "อนุมัติคำร้องลา/บันทึกความประพฤติ เฉพาะระดับชั้นที่รับผิดชอบ"},
     "affairs":    {"label": "🛡️ ฝ่ายกิจการนักเรียน", "desc": "อนุมัติคำร้องลา/บันทึกความประพฤติ ได้ทุกระดับชั้นทั้งสถาบัน"},
     "subject_head": {"label": "📚 หัวหน้าวิชา",     "desc": "เช็กชื่อ/จัดการได้ทุกวิชาที่รับผิดชอบ และมอบวิชาให้ครูย่อยได้"},
+    "trainee":    {"label": "🧑‍🎓 ครูฝึกสอน",        "desc": "เช็กชื่อได้อย่างเดียว เฉพาะวิชาที่ผู้ดูแลกำหนดให้"},
     "registrar":  {"label": "🗂️ ฝ่ายทะเบียน",        "desc": "จัดการทะเบียนนักเรียน (เพิ่ม/แก้ไข/ลบ/บัญชีเข้าสู่ระบบ)"},
     "finance":    {"label": "💳 ฝ่ายการเงิน",        "desc": "จัดการรายการเรียกเก็บและการชำระเงินของนักเรียน"},
 }
@@ -1782,7 +1783,7 @@ PERMISSIONS = {
     "manage_subject_scope":     {"label": "จัดการวิชาที่รับผิดชอบ / มอบวิชาให้ครูย่อย", "default_roles": ("admin", "subject_head")},
 }
 # บทบาทที่ปรับสิทธิ์ผ่านตารางได้ (admin มีสิทธิ์ทุกอย่างเสมอ ไม่ต้องตั้งค่า)
-CONFIGURABLE_ROLES = ("teacher", "subject_head", "level_head", "affairs", "registrar", "finance")
+CONFIGURABLE_ROLES = ("teacher", "trainee", "subject_head", "level_head", "affairs", "registrar", "finance")
 
 def _load_permission_overrides() -> dict:
     """อ่านค่าที่แอดมิน override ไว้ทั้งหมดจาก DB -> {(role, perm_key): 0/1}"""
@@ -1884,11 +1885,53 @@ def head_scope_group_ids(username: str) -> set:
         conn.close()
     return {r[0] for r in rows}
 
+def _user_role(username: str) -> str:
+    conn = sqlite3.connect('attendance_pro.db')
+    try:
+        r = conn.execute("SELECT role FROM teachers WHERE username=?", (username,)).fetchone()
+    finally:
+        conn.close()
+    return (r[0] if r and r[0] else "teacher")
+
+def co_group_ids(username: str) -> set:
+    """group_id ที่ผู้ดูแลกำหนดให้ครูคนนี้ 'เช็กชื่อร่วม' ได้ (ครูร่วม/ครูฝึกสอน)"""
+    conn = sqlite3.connect('attendance_pro.db')
+    try:
+        rows = conn.execute("SELECT group_id FROM group_teachers WHERE teacher_username=?", (username,)).fetchall()
+    finally:
+        conn.close()
+    return {r[0] for r in rows}
+
 def can_access_group(user: str, group_id: int, owner: Optional[str] = None) -> bool:
-    """เจ้าของวิชา หรือหัวหน้าวิชาที่วิชานี้อยู่ในความรับผิดชอบ"""
+    """สิทธิ์จัดการเต็มรูปแบบ: เจ้าของวิชา หรือหัวหน้าวิชาที่วิชานี้อยู่ในความรับผิดชอบ (ครูฝึกสอนไม่มีสิทธิ์นี้)"""
+    if _user_role(user) == "trainee":
+        return False
     if owner is not None and owner == user:
         return True
     return group_id in head_scope_group_ids(user)
+
+def can_rollcall_group(user: str, group_id: int) -> bool:
+    """เช็กชื่อได้: จัดการเต็มได้ หรือถูกกำหนดเป็นผู้เช็กชื่อร่วม"""
+    conn = sqlite3.connect('attendance_pro.db')
+    try:
+        r = conn.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (group_id,)).fetchone()
+    finally:
+        conn.close()
+    if not r:
+        return False
+    return can_access_group(user, group_id, r[0]) or group_id in co_group_ids(user)
+
+def rollcall_groups_for_user(cursor, user: str) -> list:
+    """วิชาที่เช็กชื่อได้ทั้งหมด = วิชาที่จัดการได้ + วิชาที่ร่วมเช็ก -> [(group_id, group_name)]"""
+    rows = [] if _user_role(user) == "trainee" else list(groups_for_user(cursor, user))
+    seen = {r[0] for r in rows}
+    cursor.execute("""SELECT g.group_id, g.group_name FROM course_groups g
+                      JOIN group_teachers x ON x.group_id = g.group_id WHERE x.teacher_username = ?
+                      ORDER BY g.group_name""", (user,))
+    for r in cursor.fetchall():
+        if r[0] not in seen:
+            rows.append(r); seen.add(r[0])
+    return rows
 
 def groups_for_user(cursor, user: str) -> list:
     """วิชาที่ผู้ใช้เห็น/จัดการได้ = วิชาของตัวเอง + วิชาในความรับผิดชอบ (ถ้าเป็นหัวหน้าวิชา) -> [(group_id, group_name)]"""
@@ -4033,6 +4076,7 @@ async def admin_students_page(class_filter: Optional[str] = None, user_session: 
              + dk_stat("กำลังแสดง", len(master_students), "👁️", "green") + dk_stat("มีป้ายเฝ้าระวัง", sum(1 for s in master_students if all_risk_tags.get(s['name'])), "⚠️", "amber"))
     quick = """<div class="dk-grid c2" style="margin-bottom:14px;">
         <a href="/admin/add_student" class="dk-btn green block" style="padding:14px;">📥 เพิ่มรายชื่อนักเรียนใหม่</a>
+        <a href="/admin/import_students" class="dk-btn light block" style="padding:14px;margin-top:8px;">📊 นำเข้าจากไฟล์ Excel</a>
         <a href="/admin/student_accounts" class="dk-btn block" style="padding:14px;background:linear-gradient(135deg,#7c3aed,#5b21b6);">🔑 ตั้งค่ารหัส/เบอร์โทร เข้าสู่ระบบนักเรียน</a></div>"""
     flt = f"""<div class="dk-card"><div class="dk-card-title">📁 ทะเบียนนักเรียนส่วนกลาง<small>{len(master_students)} รายการ</small></div>
         <div class="dk-filter" style="grid-template-columns:1fr 1fr;">
@@ -4439,7 +4483,7 @@ async def app_dashboard(user: str, user_session: Optional[str] = Cookie(None)):
     cursor.execute("SELECT fullname FROM teachers WHERE username = ?", (user,))
     t_info = cursor.fetchone()
     display_name = t_info[0] if t_info else user
-    my_groups = groups_for_user(cursor, user)
+    my_groups = rollcall_groups_for_user(cursor, user)
     cursor.execute("SELECT COUNT(*) FROM announcements WHERE is_active=1")
     active_announcements = cursor.fetchone()[0]
     pending_leave = 0
@@ -4478,18 +4522,19 @@ async def app_dashboard(user: str, user_session: Optional[str] = Cookie(None)):
     subj_cards = ""
     for gid, gname, n_stu, owner, checked in subjects:
         mine = owner == user
-        owner_txt = "วิชาของคุณ" if mine else f"ครูผู้สอน: {_he(name_map.get(owner, owner or '-'))}"
+        full = can_access_group(user, gid, owner)
+        owner_txt = "วิชาของคุณ" if mine else (f"ครูผู้สอนหลัก: {_he(name_map.get(owner, owner or '-'))}" + ("" if full else " · เช็กชื่อร่วม"))
         subj_cards += f"""<div class="dk-subj">
             <div class="dk-subj-top"><div class="dk-ico-box" style="background:#ccfbf1;color:#0f766e;">{ic('book-open', 22)}</div>
                 <div class="grow"><b>{_he(gname)}</b><span class="sub">{owner_txt}</span></div></div>
             <div class="dk-subj-meta"><span class="dk-pill mute">{ic('users', 13)} {n_stu} คน</span>
                 <span class="dk-pill {'ok' if checked else 'warn'}">{ic('check' if checked else 'clock', 13)} {'เช็กชื่อวันนี้แล้ว' if checked else 'ยังไม่ได้เช็กวันนี้'}</span></div>
             <div class="dk-subj-act"><a href="/app/rollcall/{gid}?user={uq}" class="dk-btn sm">{ic('clipboard-check', 15)} เช็กชื่อ</a>
-                <a href="/app/classroom/{gid}?user={uq}" class="dk-btn light sm">{ic('school', 15)} ห้องเรียน</a></div></div>"""
+                {f'<a href="/app/classroom/{gid}?user={uq}" class="dk-btn light sm">{ic("school", 15)} ห้องเรียน</a>' if full else ''}</div></div>"""
     if not subj_cards:
         subj_cards = f'<div class="dk-card" style="grid-column:1/-1;">{dk_empty("📚", "ยังไม่มีวิชาที่ได้รับมอบหมาย — ติดต่อผู้ดูแลระบบหรือหัวหน้าวิชา")}</div>'
 
-    tools = dk_tool(f"/app/history?user={uq}", "file-text", "ประวัติเช็กชื่อ", "blue")
+    tools = "" if access["role"] == "trainee" else dk_tool(f"/app/history?user={uq}", "file-text", "ประวัติเช็กชื่อ", "blue")
     if can_manage_subject_scope(access) and access["role"] == "subject_head":
         tools += dk_tool("/subject-head", "layers", "จัดการวิชา", "violet")
     if can_manage_inspection(access):
@@ -4521,7 +4566,7 @@ async def app_dashboard(user: str, user_session: Optional[str] = Cookie(None)):
                     f'<a href="/logout" class="dk-btn hero">{ic("log-out", 15)}</a>')
     body = (f'<div id="announcement-section" style="margin-bottom:14px;display:none;"><div id="announcement-list"></div></div>'
             f'<div class="dk-stats">{stats}</div>'
-            f'<div class="dk-section">เมนูของคุณ · {_he(TEACHER_ROLES.get(access["role"], TEACHER_ROLES["teacher"])["label"].split(" ", 1)[-1])}{scope_tag}</div><div class="dk-tools">{tools}</div>'
+            f'{('<div class="dk-section">เมนูของคุณ · ' + _he(TEACHER_ROLES.get(access["role"], TEACHER_ROLES["teacher"])["label"].split(" ", 1)[-1]) + scope_tag + '</div><div class="dk-tools">' + tools + '</div>') if tools else ''}'
             f'<div class="dk-section">วิชาที่ดูแล ({len(subjects)})</div><div class="dk-grid c2">{subj_cards}</div>'
             f'<div class="ah-footer" style="margin-top:20px;">powered by <span>K-Techinteractive</span></div>')
     role_text = _he(access["role_label"].split(" ", 1)[-1]) if access["role_label"] else "ครู"
@@ -5014,7 +5059,7 @@ async def app_history_page(user: str, group_id: Optional[str] = None, user_sessi
     selected_group_name = ""
     
     try:
-        my_groups = groups_for_user(cursor, user)
+        my_groups = rollcall_groups_for_user(cursor, user)
         if group_id:
             cursor.execute("SELECT group_name FROM course_groups WHERE group_id = ?", (group_id,))
             g_res = cursor.fetchone()
@@ -5137,6 +5182,8 @@ async def app_history_detail_page(user: str, group_name: str, date: str, user_se
 @app.get("/app/rollcall/{group_id}", response_class=HTMLResponse)
 async def app_rollcall_sheet(group_id: int, user: str, user_session: Optional[str] = Cookie(None)):
     if not user_session or user_session != f"teacher_{urllib.parse.quote(user)}": return RedirectResponse(url="/login", status_code=303)
+    if not can_rollcall_group(user, group_id):
+        return alert_redirect("คุณไม่มีสิทธิ์เช็กชื่อวิชานี้", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
     m_cfg = get_maintenance_status()
     if m_cfg["is_active"] == 1: return generate_maintenance_html(m_cfg["mode_type"])
 
@@ -5778,6 +5825,9 @@ async def app_api_submit(
     user_session: Optional[str] = Cookie(None)
 ):
     if not user_session or user_session != f"teacher_{teacher_user}": return HTMLResponse("Unauthorized", status_code=401)
+    _gc = sqlite3.connect('attendance_pro.db')
+    _gr = _gc.execute("SELECT group_id FROM course_groups WHERE group_name = ?", (group_name,)).fetchone(); _gc.close()
+    if not _gr or not can_rollcall_group(teacher_user, _gr[0]): return HTMLResponse("Forbidden", status_code=403)
     form_data = await request.form()
 
     try:
@@ -5979,7 +6029,7 @@ async def api_student_checkin(
 @app.get("/admin/add_student", response_class=HTMLResponse)
 async def admin_add_student_page(user_session: Optional[str] = Cookie(None)):
     if not gate_perm(user_session, can_manage_student_registry): return RedirectResponse(url="/login", status_code=303)
-    return f"""<html>{STYLE_HEADER}<body><div class="navbar"><h1>➕ เพิ่มรายชื่อทะเบียนนักเรียนใหม่</h1><a href="/admin/students" class="btn btn-secondary">⬅ กลับหน้าหลัก</a></div><div class="main-container"><div class="card"><form action="/api/admin/add_student" method="post"><input type="text" name="student_name" placeholder="ชื่อ-นามสกุลนักเรียน" required><input type="text" name="student_no" placeholder="เลขที่ประจำตัว" required><input type="text" name="classroom" placeholder="ระดับชั้นเรียน" required><input type="text" name="branch" placeholder="สาขาวิชาเอก" required><button type="submit" class="btn-submit">💾 ยืนยันบันทึกข้อมูลหลัก</button></form></div></div></body></html>"""
+    return f"""<html>{STYLE_HEADER}<body><div class="navbar"><h1>➕ เพิ่มรายชื่อทะเบียนนักเรียนใหม่</h1><a href="/admin/students" class="btn btn-secondary">⬅ กลับหน้าหลัก</a></div><div class="main-container"><div class="card"><form action="/api/admin/add_student" method="post"><input type="text" name="student_name" placeholder="ชื่อ-นามสกุลนักเรียน" required><input type="text" name="student_no" placeholder="เลขที่ประจำตัว" required><input type="text" name="classroom" placeholder="ระดับชั้นเรียน" required><input type="text" name="branch" placeholder="สาขาวิชาเอก" required><button type="submit" class="btn-submit">💾 ยืนยันบันทึกข้อมูลหลัก</button></form><a href="/admin/import_students" class="btn btn-secondary" style="display:block;text-align:center;margin-top:12px;">📥 นำเข้าจากไฟล์ Excel</a></div></div></body></html>"""
 
 @app.post("/api/admin/add_student")
 async def api_add_student(student_name: str = Form(...), student_no: str = Form(...), classroom: str = Form(...), branch: str = Form(...), user_session: Optional[str] = Cookie(None)):
@@ -5987,6 +6037,118 @@ async def api_add_student(student_name: str = Form(...), student_no: str = Form(
     new_line = f"{student_name.strip()}, {student_no.strip()}, {classroom.strip()}, {branch.strip()}\n"
     with open(TXT_DATABASE_PATH, "a", encoding="utf-8") as f: f.write(new_line)
     return HTMLResponse(f"""<html>{STYLE_HEADER}<body><script>smartAlert({{title: 'ดำเนินการเสร็จสิ้น!', message: 'บันทึกเพิ่มรายชื่อเรียบร้อย!', type: 'success', callback: () => {{ window.location.href='/admin/add_student'; }} }});</script></body></html>""")
+
+# ==========================================
+# 📥 นำเข้านักเรียนจากไฟล์ Excel (.xlsx)
+# ==========================================
+_IMPORT_HEADERS = {"no": ("เลขที่",), "first": ("ชื่อ",), "last": ("สกุล", "นามสกุล"), "cls": ("ชั้น", "ห้อง"), "branch": ("สาขา",)}
+
+def parse_students_xlsx(data: bytes) -> dict:
+    """อ่านไฟล์ Excel -> {'rows': [(name,no,class,branch)], 'sheet': ชื่อชีต, 'skipped': [เหตุผล]}"""
+    import io
+    from openpyxl import load_workbook
+    wb = load_workbook(io.BytesIO(data), data_only=True, read_only=True)
+    clean = lambda v: " ".join(str(v).replace(",", " ").split()) if v is not None else ""
+    for ws in wb.worksheets:
+        rows_iter = ws.iter_rows(values_only=True)
+        col = None
+        for i, r in enumerate(rows_iter):
+            if i > 15: break
+            heads = [clean(c) for c in r]
+            m = {}
+            for key, names in _IMPORT_HEADERS.items():
+                for n in names:
+                    if n in heads: m[key] = heads.index(n); break
+            if len(m) == 5:
+                col = m; break
+        if not col:
+            continue
+        out, skipped = [], []
+        for r in rows_iter:
+            if not r or not any(c is not None and str(c).strip() for c in r): continue
+            g = lambda k: clean(r[col[k]]) if col[k] < len(r) else ""
+            no, first, last, cls, branch = g("no"), g("first"), g("last"), g("cls"), g("branch")
+            try: no = str(int(float(no)))
+            except ValueError: pass
+            name = f"{first} {last}".strip()
+            if not (name and no and cls and branch):
+                skipped.append(f"แถวไม่ครบ: {name or '(ไม่มีชื่อ)'}"); continue
+            out.append((name, no, cls, branch))
+        wb.close()
+        return {"rows": out, "sheet": ws.title, "skipped": skipped}
+    wb.close()
+    return {"rows": [], "sheet": "", "skipped": [], "error": "ไม่พบหัวตารางที่ต้องการ (เลขที่ / ชื่อ / สกุล / ชั้น / สาขา)"}
+
+def _import_plan(rows: list) -> tuple:
+    """แยกเป็น (ใหม่, ซ้ำ/ชนกับของเดิม)"""
+    existing = get_sorted_master_students()
+    uids = {e["uid"] for e in existing}
+    slots = {(e["class"], e["no"]) for e in existing}
+    new, dup, seen = [], [], set()
+    for name, no, cls, branch in rows:
+        uid = f"{name}_{no}"
+        if uid in uids or (cls, no) in slots or uid in seen or (cls, no) in seen:
+            dup.append((name, no, cls, branch)); continue
+        seen.add(uid); seen.add((cls, no)); new.append((name, no, cls, branch))
+    return new, dup
+
+@app.get("/admin/import_students", response_class=HTMLResponse)
+async def admin_import_students_page(user_session: Optional[str] = Cookie(None)):
+    if not gate_perm(user_session, can_manage_student_registry): return RedirectResponse(url="/login", status_code=303)
+    body = f"""<div class="dk-note">📄 ไฟล์ .xlsx ต้องมีหัวตาราง <b>เลขที่ · ชื่อ · สกุล · ชั้น · สาขา</b> (ระบบจะหาชีตที่มีหัวตารางนี้ให้เอง)<br>ก่อนบันทึกจะมีหน้าตรวจรายชื่อให้ดูก่อน และข้ามคนที่มีอยู่แล้วให้อัตโนมัติ</div>
+    <div class="dk-card"><form method="post" action="/api/admin/import_students/preview" enctype="multipart/form-data">
+        <label class="dk-label">เลือกไฟล์ Excel</label>
+        <input class="dk-input" type="file" name="file" accept=".xlsx" required style="padding:14px;margin-bottom:14px;">
+        <button class="dk-btn block" style="padding:14px;">{ic('upload', 16)} อ่านไฟล์และตรวจรายชื่อ</button></form></div>"""
+    return dk_page("นำเข้านักเรียนจาก Excel", "เพิ่มนักเรียนหลายคนพร้อมกัน", body, "/admin/add_student", icon="📥 ", theme="dk-teal")
+
+@app.post("/api/admin/import_students/preview", response_class=HTMLResponse)
+async def api_import_students_preview(file: UploadFile = File(...), user_session: Optional[str] = Cookie(None)):
+    if not gate_perm(user_session, can_manage_student_registry): return HTMLResponse("Unauthorized", status_code=401)
+    data = await file.read()
+    if len(data) > 8 * 1024 * 1024 or not (file.filename or "").lower().endswith(".xlsx"):
+        return alert_redirect("รองรับเฉพาะไฟล์ .xlsx ขนาดไม่เกิน 8 MB", type="error", url="/admin/import_students")
+    try:
+        res = parse_students_xlsx(data)
+    except Exception as e:
+        print(f"❌ import parse error: {e}")
+        return alert_redirect("อ่านไฟล์ไม่สำเร็จ — โปรดตรวจว่าเป็นไฟล์ .xlsx ที่ถูกต้อง", type="error", url="/admin/import_students")
+    if res.get("error") or not res["rows"]:
+        return alert_redirect(res.get("error") or "ไม่พบรายชื่อนักเรียนในไฟล์", type="error", url="/admin/import_students")
+    new, dup = _import_plan(res["rows"])
+    by_class = {}
+    for r in new: by_class[r[2]] = by_class.get(r[2], 0) + 1
+    chips = "".join(f'<span class="dk-pill mute">{_he(c)} · {n}</span> ' for c, n in sorted(by_class.items()))
+    sample = "".join(f'<div class="dk-row" style="margin:0 0 8px;"><div class="grow"><b>{_he(r[0])}</b><span>{_he(r[2])} · เลขที่ {_he(r[1])} · {_he(r[3])}</span></div></div>' for r in new[:8])
+    payload = _he("\n".join(",".join(r) for r in new), quote=True)
+    stats = (dk_stat("พบในไฟล์", len(res["rows"]), "📄", "blue") + dk_stat("จะเพิ่มใหม่", len(new), "✅", "green")
+             + dk_stat("ซ้ำ/ข้าม", len(dup), "⏭️", "amber") + dk_stat("แถวไม่ครบ", len(res["skipped"]), "⚠️", "red"))
+    btn = (f'<form method="post" action="/api/admin/import_students/commit"><input type="hidden" name="payload" value="{payload}">'
+           f'<button class="dk-btn green block" style="padding:14px;" data-confirm="ยืนยันเพิ่มนักเรียน {len(new)} คนเข้าทะเบียน?">{ic("check", 16)} ยืนยันเพิ่ม {len(new)} คน</button></form>') if new else dk_empty("ℹ️", "ไม่มีนักเรียนใหม่ — ทุกคนมีในทะเบียนแล้ว")
+    body = (f'<div class="dk-stats">{stats}</div><div class="dk-card"><div class="dk-card-title">แยกตามห้อง<small>ชีต: {_he(res["sheet"])}</small></div>{chips or "-"}</div>'
+            f'<div class="dk-section">ตัวอย่างรายชื่อ</div><div class="dk-card">{sample or dk_empty("📄", "ไม่มี")}</div>{btn}')
+    return dk_page("ตรวจรายชื่อก่อนบันทึก", "ยังไม่มีการบันทึกจนกว่าจะกดยืนยัน", body, "/admin/import_students", icon="📥 ", theme="dk-teal")
+
+@app.post("/api/admin/import_students/commit")
+async def api_import_students_commit(payload: str = Form(...), user_session: Optional[str] = Cookie(None)):
+    access = gate_perm(user_session, can_manage_student_registry)
+    if not access: return HTMLResponse("Unauthorized", status_code=401)
+    rows = []
+    for line in payload.splitlines():
+        parts = [x.strip() for x in line.split(",")]
+        if len(parts) == 4 and all(parts): rows.append(tuple(parts))
+    new, _ = _import_plan(rows)
+    if not new:
+        return alert_redirect("ไม่มีรายชื่อใหม่ให้เพิ่ม", type="info", url="/admin/students")
+    if os.path.exists(TXT_DATABASE_PATH):
+        import shutil
+        shutil.copyfile(TXT_DATABASE_PATH, TXT_DATABASE_PATH + ".bak")
+    needs_nl = os.path.exists(TXT_DATABASE_PATH) and os.path.getsize(TXT_DATABASE_PATH) > 0 and not open(TXT_DATABASE_PATH, "rb").read()[-1:] == b"\n"
+    with open(TXT_DATABASE_PATH, "a", encoding="utf-8") as f:
+        if needs_nl: f.write("\n")
+        for r in new: f.write(", ".join(r) + "\n")
+    add_log(f"{access['fullname']} นำเข้านักเรียนจาก Excel {len(new)} คน")
+    return alert_redirect(f"เพิ่มนักเรียน {len(new)} คนเรียบร้อยแล้ว", type="success", url="/admin/students")
 
 # ==========================================
 # 🎖️ ระบบคะแนนความประพฤติ
@@ -6397,6 +6559,7 @@ async def admin_teachers_page(user_session: Optional[str] = Cookie(None)):
                 <div class="nm"><b>{_he(fullname or '-')}</b><span>@{_he(username or '')}</span></div>
             </div>
             <div style="margin-bottom:10px;"><span class="dk-pill {role_tone.get(role, 'mute')}">{_he(role_meta['label'])}{scope_txt}</span></div>
+            <a href="/admin/teacher_subjects?teacher={q_user}" class="dk-btn light sm" style="width:100%;margin-bottom:8px;">🤝 กำหนดวิชาที่เช็กชื่อได้</a>
             {f'<a href="/admin/subject_scope?head={q_user}" class="dk-btn sm" style="width:100%;margin-bottom:8px;background:linear-gradient(135deg,#6d28d9,#5b21b6);">📚 กำหนดวิชาที่รับผิดชอบ</a>' if role == "subject_head" else ""}
             <div style="display:flex;gap:8px;">
                 <a href="/admin/confirm_edit_teacher?target_username={q_user}" class="dk-btn light sm" style="flex:1;">📝 แก้ไข</a>
@@ -6860,6 +7023,9 @@ def init_db():
     # 📚 หัวหน้าวิชา: วิชาที่รับผิดชอบ (แอดมินกำหนด / หัวหน้าวิชาสร้างเอง)
     cursor.execute('''CREATE TABLE IF NOT EXISTS subject_head_groups (
         head_username TEXT NOT NULL, group_id INTEGER NOT NULL, PRIMARY KEY (head_username, group_id))''')
+    # 🤝 ครูร่วม/ครูฝึกสอน: วิชาที่ถูกกำหนดให้เช็กชื่อร่วม (กำหนดรายบุคคลโดยผู้ดูแล)
+    cursor.execute('''CREATE TABLE IF NOT EXISTS group_teachers (
+        group_id INTEGER NOT NULL, teacher_username TEXT NOT NULL, PRIMARY KEY (group_id, teacher_username))''')
 
     # 📋 ระบบตรวจระเบียบ: ตัวชี้วัด (แก้ไขได้) + ผลการตรวจรายวันรายคน
     cursor.execute('''CREATE TABLE IF NOT EXISTS inspection_criteria (
@@ -7997,6 +8163,68 @@ async def api_admin_subject_scope(request: Request, user_session: Optional[str] 
     conn.commit(); conn.close()
     add_log(f"{access['fullname']} กำหนดวิชาที่หัวหน้าวิชา {head} รับผิดชอบ ({len(gids & valid)} วิชา)")
     return alert_redirect(f"บันทึกวิชาที่รับผิดชอบ {len(gids & valid)} วิชาเรียบร้อยแล้ว", type="success", url="/admin/teachers")
+
+
+# ==========================================
+# 🤝 กำหนดรายบุคคล: ครูแต่ละคนเช็กชื่อวิชาไหนได้บ้าง (ครูร่วม / ครูฝึกสอน)
+# ==========================================
+@app.get("/admin/teacher_subjects", response_class=HTMLResponse)
+async def admin_teacher_subjects_page(teacher: str, user_session: Optional[str] = Cookie(None)):
+    access = gate_perm(user_session, can_manage_teacher_accounts)
+    if not access: return RedirectResponse(url="/login", status_code=303)
+    conn = sqlite3.connect('attendance_pro.db'); cur = conn.cursor()
+    cur.execute("SELECT fullname, role FROM teachers WHERE username=?", (teacher,))
+    t = cur.fetchone()
+    if not t:
+        conn.close(); return alert_redirect("ไม่พบบัญชีครู", type="error", url="/admin/teachers")
+    cur.execute("SELECT group_id FROM group_teachers WHERE teacher_username=?", (teacher,))
+    mine = {r[0] for r in cur.fetchall()}
+    cur.execute("SELECT group_id, group_name, teacher_username, branch FROM course_groups ORDER BY group_name")
+    groups = cur.fetchall()
+    cur.execute("SELECT username, fullname FROM teachers"); nm = dict(cur.fetchall()); conn.close()
+    rows = ""
+    for gid, gname, owner, branch in groups:
+        own = owner == teacher
+        tag = '<span class="dk-pill ok">ครูหลัก</span>' if own else ""
+        rows += (f'<label class="dk-row sc-row" data-q="{_he((gname + " " + (branch or "")).lower(), quote=True)}" style="cursor:{"default" if own else "pointer"};margin:0;">'
+                 f'<input type="checkbox" name="gid" value="{gid}" {"checked" if (gid in mine or own) else ""} {"disabled" if own else ""} style="width:20px;height:20px;accent-color:#0f766e;">'
+                 f'<div class="grow"><b>{_he(gname)}</b><span>{_he(branch or "-")} · ครูหลัก: {_he(nm.get(owner, owner or "-"))}</span></div>{tag}</label>')
+    trainee_note = '<div class="dk-note">ครูฝึกสอนเช็กชื่อได้อย่างเดียว เห็นเฉพาะวิชาที่เลือกไว้ที่นี่</div>' if t[1] == "trainee" else ""
+    form = f"""<form method="post" action="/api/admin/teacher_subjects"><input type="hidden" name="teacher" value="{_he(teacher, quote=True)}">
+        {trainee_note}<div class="dk-card"><div class="dk-card-title">วิชาที่ {_he(t[0] or teacher)} เช็กชื่อได้<small id="scCount">{len(mine)} วิชาร่วม</small></div>
+        <input id="scSearch" class="dk-input" placeholder="ค้นหาวิชา" style="margin-bottom:12px;">
+        <div style="display:grid;gap:8px;">{rows or dk_empty("📚", "ยังไม่มีวิชาในระบบ")}</div></div>
+        <button class="dk-btn green block" style="padding:14px;">{ic('save', 16)} บันทึก</button></form>"""
+    js = """<script>(function(){var q=document.getElementById('scSearch'),c=document.getElementById('scCount');
+        function cnt(){c.textContent=document.querySelectorAll('input[name=gid]:checked:not(:disabled)').length+' วิชาร่วม';}
+        document.addEventListener('change',function(e){if(e.target.name==='gid')cnt();});
+        q.addEventListener('input',function(){var v=q.value.trim().toLowerCase();document.querySelectorAll('.sc-row').forEach(function(r){r.style.display=(!v||r.getAttribute('data-q').indexOf(v)>=0)?'':'none';});});})();</script>"""
+    return dk_page("กำหนดวิชาที่เช็กชื่อได้", f"รายบุคคล: {_he(t[0] or teacher)}", form, "/admin/teachers", extra=js, icon="🤝 ", theme="dk-teal")
+
+
+@app.post("/api/admin/teacher_subjects")
+async def api_admin_teacher_subjects(request: Request, user_session: Optional[str] = Cookie(None)):
+    access = gate_perm(user_session, can_manage_teacher_accounts)
+    if not access: return HTMLResponse("Unauthorized", status_code=401)
+    form = await request.form()
+    teacher = str(form.get("teacher", "")).strip()
+    gids = set()
+    for v in form.getlist("gid"):
+        try: gids.add(int(v))
+        except ValueError: pass
+    conn = sqlite3.connect('attendance_pro.db'); cur = conn.cursor()
+    cur.execute("SELECT 1 FROM teachers WHERE username=?", (teacher,))
+    if not cur.fetchone():
+        conn.close(); return alert_redirect("ไม่พบบัญชีครู", type="error", url="/admin/teachers")
+    cur.execute("SELECT group_id FROM course_groups WHERE teacher_username<>?", (teacher,))
+    valid = {r[0] for r in cur.fetchall()}
+    keep = gids & valid
+    cur.execute("DELETE FROM group_teachers WHERE teacher_username=?", (teacher,))
+    for g in keep:
+        cur.execute("INSERT OR IGNORE INTO group_teachers (group_id, teacher_username) VALUES (?,?)", (g, teacher))
+    conn.commit(); conn.close()
+    add_log(f"{access['fullname']} กำหนดวิชาที่ {teacher} เช็กชื่อร่วมได้ ({len(keep)} วิชา)")
+    return alert_redirect(f"บันทึกแล้ว: เช็กชื่อร่วม {len(keep)} วิชา", type="success", url="/admin/teachers")
 
 
 THAI_WEEKDAYS = {1: "จันทร์", 2: "อังคาร", 3: "พุธ", 4: "พฤหัสบดี", 5: "ศุกร์", 6: "เสาร์", 7: "อาทิตย์"}
