@@ -2593,32 +2593,59 @@ async def why_us_page():
 # 📱 หน้าล็อกอินสไตล์แอปมือถือ (hero ด้านบน + bottom sheet) — ดีไซน์แยกจาก STYLE_HEADER
 # หมายเหตุ: เป็น string ธรรมดา (ไม่ใช่ f-string) เพื่อไม่ให้ { } ของ CSS/JS ชนกับการ interpolate ของ Python
 LOGIN_STYLE = """
-<link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
 <style>
     html { -webkit-text-size-adjust: 100%; }
     body.lv-body {
         margin: 0; padding: 0;
         min-height: 100vh; min-height: 100dvh;
         display: block;
-        background: #ececef;
+        background: #eef3fb;
         font-family: 'Prompt', 'Sarabun', 'Inter', sans-serif;
-        color: #111827;
+        color: #0f172a;
         overflow-x: hidden; overflow-y: auto;
         -webkit-tap-highlight-color: transparent;
         -webkit-font-smoothing: antialiased;
         text-rendering: optimizeLegibility;
+        position: relative;
     }
 
-    /* ─── BACKGROUND: เทาอ่อน + ลายเส้นเฉียง + สามเหลี่ยมสีน้ำเงิน ─── */
+    /* ─── BACKGROUND: ฟ้าอ่อน-ขาว นุ่มๆ + บลอบไล่สีฟ้า/คราม + กริดบางๆ ─── */
     .lv-bg {
-        position: fixed; inset: 0; z-index: -2;
+        position: fixed; inset: 0; z-index: -3;
         background:
-            repeating-linear-gradient(118deg, rgba(255,255,255,0) 0 22px, rgba(255,255,255,0.75) 22px 24px),
-            linear-gradient(180deg, #e9e9ec 0%, #f4f4f6 55%, #eeeef1 100%);
-        -webkit-mask-image: none;
+            radial-gradient(760px 560px at 10% 0%, rgba(56,189,248,0.30), transparent 62%),
+            radial-gradient(720px 620px at 96% 8%, rgba(99,102,241,0.22), transparent 62%),
+            radial-gradient(920px 760px at 50% 118%, rgba(37,99,235,0.16), transparent 62%),
+            linear-gradient(180deg, #f6f9ff 0%, #eef4fc 55%, #e9f1fb 100%);
+        animation: lvDrift 18s ease-in-out infinite alternate;
     }
-    .lv-tri-bl { position: fixed; left: 0; bottom: 0; width: min(78vw, 340px); z-index: -1; pointer-events: none; }
-    .lv-tri-tr { position: fixed; right: 0; top: 0; width: min(46vw, 190px); z-index: -1; pointer-events: none; }
+    .lv-bg::before {
+        content: ""; position: absolute; inset: 0;
+        background-image:
+            linear-gradient(rgba(37,99,235,0.05) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(37,99,235,0.05) 1px, transparent 1px);
+        background-size: 42px 42px;
+        -webkit-mask-image: radial-gradient(circle at 50% 15%, #000 0%, transparent 70%);
+        mask-image: radial-gradient(circle at 50% 15%, #000 0%, transparent 70%);
+        opacity: 0.7;
+    }
+    @keyframes lvDrift {
+        0%   { filter: saturate(1) brightness(1); }
+        50%  { filter: saturate(1.12) brightness(1.02); }
+        100% { filter: saturate(0.96) brightness(0.99); }
+    }
+
+    .lv-tri-bl {
+        position: fixed; left: -16vw; bottom: -14vh; width: min(82vw, 400px); z-index: -2; pointer-events: none;
+        animation: lvFloatA 11s ease-in-out infinite;
+    }
+    .lv-tri-tr {
+        position: fixed; right: -10vw; top: -8vh; width: min(55vw, 240px); z-index: -2; pointer-events: none;
+        animation: lvFloatB 13s ease-in-out infinite;
+    }
+    @keyframes lvFloatA { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(6px,-14px) scale(1.04); } }
+    @keyframes lvFloatB { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(-8px,12px) scale(0.96); } }
 
     .lv-shell {
         position: relative;
@@ -2633,47 +2660,72 @@ LOGIN_STYLE = """
         height: calc(env(safe-area-inset-top, 0px) + 74px);
     }
     .lv-back {
-        width: 40px; height: 40px; border: 0; background: transparent; padding: 0;
-        display: flex; align-items: center; justify-content: center; cursor: pointer; color: #6b7280;
+        width: 42px; height: 42px; border: 1px solid #dbe6f7; border-radius: 50%; background: rgba(255,255,255,0.85); padding: 0;
+        display: flex; align-items: center; justify-content: center; cursor: pointer; color: #475569;
+        box-shadow: 0 2px 10px rgba(15,23,42,0.06);
     }
-    .lv-back svg { width: 26px; height: 26px; }
+    .lv-back svg { width: 22px; height: 22px; }
     .lv-lang {
-        width: 46px; height: 46px; border-radius: 50%; border: 0;
-        background: rgba(255,255,255,0.85); color: #374151;
-        font-family: inherit; font-size: 15px; font-weight: 600; cursor: pointer;
-        box-shadow: 0 2px 10px rgba(15,23,42,0.08);
+        width: 46px; height: 46px; border-radius: 50%; border: 1px solid #dbe6f7;
+        background: rgba(255,255,255,0.9); color: #1e3a8a;
+        font-family: 'Space Grotesk', inherit; font-size: 14px; font-weight: 700; cursor: pointer;
+        box-shadow: 0 4px 14px rgba(15,23,42,0.08);
     }
 
     /* ─── LOGO ─── */
-    .lv-logo-block { display: flex; flex-direction: column; align-items: center; margin: 2px 0 20px; }
-    .lv-logo { height: 108px; width: auto; object-fit: contain; }
-    .lv-logo-name { margin-top: 6px; font-size: 12.5px; font-weight: 500; color: #1f6b3a; }
+    .lv-logo-block { position: relative; display: flex; flex-direction: column; align-items: center; margin: 2px 0 20px; }
+    .lv-logo-block::before {
+        content: ""; position: absolute; top: -14px; width: 170px; height: 170px; border-radius: 50%;
+        background: radial-gradient(circle, rgba(56,189,248,0.35), rgba(99,102,241,0.16) 50%, transparent 72%);
+        filter: blur(10px); z-index: -1;
+    }
+    .lv-logo { height: 106px; width: auto; object-fit: contain; filter: drop-shadow(0 6px 18px rgba(37,99,235,0.25)); }
+    .lv-logo-name {
+        margin-top: 8px; font-size: 13px; font-weight: 600; letter-spacing: .2px;
+        background: linear-gradient(90deg, #1d4ed8, #0ea5e9);
+        -webkit-background-clip: text; background-clip: text; color: transparent;
+    }
 
     /* ─── CARD ─── */
     .lv-card {
-        background: rgba(255,255,255,0.97);
+        position: relative;
+        background: rgba(255,255,255,0.92);
+        border: 1px solid #e7effa;
         border-radius: 28px;
-        padding: 26px 20px 22px;
-        box-shadow: 0 18px 40px -22px rgba(15,23,42,0.28);
+        padding: 28px 20px 22px;
+        backdrop-filter: blur(14px) saturate(140%);
+        -webkit-backdrop-filter: blur(14px) saturate(140%);
+        box-shadow: 0 30px 60px -26px rgba(37,99,235,0.28), 0 10px 26px -18px rgba(15,23,42,0.10), inset 0 1px 0 rgba(255,255,255,0.8);
     }
-    .lv-title { margin: 0 0 18px; text-align: center; font-size: 21px; font-weight: 700; color: #0b0f19; }
+    .lv-title {
+        margin: 0 0 20px; text-align: center; font-size: 22px; font-weight: 700;
+        font-family: 'Space Grotesk', 'Prompt', sans-serif;
+        background: linear-gradient(90deg, #1e3a8a, #2563eb 55%, #0ea5e9);
+        -webkit-background-clip: text; background-clip: text; color: transparent;
+    }
 
     /* ─── TABS ─── */
-    .lv-tabs { display: flex; background: #e4e4e8; border-radius: 100px; margin-bottom: 18px; }
+    .lv-tabs { display: flex; background: #eef3fc; border: 1px solid #e3eafa; border-radius: 100px; margin-bottom: 18px; padding: 4px; }
     .lv-tab {
-        flex: 1; height: 46px; border: 0; background: transparent; border-radius: 100px;
-        font-family: inherit; font-size: 15px; font-weight: 600; color: #1f2937; cursor: pointer;
-        transition: background .2s, color .2s;
+        flex: 1; height: 42px; border: 0; background: transparent; border-radius: 100px;
+        font-family: inherit; font-size: 14.5px; font-weight: 600; color: #64748b; cursor: pointer;
+        transition: background .25s, color .25s, box-shadow .25s;
     }
-    .lv-tab.active { background: #0a7cff; color: #fff; }
+    .lv-tab.active { background: linear-gradient(135deg, #2563eb, #38bdf8); color: #fff; box-shadow: 0 8px 20px -8px rgba(37,99,235,0.55); }
 
-    /* ─── FIELDS (กรอบนอกคงที่ — ช่อง input ข้างในล่องหน ไม่มีกรอบ/โฟกัสริง/เงา) ─── */
+    /* ─── FIELDS ─── */
     .lv-field {
         display: flex; align-items: center; gap: 12px;
         height: 54px; padding: 0 16px; margin: 0 0 14px;
-        background: #fff; border: 1.5px solid #d3d6dc; border-radius: 16px;
+        background: #fbfdff; border: 1.5px solid #dbe3f0; border-radius: 16px;
+        transition: border-color .2s, box-shadow .2s, background .2s;
     }
-    .lv-ico { flex-shrink: 0; width: 22px; height: 22px; color: #0b0f19; display: block; }
+    .lv-field:focus-within {
+        border-color: #7dd3fc;
+        box-shadow: 0 0 0 3px rgba(56,189,248,0.18);
+        background: #ffffff;
+    }
+    .lv-ico { flex-shrink: 0; width: 21px; height: 21px; color: #2563eb; display: block; }
 
     .lv-field input.lv-input,
     .lv-field input.lv-input:hover,
@@ -2686,29 +2738,30 @@ LOGIN_STYLE = """
         outline: none !important; box-shadow: none !important;
         background: transparent !important;
         -webkit-appearance: none; appearance: none;
-        font-family: inherit; font-size: 16px; font-weight: 400; color: #111827;
-        caret-color: #0a7cff; letter-spacing: 0;
+        font-family: inherit; font-size: 16px; font-weight: 400; color: #0f172a;
+        caret-color: #2563eb; letter-spacing: 0;
     }
-    .lv-field input.lv-input::placeholder { color: #9ca3af; font-weight: 400; }
+    .lv-field input.lv-input::placeholder { color: #94a3b8; font-weight: 400; }
 
-    /* กันกล่อง autofill ของ Chrome (สีเหลือง/ฟ้า) ที่ทำให้เห็นเป็นกรอบ */
+    /* กันกล่อง autofill ของ Chrome */
     .lv-field input.lv-input:-webkit-autofill,
     .lv-field input.lv-input:-webkit-autofill:hover,
     .lv-field input.lv-input:-webkit-autofill:focus,
     .lv-field input.lv-input:-webkit-autofill:active {
         -webkit-box-shadow: 0 0 0 1000px #ffffff inset !important;
         box-shadow: 0 0 0 1000px #ffffff inset !important;
-        -webkit-text-fill-color: #111827 !important;
-        caret-color: #0a7cff;
+        -webkit-text-fill-color: #0f172a !important;
+        caret-color: #2563eb;
         transition: background-color 99999s ease-out 0s;
     }
 
     .lv-eye {
         flex-shrink: 0; height: 26px; border: 0; background: transparent; cursor: pointer;
-        padding: 0 0 0 12px; margin-left: 2px; border-left: 1.5px solid #6b7280;
-        display: flex; align-items: center; color: #0b0f19;
+        padding: 0 0 0 12px; margin-left: 2px; border-left: 1.5px solid #cbd5e1;
+        display: flex; align-items: center; color: #64748b;
+        -webkit-appearance: none; appearance: none;
     }
-    .lv-eye svg { width: 24px; height: 24px; }
+    .lv-eye svg { width: 23px; height: 23px; }
 
     /* ─── SELECT สถาบัน ─── */
     .lv-field select.lv-select,
@@ -2719,41 +2772,48 @@ LOGIN_STYLE = """
         border: 0 !important; outline: none !important; box-shadow: none !important;
         background: transparent !important;
         -webkit-appearance: none; appearance: none;
-        font-family: inherit; font-size: 16px; font-weight: 400; color: #111827;
+        font-family: inherit; font-size: 16px; font-weight: 400; color: #0f172a;
     }
-    .lv-chev { flex-shrink: 0; width: 22px; height: 22px; color: #6b7280; display: block; pointer-events: none; }
+    .lv-chev { flex-shrink: 0; width: 21px; height: 21px; color: #2563eb; display: block; pointer-events: none; }
 
     /* ─── CHECKBOX ─── */
-    .lv-check { display: flex; align-items: center; gap: 10px; margin: 4px 0 16px; padding: 0 4px; font-size: 12.5px; color: #1998b8; line-height: 1.5; cursor: pointer; }
+    .lv-check { display: flex; align-items: center; gap: 10px; margin: 6px 0 18px; padding: 0 4px; font-size: 12.5px; color: #64748b; line-height: 1.5; cursor: pointer; }
     .lv-check input[type="checkbox"] {
         -webkit-appearance: none; appearance: none;
-        flex-shrink: 0; width: 24px; height: 24px; margin: 0;
-        border: 2px solid #6b7280; border-radius: 6px; background: #fff; cursor: pointer;
+        flex-shrink: 0; width: 23px; height: 23px; margin: 0;
+        border: 2px solid #cbd5e1; border-radius: 7px; background: #fff; cursor: pointer;
         outline: none; transition: background .15s, border-color .15s;
     }
     .lv-check input[type="checkbox"]:checked {
-        background-color: #0a7cff; border-color: #0a7cff;
+        background-color: #2563eb; border-color: #2563eb;
         background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='5 12.5 10 17.5 19 7'/%3E%3C/svg%3E");
-        background-size: 82% 82%; background-position: center; background-repeat: no-repeat;
+        background-size: 78% 78%; background-position: center; background-repeat: no-repeat;
     }
-    .lv-check a { color: #1998b8; font-weight: 700; text-decoration: none; }
+    .lv-check a { color: #2563eb; font-weight: 700; text-decoration: none; }
 
     /* ─── SUBMIT ─── */
     .lv-submit {
-        display: block; margin: 6px auto 0; min-width: 62%; height: 52px; padding: 0 36px;
+        display: block; margin: 8px auto 0; min-width: 62%; height: 52px; padding: 0 36px;
         border: 0; border-radius: 100px;
-        font-family: inherit; font-size: 17px; font-weight: 700; color: #fff;
-        background: #0a7cff; box-shadow: 0 10px 22px -10px rgba(10,124,255,0.65);
-        cursor: pointer; transition: transform .12s, background .2s;
+        font-family: 'Space Grotesk', inherit; font-size: 16.5px; font-weight: 700; letter-spacing: .2px; color: #fff;
+        background: linear-gradient(135deg, #2563eb, #38bdf8);
+        box-shadow: 0 16px 32px -12px rgba(37,99,235,0.55);
+        cursor: pointer; transition: transform .12s, box-shadow .2s, filter .2s;
+        -webkit-appearance: none; appearance: none;
     }
-    .lv-submit:disabled { background: #a9a9ae; box-shadow: none; cursor: not-allowed; }
+    .lv-submit:disabled { background: #e2e8f0; color: #94a3b8; box-shadow: none; }
     .lv-submit:active:not(:disabled) { transform: scale(0.97); }
+    .lv-submit:not(:disabled):hover { filter: brightness(1.05); }
 
     /* ─── LINKS ─── */
-    .lv-link { display: block; text-align: center; margin-top: 14px; font-size: 15px; font-weight: 700; color: #1998b8; text-decoration: none; cursor: pointer; background: none; border: 0; width: 100%; font-family: inherit; padding: 0; }
-    .lv-link.soft { font-weight: 500; margin-top: 10px; }
-    .lv-why { display: block; text-align: center; margin-top: 18px; font-size: 12.5px; font-weight: 600; color: #6b7280; text-decoration: none; }
-    .lv-footer { text-align: center; margin-top: 18px; font-size: 10px; letter-spacing: 1px; color: #9ca3af; font-weight: 600; }
+    .lv-link {
+        display: block; text-align: center; margin-top: 14px; font-size: 14.5px; font-weight: 700; color: #2563eb; text-decoration: none; cursor: pointer;
+        background: none; border: 0; width: 100%; font-family: inherit; padding: 0;
+        -webkit-appearance: none; appearance: none;
+    }
+    .lv-link.soft { font-weight: 500; margin-top: 10px; color: #64748b; }
+    .lv-why { display: block; text-align: center; margin-top: 20px; font-size: 12.5px; font-weight: 600; color: #64748b; text-decoration: none; }
+    .lv-footer { text-align: center; margin-top: 18px; font-size: 10px; letter-spacing: 2px; color: #94a3b8; font-weight: 700; }
 
     @media (max-height: 700px) {
         .lv-logo { height: 84px; }
@@ -2764,33 +2824,48 @@ LOGIN_STYLE = """
 
 # 🔷 พื้นหลังสามเหลี่ยมสีน้ำเงิน (SVG วาดเอง ไม่ใช้รูป/อีโมจิ)
 LOGIN_BG_SVG = """
-<svg class="lv-tri-bl" viewBox="0 0 300 380" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+<svg class="lv-tri-bl" viewBox="0 0 420 420" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
     <defs>
-        <linearGradient id="lvg1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3aa0ff"/><stop offset="1" stop-color="#0a55d6"/></linearGradient>
-        <linearGradient id="lvg2" x1="1" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8fd0ff"/><stop offset="1" stop-color="#1b7cf0"/></linearGradient>
-        <linearGradient id="lvg3" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#0b3fb8"/><stop offset="1" stop-color="#2d8cff"/></linearGradient>
+        <radialGradient id="lvg1" cx="35%" cy="35%" r="65%">
+            <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.55"/>
+            <stop offset="100%" stop-color="#38bdf8" stop-opacity="0"/>
+        </radialGradient>
+        <radialGradient id="lvg2" cx="50%" cy="50%" r="60%">
+            <stop offset="0%" stop-color="#6366f1" stop-opacity="0.38"/>
+            <stop offset="100%" stop-color="#6366f1" stop-opacity="0"/>
+        </radialGradient>
+        <linearGradient id="lvgLine" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#60a5fa" stop-opacity="0.35"/>
+            <stop offset="1" stop-color="#38bdf8" stop-opacity="0"/>
+        </linearGradient>
     </defs>
-    <polygon points="0,110 96,160 18,250" fill="url(#lvg2)" opacity="0.85"/>
-    <polygon points="18,250 96,160 128,226" fill="url(#lvg1)" opacity="0.95"/>
-    <polygon points="0,250 18,250 0,300" fill="url(#lvg3)"/>
-    <polygon points="18,250 128,226 112,320" fill="url(#lvg3)" opacity="0.92"/>
-    <polygon points="0,300 112,320 0,380" fill="url(#lvg1)"/>
-    <polygon points="112,320 210,350 150,380 60,380" fill="url(#lvg2)" opacity="0.8"/>
-    <polygon points="128,226 196,290 112,320" fill="url(#lvg2)" opacity="0.7"/>
-    <polygon points="196,290 270,330 210,350" fill="url(#lvg1)" opacity="0.75"/>
-    <polygon points="60,140 90,110 100,160" fill="#9fd8ff" opacity="0.55"/>
-    <polygon points="150,260 176,240 186,272" fill="#bfe6ff" opacity="0.5"/>
+    <circle cx="140" cy="260" r="190" fill="url(#lvg1)"/>
+    <circle cx="90" cy="360" r="120" fill="url(#lvg2)"/>
+    <g fill="none" stroke="url(#lvgLine)" stroke-width="1.2">
+        <circle cx="140" cy="260" r="150" opacity="0.5"/>
+        <circle cx="140" cy="260" r="110" opacity="0.35"/>
+    </g>
 </svg>
-<svg class="lv-tri-tr" viewBox="0 0 160 150" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+<svg class="lv-tri-tr" viewBox="0 0 260 260" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
     <defs>
-        <linearGradient id="lvg4" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4aa8ff"/><stop offset="1" stop-color="#0a5bdc"/></linearGradient>
-        <linearGradient id="lvg5" x1="1" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#9ad6ff"/><stop offset="1" stop-color="#2a86f2"/></linearGradient>
+        <radialGradient id="lvg3" cx="65%" cy="30%" r="65%">
+            <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.5"/>
+            <stop offset="100%" stop-color="#38bdf8" stop-opacity="0"/>
+        </radialGradient>
+        <radialGradient id="lvg4" cx="50%" cy="50%" r="60%">
+            <stop offset="0%" stop-color="#818cf8" stop-opacity="0.32"/>
+            <stop offset="100%" stop-color="#818cf8" stop-opacity="0"/>
+        </radialGradient>
+        <linearGradient id="lvgLine2" x1="1" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#7dd3fc" stop-opacity="0.4"/>
+            <stop offset="1" stop-color="#6366f1" stop-opacity="0"/>
+        </linearGradient>
     </defs>
-    <polygon points="160,0 160,70 104,38" fill="url(#lvg4)" opacity="0.9"/>
-    <polygon points="160,0 104,38 126,0" fill="url(#lvg5)" opacity="0.85"/>
-    <polygon points="104,38 160,70 118,92" fill="url(#lvg5)" opacity="0.7"/>
-    <polygon points="126,0 150,0 138,14" fill="#bfe6ff" opacity="0.8"/>
-    <polygon points="96,66 112,52 118,76" fill="#7cc4ff" opacity="0.6"/>
+    <circle cx="170" cy="80" r="130" fill="url(#lvg3)"/>
+    <circle cx="210" cy="150" r="70" fill="url(#lvg4)"/>
+    <g fill="none" stroke="url(#lvgLine2)" stroke-width="1.2">
+        <circle cx="170" cy="80" r="100" opacity="0.5"/>
+    </g>
 </svg>
 """
 
@@ -6099,10 +6174,42 @@ async def admin_import_students_page(user_session: Optional[str] = Cookie(None))
     <div class="dk-card"><form method="post" action="/api/admin/import_students/preview" enctype="multipart/form-data">
         <label class="dk-label">เลือกไฟล์ Excel</label>
         <input class="dk-input" type="file" name="file" accept=".xlsx" required style="padding:14px;margin-bottom:14px;">
-        <button class="dk-btn block" style="padding:14px;">{ic('upload', 16)} อ่านไฟล์และตรวจรายชื่อ</button></form></div>"""
-    return dk_page("นำเข้านักเรียนจาก Excel", "เพิ่มนักเรียนหลายคนพร้อมกัน", body, "/admin/add_student", icon="📥 ", theme="dk-teal")
+        <button type="button" id="impSubmitBtn" class="dk-btn block" style="padding:14px;" disabled>{ic('upload', 16)} อ่านไฟล์และตรวจรายชื่อ</button></form></div>"""
 
-@app.post("/api/admin/import_students/preview", response_class=HTMLResponse)
+    js = """<script>(function(){
+      try{
+      var form=document.querySelector('form[action="/api/admin/import_students/preview"]');
+      if(!form){console.error('import_students: form not found');return;}
+      var inp=form.querySelector('input[type=file]'),btn=document.getElementById('impSubmitBtn'),buf=null,name='';
+      if(!inp||!btn){console.error('import_students: input/button not found');return;}
+      var note=document.createElement('div');note.className='dk-note';note.style.cssText='display:none;margin:0 0 14px;';form.insertBefore(note,form.firstChild);
+      function say(t,bad){note.style.display='block';note.style.background=bad?'#fef2f2':'#ecfdf5';note.style.borderColor=bad?'#fecaca':'#a7f3d0';note.style.color=bad?'#991b1b':'#065f46';note.textContent=t;}
+      // อ่านไฟล์เข้าหน่วยความจำทันทีที่เลือก (ก่อนปุ่มจะกดได้ด้วยซ้ำ) — กัน ERR_UPLOAD_FILE_CHANGED บนมือถือ
+      // (ไฟล์ที่แชร์มาจาก LINE/Drive/แอปอื่นๆ อาจถูกเบราว์เซอร์มองว่า "เปลี่ยนไป" ตอนกดส่งจริง ถ้าไม่รีบอ่านเก็บไว้ก่อน)
+      inp.addEventListener('change',function(){
+        buf=null;btn.disabled=true;var f=inp.files&&inp.files[0];if(!f){note.style.display='none';return;}
+        name=f.name;say('กำลังอ่านไฟล์...');
+        f.arrayBuffer().then(function(b){buf=b;btn.disabled=false;say('✅ อ่านไฟล์แล้ว: '+name+' ('+Math.round(b.byteLength/1024)+' KB)');})
+        .catch(function(){say('อ่านไฟล์ไม่สำเร็จ — โปรดบันทึกไฟล์ไว้ในเครื่อง (คลังไฟล์) ก่อน แล้วค่อยเลือกใหม่ แทนการเลือกตรงจาก LINE/แอปแชร์ไฟล์',true);});
+      });
+      function doUpload(){
+        if(!buf){say('ยังไม่ได้เลือกไฟล์ หรือไฟล์ยังอ่านไม่เสร็จ กรุณารอสักครู่แล้วลองใหม่',true);return;}
+        btn.disabled=true;
+        var fd=new FormData();fd.append('file',new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}),name||'students.xlsx');
+        if(window.KX&&KX.loading)KX.loading(true);
+        fetch(form.action,{method:'POST',body:fd,credentials:'same-origin'})
+          .then(function(r){if(!r.ok)throw 0;if(r.redirected&&/review/.test(r.url)){location.href=r.url;return;}return r.text().then(function(h){document.open();document.write(h);document.close();});})
+          .catch(function(){if(window.KX&&KX.loading)KX.loading(false);btn.disabled=false;say('ส่งไฟล์ไม่สำเร็จ ลองใหม่อีกครั้ง',true);});
+      }
+      btn.addEventListener('click',doUpload);
+      form.addEventListener('submit',function(e){e.preventDefault();doUpload();});
+      }catch(err){console.error('import_students init error',err);}
+    })();</script>"""
+    return dk_page("นำเข้านักเรียนจาก Excel", "เพิ่มนักเรียนหลายคนพร้อมกัน", body, "/admin/add_student", extra=js, icon="📥 ", theme="dk-teal")
+
+_IMPORT_CACHE: dict = {}
+
+@app.post("/api/admin/import_students/preview")
 async def api_import_students_preview(file: UploadFile = File(...), user_session: Optional[str] = Cookie(None)):
     if not gate_perm(user_session, can_manage_student_registry): return HTMLResponse("Unauthorized", status_code=401)
     data = await file.read()
@@ -6115,6 +6222,21 @@ async def api_import_students_preview(file: UploadFile = File(...), user_session
         return alert_redirect("อ่านไฟล์ไม่สำเร็จ — โปรดตรวจว่าเป็นไฟล์ .xlsx ที่ถูกต้อง", type="error", url="/admin/import_students")
     if res.get("error") or not res["rows"]:
         return alert_redirect(res.get("error") or "ไม่พบรายชื่อนักเรียนในไฟล์", type="error", url="/admin/import_students")
+    import secrets, time as _t
+    now = _t.time()
+    for k in [k for k, v in _IMPORT_CACHE.items() if now - v["t"] > 900]: _IMPORT_CACHE.pop(k, None)
+    while len(_IMPORT_CACHE) >= 20: _IMPORT_CACHE.pop(next(iter(_IMPORT_CACHE)), None)
+    token = secrets.token_urlsafe(12)
+    _IMPORT_CACHE[token] = {"t": now, "res": res}
+    return RedirectResponse(url=f"/admin/import_students/review?t={token}", status_code=303)
+
+@app.get("/admin/import_students/review", response_class=HTMLResponse)
+async def admin_import_students_review(t: str, user_session: Optional[str] = Cookie(None)):
+    if not gate_perm(user_session, can_manage_student_registry): return RedirectResponse(url="/login", status_code=303)
+    entry = _IMPORT_CACHE.get(t)
+    if not entry:
+        return alert_redirect("หมดเวลาตรวจรายชื่อ โปรดอัปโหลดไฟล์ใหม่", type="warning", url="/admin/import_students")
+    res = entry["res"]
     new, dup = _import_plan(res["rows"])
     by_class = {}
     for r in new: by_class[r[2]] = by_class.get(r[2], 0) + 1
