@@ -539,8 +539,57 @@ STYLE_HEADER = """
         ::-webkit-scrollbar-track { background: var(--surface-muted); }
         ::-webkit-scrollbar-thumb { background: #c7d0dd; border-radius: 10px; }
         ::-webkit-scrollbar-thumb:hover { background: #aab4c4; }
+
+        /* ============================================================
+           🎨 DASHBOARD SKIN — ปรับหน้าเดิมทั้งระบบให้เป็นสไตล์แดชบอร์ดเดียวกัน
+           (override ชุดสีเก่า; หน้าที่ใช้ dk-/ah- มีสไตล์ของตัวเองอยู่แล้ว)
+        ============================================================ */
+        body { background: #f0f4f8; font-family: 'Sarabun', 'Inter', sans-serif; }
+
+        .navbar {
+            background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 60%, #1d4ed8 100%);
+            border-bottom: none; padding: calc(env(safe-area-inset-top, 0px) + 13px) 18px 13px;
+            box-shadow: 0 6px 20px -8px rgba(15,23,42,0.45);
+        }
+        .navbar h1 { font-size: 17px; font-weight: 800; }
+        .navbar .btn-secondary, .navbar .btn {
+            background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.25);
+            box-shadow: none; color: #fff; border-radius: 10px; padding: 8px 13px; font-size: 12.5px;
+        }
+        .main-container { max-width: 900px; padding: 18px 14px 44px; }
+
+        .card {
+            border-radius: 18px; border: 1px solid var(--border); padding: 18px;
+            box-shadow: 0 1px 3px rgba(15,23,42,0.05); margin-bottom: 16px;
+        }
+        .card h2 {
+            font-size: 15px; font-weight: 800; border-bottom: none; padding-bottom: 0; margin-bottom: 14px;
+        }
+        .card h2::before { content: ""; width: 4px; height: 16px; border-radius: 4px; background: linear-gradient(180deg, #60a5fa, #1d4ed8); display: inline-block; }
+
+        table { border-radius: 14px; border: 1px solid var(--border); box-shadow: none; margin-top: 6px; }
+        th { background: #f8fafc; color: #475569; font-size: 12px; font-weight: 800; padding: 11px 10px; }
+        td { font-size: 13.5px; }
+        tbody tr:nth-child(even) { background: #fff; }
+        @media (hover: hover) { tbody tr:hover td { background: #f5f8ff; } }
+
+        .btn { border-radius: 11px; box-shadow: none; }
+        .btn-submit { background: linear-gradient(135deg, #1d4ed8, #1e3a8a); border-bottom: none; border-radius: 12px; box-shadow: 0 8px 18px -8px rgba(30,58,138,0.55); }
+        .btn-danger { background: #fee2e2; color: #b91c1c; }
+        .btn-warning { background: #fef3c7; color: #b45309; }
+        .btn-secondary { background: #e2e8f0; color: #334155; }
+
+        input[type="text"], input[type="password"], input[type="date"], input[type="number"], input[type="tel"],
+        input[type="email"], input[type="time"], input[type="search"], input[type="url"], textarea, select {
+            border-radius: 12px; border: 1.5px solid #dbe2ec; padding: 11.5px 13px; font-family: 'Sarabun', 'Inter', sans-serif;
+        }
+        textarea { width: 100%; box-sizing: border-box; margin-bottom: 14px; font-size: 14px; }
+        input:focus, textarea:focus, select:focus { outline: none; border-color: #1d4ed8; box-shadow: 0 0 0 4px rgba(29,78,216,0.12); }
+
+        .badge { background: #eef2ff; color: #3730a3; border: none; padding: 3px 10px; }
+        .menu-btn { border-radius: 16px; border-bottom: 1px solid var(--border); }
     </style>
-    
+
     <script>
         // 🎨 CUSTOM ALERT SYSTEM BY KK STUDIO
         function smartAlert(options) {
@@ -1121,6 +1170,9 @@ PERMISSIONS = {
     "manage_teacher_accounts":  {"label": "จัดการบัญชีครู",                    "default_roles": ("admin", "affairs", "level_head")},
     "manage_student_profiles":  {"label": "จัดการโปรไฟล์นักเรียน",             "default_roles": ("admin", "affairs", "level_head")},
     "view_analytics":           {"label": "ดูแดชบอร์ดสถิติขั้นสูง",            "default_roles": ("admin", "affairs", "level_head")},
+    "manage_inspection":        {"label": "ตรวจระเบียบนักเรียน (ติ๊กผ่าน/ไม่ผ่าน)", "default_roles": ("admin", "affairs", "level_head", "teacher")},
+    "view_inspection_report":   {"label": "ดูรายงานผลตรวจระเบียบ",             "default_roles": ("admin", "affairs", "level_head")},
+    "manage_inspection_criteria": {"label": "จัดการตัวชี้วัดตรวจระเบียบ (เพิ่ม/ลบ)", "default_roles": ("admin", "affairs")},
 }
 # บทบาทที่ปรับสิทธิ์ผ่านตารางได้ (admin มีสิทธิ์ทุกอย่างเสมอ ไม่ต้องตั้งค่า)
 CONFIGURABLE_ROLES = ("teacher", "level_head", "affairs")
@@ -1179,6 +1231,24 @@ def can_manage_student_profiles(access: dict) -> bool:
 def can_view_analytics(access: dict) -> bool:
     """สิทธิ์ดูแดชบอร์ดสถิติขั้นสูง (ปรับได้ที่ /admin/permissions)"""
     return access.get("role") == "admin" or has_permission(access, "view_analytics")
+
+def can_manage_inspection(access: dict) -> bool:
+    """สิทธิ์ตรวจระเบียบนักเรียน — ติ๊กผ่าน/ไม่ผ่าน (ปรับได้ที่ /admin/permissions)"""
+    return has_permission(access, "manage_inspection")
+
+def can_view_inspection_report(access: dict) -> bool:
+    """สิทธิ์ดูรายงานผลตรวจระเบียบ (ปรับได้ที่ /admin/permissions)"""
+    return has_permission(access, "view_inspection_report")
+
+def can_manage_inspection_criteria(access: dict) -> bool:
+    """สิทธิ์เพิ่ม/ลบ/เปิด-ปิด ตัวชี้วัดการตรวจระเบียบ (ปรับได้ที่ /admin/permissions)"""
+    return has_permission(access, "manage_inspection_criteria")
+
+def in_inspection_scope(access: dict, classroom: str) -> bool:
+    """ขอบเขตห้องที่ตรวจได้: หัวหน้าระดับเฉพาะระดับตัวเอง, บทบาทอื่นที่มีสิทธิ์ตรวจได้ทุกห้อง"""
+    if access.get("role") == "level_head":
+        return get_grade_level(classroom) == access.get("level_scope", "")
+    return True
 
 
 def verify_manager_password(access: dict, password: str) -> bool:
@@ -2111,6 +2181,7 @@ PAGE_LOADER = """
 <style>
 .ktech-loader{position:fixed;inset:0;z-index:99999;background:radial-gradient(circle at 50% 35%,#0d3a66 0%,#0a2447 45%,#060e1f 100%);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;transition:opacity .5s ease,visibility .5s ease;}
 .ktech-loader.ktech-hide{opacity:0;visibility:hidden;pointer-events:none;}
+.ktech-loader.ktech-instant{transition:none;}
 .ktech-loader-rings{position:relative;width:140px;height:140px;display:flex;align-items:center;justify-content:center;}
 .ktech-ring{position:absolute;border-radius:50%;border:2px solid transparent;}
 .ktech-ring-1{width:140px;height:140px;border-top-color:#60a5fa;border-right-color:#60a5fa33;animation:ktechSpin 1.6s linear infinite;}
@@ -2136,8 +2207,14 @@ PAGE_LOADER = """
     function ktechHide(){
         var el=document.getElementById('ktechLoader');
         if(!el) return;
+        el.classList.remove('ktech-instant');
         el.classList.add('ktech-hide');
-        setTimeout(function(){ if(el && el.parentNode) el.remove(); }, 550);
+    }
+    function ktechShowInstant(){
+        var el=document.getElementById('ktechLoader');
+        if(!el) return;
+        el.classList.add('ktech-instant');
+        el.classList.remove('ktech-hide');
     }
     var ktechStart=Date.now();
     window.addEventListener('load', function(){
@@ -2146,6 +2223,29 @@ PAGE_LOADER = """
         setTimeout(ktechHide, wait);
     });
     setTimeout(ktechHide, 4000);
+
+    // ── แตะลิงก์/กดส่งฟอร์มแล้วขึ้นหน้าโหลดทันที ไม่ต้องรอหน้าใหม่โหลดเสร็จก่อนค่อยขึ้น ──
+    document.addEventListener('click', function(ev){
+        if(ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+        var a = ev.target.closest('a[href]');
+        if(!a || a.target === '_blank' || a.hasAttribute('download') || a.hasAttribute('data-no-loader')) return;
+        var href = a.getAttribute('href') || '';
+        if(!href || href.charAt(0) === '#' || /^(javascript:|mailto:|tel:)/i.test(href)) return;
+        try {
+            var url = new URL(href, window.location.href);
+            if(url.origin !== window.location.origin) return;
+        } catch(e) { return; }
+        ktechShowInstant();
+        ev.preventDefault();
+        setTimeout(function(){ window.location.href = href; }, 90);
+    }, true);
+
+    document.addEventListener('submit', function(ev){
+        if(ev.defaultPrevented) return;
+        var f = ev.target;
+        if(!(f instanceof HTMLFormElement) || f.target === '_blank' || f.hasAttribute('data-no-loader')) return;
+        ktechShowInstant();
+    }, true);
 })();
 </script>
 """.replace("__KTECH_ICON_B64__", "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")
@@ -2502,6 +2602,9 @@ async def student_dashboard(user_session: Optional[str] = Cookie(None)):
                 </a>
                 <a href="/student/care" class="ah-cell">
                     {icon_care}<span class="ah-cell-label">ดูแลนักเรียน</span>
+                </a>
+                <a href="/student/inspection" class="ah-cell">
+                    <div class="ah-cell-icon-wrap" style="background:#ecfdf5;color:#047857;"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div><span class="ah-cell-label">ตรวจระเบียบ</span>
                 </a>
                 <a href="/student/payments" class="ah-cell">
                     {icon_payment}<span class="ah-cell-label">ชำระเงิน</span>
@@ -3222,6 +3325,10 @@ async def admin_dashboard(user_session: Optional[str] = Cookie(None)):
                 {adm_cell("/admin/grades_visibility", '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>', "#ecfeff", "#0e7490", "การมองเห็นคะแนน")}
             </div>
 
+            <!-- ── ตรวจระเบียบนักเรียน ── -->
+            <div class="ah-section-label">ตรวจระเบียบนักเรียน</div>
+            <div class="ah-grid3">{inspection_menu_cells({"role": "admin"})}</div>
+
             <!-- ── เมนูอื่นๆ ── -->
             <div class="ah-section-label">เครื่องมือ</div>
             <div class="ah-grid3">
@@ -3267,61 +3374,45 @@ async def admin_students_page(class_filter: Optional[str] = None, user_session: 
     if class_filter:
         master_students = [s for s in master_students if s['class'] == class_filter]
     all_risk_tags = get_all_students_risk_tags()
-    student_table_rows = ""
+    cards = ""
     for s in master_students:
         tags = all_risk_tags.get(s['name'], [])
         tag_html = "".join([
             f'<span style="background:{t[1]};color:{t[2]};border:1px solid {t[3]};padding:2px 7px;border-radius:20px;font-size:11px;font-weight:700;white-space:nowrap;">{t[0]}</span>'
             for t in tags
         ])
-        student_table_rows += f"""
-        <tr>
-            <td><span class="badge">{s['class']}</span></td>
-            <td><b>{s['no']}</b></td>
-            <td style="text-align:left;">
-                <div style="font-weight:600; color:#0f172a;">{s['name']}</div>
-                {f'<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;">{tag_html}</div>' if tag_html else ''}
-            </td>
-            <td><span style="color:#475569; font-size:12.5px;">{s['branch']}</span></td>
-            <td>
-                <div style="display:flex; gap:6px; justify-content:center;">
-                    <a href="/admin/edit_student?uid={s['uid']}" class="btn btn-warning" style="padding:5px 10px; font-size:11.5px;">📝 แก้ไข</a>
-                    <a href="/api/admin/delete_student?uid={s['uid']}" class="btn btn-danger" style="padding:5px 10px; font-size:11.5px;" onclick="return confirm('ยืนยันที่จะลบข้อมูลนักเรียนคนนี้ออกจากทะเบียนหลัก?')">🛑 ลบ</a>
-                </div>
-            </td>
-        </tr>
-        """
-    return f"""
-    <html>{STYLE_HEADER}
-    <body>
-        <div class="navbar">
-            <h1><img src="{LOGO_URL}" class="nav-logo"> จัดการนักเรียน</h1>
-            <a href="/admin/dashboard" class="btn btn-secondary">⬅ กลับหน้าควบคุม</a>
-        </div>
-        <div class="main-container">
-            <a href="/admin/add_student" class="btn btn-warning" style="width:100%; padding:14px; margin-bottom:12px; box-sizing:border-box; font-weight:700; border-radius:10px; background: linear-gradient(135deg, #10b981, #047857); border:none; text-align:center; color:white;">📥 เพิ่มรายชื่อนักเรียนใหม่</a>
-            <a href="/admin/student_accounts" class="btn btn-warning" style="width:100%; padding:14px; margin-bottom:16px; box-sizing:border-box; font-weight:700; border-radius:10px; background: linear-gradient(135deg, #7c3aed, #5b21b6); border:none; text-align:center; color:white;">🔑 ตั้งค่ารหัสประจำตัว/เบอร์โทร สำหรับเข้าสู่ระบบนักเรียน</a>
-            <div class="card">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; flex-wrap:wrap; gap:10px;">
-                    <h2 style="margin:0;">📁 ฐานข้อมูลทะเบียนนักเรียนส่วนกลาง</h2>
-                    <div style="display:flex; align-items:center; gap:8px; background:#f1f5f9; padding:8px 12px; border-radius:10px; border:1px solid #e2e8f0;">
-                        <span style="font-size:13px; font-weight:700; color:#475569;">🔍 กรองตามห้อง:</span>
-                        <select onchange="location.href='/admin/students?class_filter='+this.value;" style="padding:5px; border-radius:6px; border:1px solid #cbd5e1; font-family:'Sarabun'; font-size:13px; font-weight:600;">
-                            {class_options}
-                        </select>
-                    </div>
-                </div>
-                <div style="overflow-x:auto; border-radius:8px; border:1px solid #e2e8f0;">
-                    <table>
-                        <thead><tr><th>ชั้นเรียน</th><th>เลขที่</th><th>ชื่อ-นามสกุล</th><th>สาขาวิชาเอก</th><th>การจัดการระบบ</th></tr></thead>
-                        <tbody>{student_table_rows if student_table_rows else "<tr><td colspan='5'>ไม่พบข้อมูล</td></tr>"}</tbody>
-                    </table>
-                </div>
+        q_uid = urllib.parse.quote(s['uid'])
+        initial = _he(s['name'][:1]) if s['name'] else "?"
+        cards += f"""
+        <div class="dk-stu sd-card" data-search="{_he((s['name'] + ' ' + s['no'] + ' ' + s['class'] + ' ' + s['branch']).lower(), quote=True)}" style="margin:0;">
+            <div class="dk-stu-head" style="margin-bottom:8px;">
+                <div class="dk-avatar">{initial}</div>
+                <div class="nm"><b>{_he(s['name'])}</b><span>เลขที่ {_he(s['no'])} · {_he(s['branch'])}</span></div>
+                <span class="dk-pill mute">{_he(s['class'])}</span>
             </div>
-            <div style="text-align:center; color:#94a3b8; font-size:12px; font-weight:600; margin-top:20px;">KK STUDIO GROUP APPLICATION MANAGEMENT</div>
-        </div>
-    </body></html>
-    """
+            {f'<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px;">{tag_html}</div>' if tag_html else ''}
+            <div style="display:flex; gap:8px;">
+                <a href="/admin/edit_student?uid={q_uid}" class="dk-btn light sm" style="flex:1;display:flex;align-items:center;justify-content:center;gap:5px;">{_ic(_SVG_EDIT, 13)} แก้ไข</a>
+                <a href="/api/admin/delete_student?uid={q_uid}" class="dk-btn danger sm" style="flex:1;display:flex;align-items:center;justify-content:center;gap:5px;" onclick="return confirm('ยืนยันที่จะลบข้อมูลนักเรียนคนนี้ออกจากทะเบียนหลัก?')">{_ic(_SVG_TRASH, 13)} ลบ</a>
+            </div>
+        </div>"""
+
+    all_students_count = len(get_sorted_master_students())
+    stats = (dk_stat("นักเรียนทั้งหมด", all_students_count, _ic(_SVG_BACKPACK), "blue") + dk_stat("ห้องเรียน", len(all_classes), _ic(_SVG_SCHOOL), "violet")
+             + dk_stat("กำลังแสดง", len(master_students), _ic(_SVG_EYE), "green") + dk_stat("มีป้ายเฝ้าระวัง", sum(1 for s in master_students if all_risk_tags.get(s['name'])), _ic(_SVG_ALERT), "amber"))
+    quick = f"""<div class="dk-grid c2" style="margin-bottom:14px;">
+        <a href="/admin/add_student" class="dk-btn green block" style="padding:14px;display:flex;align-items:center;justify-content:center;gap:7px;">{_ic(_SVG_USER_PLUS, 16)} เพิ่มรายชื่อนักเรียนใหม่</a>
+        <a href="/admin/student_accounts" class="dk-btn block" style="padding:14px;background:linear-gradient(135deg,#7c3aed,#5b21b6);display:flex;align-items:center;justify-content:center;gap:7px;">{_ic(_SVG_KEY, 16)} ตั้งค่ารหัส/เบอร์โทร เข้าสู่ระบบนักเรียน</a></div>"""
+    flt = f"""<div class="dk-card"><div class="dk-card-title" style="display:flex;align-items:center;gap:6px;">{_ic(_SVG_FOLDER, 16)} ทะเบียนนักเรียนส่วนกลาง<small>{len(master_students)} รายการ</small></div>
+        <div class="dk-filter" style="grid-template-columns:1fr 1fr;">
+            <div><label class="dk-label" style="display:flex;align-items:center;gap:5px;">{_ic(_SVG_SEARCH, 14)} ค้นหา</label><input id="sdSearch" class="dk-input" placeholder="ชื่อ / เลขที่ / สาขา"></div>
+            <div><label class="dk-label">ห้องเรียน</label><select class="dk-select" onchange="location.href='/admin/students?class_filter='+encodeURIComponent(this.value);">{class_options}</select></div>
+        </div></div>"""
+    grid = f'<div class="dk-grid c3" id="sdGrid">{cards}</div>' if cards else f'<div class="dk-card">{dk_empty(_ic(_SVG_FOLDER, 38, 1.5), "ไม่พบข้อมูลนักเรียน")}</div>'
+    js = """<script>(function(){var i=document.getElementById('sdSearch');if(!i)return;i.addEventListener('input',function(){var q=this.value.trim().toLowerCase();
+        document.querySelectorAll('.sd-card').forEach(function(c){c.style.display=(!q||c.getAttribute('data-search').indexOf(q)!==-1)?'':'none';});});})();</script>"""
+    return dk_page("จัดการนักเรียน", "ทะเบียนนักเรียนส่วนกลาง เพิ่ม แก้ไข ลบ และค้นหา", f'<div class="dk-stats">{stats}</div>{quick}{flt}{grid}',
+                   "/admin/dashboard", extra=js, icon=_ic(_SVG_BACKPACK, 22))
 
 @app.get("/admin/student_accounts", response_class=HTMLResponse)
 async def admin_student_accounts_page(class_filter: Optional[str] = None, user_session: Optional[str] = Cookie(None)):
@@ -3353,75 +3444,60 @@ async def admin_student_accounts_page(class_filter: Optional[str] = None, user_s
 
     scope_note = ""
     if access["role"] == "level_head":
-        scope_note = f'<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:10px 16px;margin-bottom:12px;font-size:12.5px;color:#1e40af;">🎓 คุณกำลังดูเฉพาะนักเรียนระดับชั้น <b>{access["level_scope"]}</b></div>'
+        scope_note = f'<div class="dk-note" style="display:flex;align-items:center;gap:7px;">{_ic(_SVG_SCHOOL, 15)} คุณกำลังดูเฉพาะนักเรียนระดับชั้น <b>{_he(access["level_scope"])}</b></div>'
 
     rows = ""
     for s in master_students:
         acc = accounts.get(s['uid'], {"student_id": "", "phone": "", "photo_url": ""})
-        status_badge = ('<span style="background:#f0fdf4;color:#166534;border:1px solid #86efac;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:700;">✅ ตั้งค่าแล้ว</span>'
-                         if acc["student_id"] and acc["phone"] else
-                         '<span style="background:#fef2f2;color:#991b1b;border:1px solid #fecaca;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:700;">⚠️ ยังไม่ได้ตั้งค่า</span>')
-        avatar_html = (f'<img src="{acc["photo_url"]}" style="width:44px;height:44px;border-radius:50%;object-fit:cover;border:2px solid #e2e8f0;">'
+        is_set = bool(acc["student_id"] and acc["phone"])
+        status_badge = (f'<span class="dk-pill ok" style="display:inline-flex;align-items:center;gap:4px;flex-shrink:0;">{_ic(_SVG_CHECK_C, 12)} ตั้งค่าแล้ว</span>'
+                         if is_set else
+                         f'<span class="dk-pill bad" style="display:inline-flex;align-items:center;gap:4px;flex-shrink:0;">{_ic(_SVG_ALERT, 12)} ยังไม่ได้ตั้งค่า</span>')
+        avatar_html = (f'<img src="{acc["photo_url"]}" style="width:44px;height:44px;border-radius:50%;object-fit:cover;border:2px solid #e2e8f0;flex-shrink:0;">'
                         if acc["photo_url"] else
-                        '<div style="width:44px;height:44px;border-radius:50%;background:#f1f5f9;display:flex;align-items:center;justify-content:center;font-size:20px;border:2px solid #e2e8f0;">🎒</div>')
+                        f'<div style="width:44px;height:44px;border-radius:50%;background:#f1f5f9;display:flex;align-items:center;justify-content:center;color:#94a3b8;border:2px solid #e2e8f0;flex-shrink:0;">{_ic(_SVG_BACKPACK, 20)}</div>')
         rows += f"""
-        <tr>
-            <td style="text-align:left;">
-                <div style="display:flex;align-items:center;gap:10px;">
-                    {avatar_html}
-                    <div>
-                        <div style="font-weight:700;color:#0f172a;">{s['name']}</div>
-                        <div style="font-size:11.5px;color:#94a3b8;">{s['class']} · เลขที่ {s['no']}</div>
-                    </div>
+        <div class="dk-card" style="padding:14px;">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+                {avatar_html}
+                <div style="flex:1;min-width:0;">
+                    <div style="font-weight:700;color:#0f172a;">{_he(s['name'])}</div>
+                    <div style="font-size:11.5px;color:#94a3b8;">{_he(s['class'])} · เลขที่ {_he(s['no'])}</div>
                 </div>
-            </td>
-            <td>{status_badge}</td>
-            <td colspan="2">
-                <form action="/api/admin/student_account/set" method="post" enctype="multipart/form-data" style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; justify-content:center;">
-                    <input type="hidden" name="uid" value="{s['uid']}">
-                    <input type="text" name="student_id" value="{acc['student_id'] or ''}" placeholder="รหัสประจำตัว" required style="width:110px; margin:0; padding:6px 8px; font-size:12.5px;">
-                    <input type="text" name="phone" value="{acc['phone'] or ''}" placeholder="เบอร์โทร" required style="width:110px; margin:0; padding:6px 8px; font-size:12.5px;">
-                    <input type="file" name="photo" accept="image/png,image/jpeg,image/webp" style="width:130px; margin:0; padding:4px; font-size:11px;">
-                    <button type="submit" class="btn btn-warning" style="padding:6px 12px; font-size:11.5px;">💾 บันทึก</button>
-                </form>
-            </td>
-        </tr>
+                {status_badge}
+            </div>
+            <form action="/api/admin/student_account/set" method="post" enctype="multipart/form-data" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                <input type="hidden" name="uid" value="{_he(s['uid'], quote=True)}">
+                <input type="text" name="student_id" value="{_he(acc['student_id'] or '', quote=True)}" placeholder="รหัสประจำตัว" required class="dk-input" style="margin:0;">
+                <input type="text" name="phone" value="{_he(acc['phone'] or '', quote=True)}" placeholder="เบอร์โทร" required class="dk-input" style="margin:0;">
+                <label class="dk-btn light sm sa-file-label" style="grid-column:1/-1;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;">
+                    {_ic(_SVG_IMAGE, 14)}<span class="sa-file-text">แนบรูปโปรไฟล์ (ถ้ามี)</span>
+                    <input type="file" name="photo" accept="image/png,image/jpeg,image/webp" class="sa-file-input" style="position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;">
+                </label>
+                <button type="submit" class="dk-btn green sm" style="grid-column:1/-1;display:flex;align-items:center;justify-content:center;gap:6px;">{_ic(_SVG_SAVE, 14)} บันทึก</button>
+            </form>
+        </div>
         """
 
-    return f"""
-    <html>{STYLE_HEADER}
-    <body>
-        <div class="navbar">
-            <h1><img src="{LOGO_URL}" class="nav-logo"> 🔑 โปรไฟล์บัญชีนักเรียน</h1>
-            <a href="{back_url}" class="btn btn-secondary">⬅ กลับ</a>
-        </div>
-        <div class="main-container">
-            <div class="card" style="background:#eff6ff; border:1px solid #bfdbfe;">
-                <p style="margin:0; font-size:13px; color:#1e40af; line-height:1.7;">
-                    📌 นักเรียนจะล็อกอินเข้าระบบด้วย <b>รหัสประจำตัว + เบอร์โทรศัพท์</b> (ไม่ต้องตั้งรหัสผ่าน) และสามารถ <b>แนบรูปโปรไฟล์</b> ให้นักเรียนแต่ละคนได้จากตารางด้านล่าง (รองรับ .jpg .png .webp ไม่เกิน 3MB)
-                </p>
-            </div>
-            {scope_note}
-            <div class="card">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; flex-wrap:wrap; gap:10px;">
-                    <h2 style="margin:0;">รายชื่อนักเรียน</h2>
-                    <div style="display:flex; align-items:center; gap:8px; background:#f1f5f9; padding:8px 12px; border-radius:10px; border:1px solid #e2e8f0;">
-                        <span style="font-size:13px; font-weight:700; color:#475569;">🔍 กรองตามห้อง:</span>
-                        <select onchange="location.href='/admin/student_accounts?class_filter='+this.value;" style="padding:5px; border-radius:6px; border:1px solid #cbd5e1; font-family:'Sarabun'; font-size:13px; font-weight:600;">
-                            {class_options}
-                        </select>
-                    </div>
-                </div>
-                <div style="overflow-x:auto; border-radius:8px; border:1px solid #e2e8f0;">
-                    <table>
-                        <thead><tr><th style="text-align:left;">นักเรียน</th><th>สถานะ</th><th colspan="2">รหัสประจำตัว / เบอร์โทร / รูป</th></tr></thead>
-                        <tbody>{rows if rows else "<tr><td colspan='3'>ไม่พบข้อมูล</td></tr>"}</tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-    </body></html>
-    """
+    note = f"""<div class="dk-card" style="background:#eff6ff;border:1px solid #bfdbfe;display:flex;gap:10px;align-items:flex-start;">
+        <span style="color:#1d4ed8;flex-shrink:0;margin-top:1px;">{_ic(_SVG_INFO, 18)}</span>
+        <p style="margin:0;font-size:13px;color:#1e40af;line-height:1.7;">
+            นักเรียนจะล็อกอินเข้าระบบด้วย <b>รหัสประจำตัว + เบอร์โทรศัพท์</b> (ไม่ต้องตั้งรหัสผ่าน) และสามารถ <b>แนบรูปโปรไฟล์</b> ให้นักเรียนแต่ละคนได้จากรายการด้านล่าง (รองรับ .jpg .png .webp ไม่เกิน 3MB)
+        </p></div>"""
+    filter_bar = f"""<div class="dk-card"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+        <div class="dk-card-title" style="margin:0;">รายชื่อนักเรียน<small>{len(master_students)} คน</small></div>
+        <div style="display:flex;align-items:center;gap:8px;">
+            <label class="dk-label" style="margin:0;display:flex;align-items:center;gap:5px;">{_ic(_SVG_SEARCH, 14)} กรองตามห้อง</label>
+            <select class="dk-select" style="width:auto;" onchange="location.href='/admin/student_accounts?class_filter='+encodeURIComponent(this.value);">{class_options}</select>
+        </div></div></div>"""
+
+    body = note + scope_note + filter_bar + (f'<div class="dk-grid c2">{rows}</div>' if rows else f'<div class="dk-card">{dk_empty(_ic(_SVG_FOLDER, 38, 1.5), "ไม่พบข้อมูลนักเรียน")}</div>')
+    js = """<script>document.addEventListener('change', function(ev){
+        var inp = ev.target.closest('.sa-file-input'); if(!inp) return;
+        var t = inp.closest('.sa-file-label').querySelector('.sa-file-text');
+        t.textContent = inp.files && inp.files[0] ? inp.files[0].name : 'แนบรูปโปรไฟล์ (ถ้ามี)';
+    });</script>"""
+    return dk_page("โปรไฟล์บัญชีนักเรียน", "ตั้งรหัสประจำตัวและเบอร์โทรสำหรับให้นักเรียนเข้าสู่ระบบ", body, back_url, extra=js, icon=_ic(_SVG_KEY, 22))
 
 @app.post("/api/admin/student_account/set")
 async def api_set_student_account(uid: str = Form(...), student_id: str = Form(...), phone: str = Form(...), photo: Optional[UploadFile] = File(None), user_session: Optional[str] = Cookie(None)):
@@ -3771,6 +3847,7 @@ async def app_dashboard(user: str, user_session: Optional[str] = Cookie(None)):
             </div>
             <span class="ah-cell-label">โปรไฟล์นักเรียน</span>
         </a>"""
+    discipline_cells = inspection_menu_cells(access) + discipline_cells
     discipline_section = ""
     if discipline_cells:
         scope_tag = f" ({access['level_scope']})" if access["role"] == "level_head" and access["level_scope"] else ""
@@ -3968,47 +4045,37 @@ async def admin_history_page(group_id: Optional[str] = None, user_session: Optio
     except Exception as e: print(f"❌ Admin Fetch History Error: {e}")
     finally: conn.close()
 
-    group_options = "<option value=''>-- เลือกวิชาที่ต้องการตรวจสอบ --</option>"
+    try:
+        sel_gid = int(group_id) if group_id else None
+    except ValueError:
+        sel_gid = None
+    group_cards = ""
     for g in all_groups:
-        is_sel = "selected" if group_id and int(group_id) == g[0] else ""
-        group_options += f"<option value='{g[0]}' {is_sel}>{g[1]}</option>"
+        on = sel_gid == g[0]
+        group_cards += f"""<a href="/admin/history?group_id={g[0]}" class="dk-row" style="text-decoration:none;color:inherit;margin:0;{'border-color:#1d4ed8;background:#eff6ff;' if on else ''}">
+            <div class="dk-ico-box">📚</div><div class="grow"><b>{_he(g[1])}</b><span>{'กำลังดูอยู่' if on else 'แตะเพื่อดูรอบที่บันทึก'}</span></div>
+            <span style="color:#1d4ed8;font-weight:800;">›</span></a>"""
 
     date_list_items = ""
+    q_group = urllib.parse.quote(selected_group_name)
     for d in distinct_dates:
-        target_detail_url = f"/admin/history/detail?group_name={selected_group_name}&date={d}"
         date_list_items += f"""
-        <a href="{target_detail_url}" style="text-decoration:none; display:flex; justify-content:space-between; align-items:center; padding:14px; border:1px solid #cbd5e1; margin-bottom:10px; border-radius:8px; background:white; color:#0f172a;">
-            <span style="font-weight:600; font-size:14.5px;">📅 รอบวันที่: {d}</span>
-            <span style="color:#1e3a8a; font-size:13px; font-weight:700;">เปิดตรวจสอบ/ลบประวัติซ้ำ ➔</span>
-        </a>
-        """
+        <a href="/admin/history/detail?group_name={q_group}&date={urllib.parse.quote(str(d))}" class="dk-row" style="text-decoration:none;color:inherit;">
+            <div class="dk-ico-box" style="background:#fff7ed;">📅</div>
+            <div class="grow"><b>รอบวันที่ {_he(str(d))}</b><span>เปิดตรวจสอบ / ลบประวัติซ้ำ</span></div>
+            <span style="color:#1d4ed8;font-weight:800;">➔</span></a>"""
 
-    return f"""
-    <html>{STYLE_HEADER}
-    <body>
-        <div class="navbar">
-            <h1><img src="{LOGO_URL}" class="nav-logo"> 📊 คลังใบเช็คชื่อส่วนกลาง</h1>
-            <a href="/admin/dashboard" class="btn btn-secondary">⬅ กลับหน้าหลัก</a>
-        </div>
-        <div class="main-container">
-            <div class="card">
-                <h2>🔍 คัดกรองเลือกวิชาเรียนคลาส</h2>
-                <label style="font-size:12.5px; color:#475569; font-weight:700;">วิชาเรียนในระบบทั้งหมด:</label>
-                <select onchange="location.href='/admin/history?group_id='+this.value;">
-                    {group_options}
-                </select>
-            </div>
-            {f'''
-            <div class="card">
-                <h2>📅 รายการวันที่บันทึกระบบของวิชา: {selected_group_name}</h2>
-                <div style="margin-top:10px;">
-                    {date_list_items if date_list_items else "<p style='color:gray; text-align:center; padding:10px;'>ยังไม่เคยมีประวัติบันทึกในวิชานี้</p>"}
-                </div>
-            </div>
-            ''' if group_id else ""}
-        </div>
-    </body></html>
-    """
+    stats = (dk_stat("วิชาในระบบ", len(all_groups), "📚", "blue")
+             + dk_stat("รอบที่บันทึก (วิชานี้)", len(distinct_dates) if selected_group_name else "-", "📅", "violet"))
+    stats = f'<div class="dk-stats" style="grid-template-columns:repeat(2,1fr);">{stats}</div>'
+    list_card = ""
+    if selected_group_name:
+        list_card = f"""<div class="dk-card"><div class="dk-card-title">📅 รอบที่บันทึก: {_he(selected_group_name)}<small>{len(distinct_dates)} รอบ</small></div>
+            {date_list_items if date_list_items else dk_empty("📭", "ยังไม่เคยมีประวัติบันทึกในวิชานี้")}</div>"""
+    body = (stats + f'<div class="dk-section">เลือกวิชาที่ต้องการตรวจสอบ</div>'
+            + (f'<div class="dk-grid c2" style="margin-bottom:14px;">{group_cards}</div>' if group_cards else f'<div class="dk-card">{dk_empty("📚", "ยังไม่มีวิชาในระบบ")}</div>')
+            + list_card)
+    return dk_page("คลังใบเช็คชื่อส่วนกลาง", "ตรวจสอบและบริหารประวัติการเช็คชื่อของทุกวิชา", body, "/admin/dashboard", icon="📊 ")
 
 @app.get("/admin/history/detail", response_class=HTMLResponse)
 async def admin_history_detail_page(group_name: str, date: str, user_session: Optional[str] = Cookie(None)):
@@ -4029,57 +4096,29 @@ async def admin_history_detail_page(group_name: str, date: str, user_session: Op
     except Exception as e: print(f"❌ Admin Detail Error: {e}")
     finally: conn.close()
 
+    pill = {"มา": "ok", "สาย": "warn", "ลา": "mute", "ขาด": "bad"}
     table_rows = ""
     for row in logs:
         s_name, s_no, s_class, s_status, _ = row
-        status_color = "#10b981" if s_status == "มา" else "#f59e0b" if s_status == "สาย" else "#3b82f6" if s_status == "ลา" else "#ef4444"
         table_rows += f"""
-        <tr>
-            <td><span class="badge">{s_class}</span></td>
-            <td><b>{s_no}</b></td>
-            <td><div style="text-align:left; font-weight:600; color:#0f172a;">{s_name}</div></td>
-            <td><span style="background-color:{status_color}; color:white; padding:4px 10px; border-radius:6px; font-size:12px; font-weight:700;">{s_status}</span></td>
-        </tr>
-        """
+        <tr><td><span class="dk-pill mute">{_he(str(s_class))}</span></td><td><b>{_he(str(s_no))}</b></td>
+            <td style="font-weight:700;">{_he(str(s_name))}</td>
+            <td><span class="dk-pill {pill.get(s_status, 'mute')}">{_he(str(s_status))}</span></td></tr>"""
 
-    return f"""
-    <html>{STYLE_HEADER}
-    <body>
-        <div class="navbar">
-            <h1><img src="{LOGO_URL}" class="nav-logo"> 📋 ตรวจสอบ & บริหารข้อมูลใบเช็คชื่อ</h1>
-            <a href="javascript:history.back();" class="btn btn-secondary">⬅ ย้อนกลับ</a>
-        </div>
-        <div class="main-container">
-            <div class="card" style="background: linear-gradient(135deg, #1e293b, #0f172a); color: white;">
-                <h2 style="color: #fff; border-bottom: 2px solid #d4af37;">📘 รายละเอียดประวัติรอบแผ่นตรวจ</h2>
-                <p style="margin: 6px 0; font-size: 14px;"><b>วิชาเรียน:</b> {group_name}</p>
-                <p style="margin: 6px 0; font-size: 14px;"><b>ประจำรอบวันที่:</b> {date}</p>
-                <p style="margin: 6px 0; font-size: 14px; color:#cbd5e1;"><b>ผู้กดบันทึก:</b> {checked_by_name}</p>
-                
-                <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:8px; margin-top:15px; text-align:center;">
-                    <div style="background:#10b981; padding:8px; border-radius:6px;">มา<br><b>{stats['มา']}</b></div>
-                    <div style="background:#f59e0b; padding:8px; border-radius:6px;">สาย<br><b>{stats['สาย']}</b></div>
-                    <div style="background:#3b82f6; padding:8px; border-radius:6px;">ลา<br><b>{stats['ลา']}</b></div>
-                    <div style="background:#ef4444; padding:8px; border-radius:6px;">ขาด<br><b>{stats['ขาด']}</b></div>
-                </div>
-                
-                <div style="margin-top:20px;">
-                    <a href="/api/admin/delete_attendance_log?group_name={group_name}&date={date}" class="btn btn-danger" style="width:100%; padding:12px; font-size:14px; border-radius:8px; border-bottom:3px solid #b91c1c;" onclick="return confirm('⚠️ ยืนยันการลบข้อมูลใบเช็คชื่อในรอบวันนี้?')">🛑 ลบข้อมูลประวัติบันทึกซ้ำของรอบคลาสนี้</a>
-                </div>
-            </div>
-
-            <div class="card">
-                <h2>👥 ตารางสถานะรายชื่อเด็กรายบุคคล</h2>
-                <div style="overflow-x:auto; border-radius:8px; border:1px solid #e2e8f0;">
-                    <table>
-                        <thead><tr><th>ชั้นเรียน</th><th>เลขที่</th><th>ชื่อ-นามสกุล</th><th>สถานะ</th></tr></thead>
-                        <tbody>{table_rows if table_rows else "<tr><td colspan='4'>ไม่พบข้อมูลนักเรียน</td></tr>"}</tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-    </body></html>
-    """
+    total = len(logs)
+    present_rate = round((stats['มา'] + stats['สาย']) * 100 / total) if total else 0
+    stat_html = (dk_stat("มา", stats['มา'], "✅", "green") + dk_stat("สาย", stats['สาย'], "⏰", "amber")
+                 + dk_stat("ลา", stats['ลา'], "📝", "blue") + dk_stat("ขาด", stats['ขาด'], "❌", "red"))
+    info = f"""<div class="dk-card"><div class="dk-card-title">📘 รายละเอียดรอบแผ่นตรวจ<small>เข้าเรียน {present_rate}%</small></div>
+        <div class="dk-track" style="margin-bottom:12px;"><i style="width:{present_rate}%"></i></div>
+        <div style="font-size:13.5px;line-height:1.9;"><b>วิชาเรียน:</b> {_he(group_name)}<br><b>ประจำรอบวันที่:</b> {_he(date)}<br><b>ผู้กดบันทึก:</b> {_he(str(checked_by_name))}</div>
+        <a href="/api/admin/delete_attendance_log?group_name={urllib.parse.quote(group_name)}&date={urllib.parse.quote(date)}" class="dk-btn danger block" style="margin-top:14px;padding:12px;"
+           onclick="return confirm('⚠️ ยืนยันการลบข้อมูลใบเช็คชื่อในรอบวันนี้?')">🛑 ลบข้อมูลประวัติบันทึกซ้ำของรอบคลาสนี้</a></div>"""
+    table = f"""<div class="dk-card"><div class="dk-card-title">👥 สถานะรายบุคคล<small>{total} คน</small></div>
+        <div class="dk-tablewrap"><table class="dk-table"><thead><tr><th>ชั้นเรียน</th><th>เลขที่</th><th>ชื่อ-นามสกุล</th><th>สถานะ</th></tr></thead>
+        <tbody>{table_rows if table_rows else "<tr><td colspan='4' style='text-align:center;color:#94a3b8;'>ไม่พบข้อมูลนักเรียน</td></tr>"}</tbody></table></div></div>"""
+    return dk_page("ตรวจสอบใบเช็คชื่อ", f"{_he(group_name)} · {_he(date)}", f'<div class="dk-stats">{stat_html}</div>{info}{table}',
+                   "javascript:history.back();", icon="📋 ")
 
 @app.get("/api/admin/delete_attendance_log")
 async def api_delete_attendance_log(group_name: str, date: str, user_session: Optional[str] = Cookie(None)):
@@ -5762,41 +5801,48 @@ async def admin_teachers_page(user_session: Optional[str] = Cookie(None)):
 
     role_options = "".join([f'<option value="{key}">{meta["label"]}</option>' for key, meta in TEACHER_ROLES.items()])
 
+    role_tone = {"admin": "bad", "affairs": "warn", "level_head": "ok", "teacher": "mute"}
+    counts = {}
     rows = ""
     for t in teachers:
         username, fullname, role, level_scope = t
         role = role or "teacher"
+        counts[role] = counts.get(role, 0) + 1
         role_meta = TEACHER_ROLES.get(role, TEACHER_ROLES["teacher"])
-        scope_txt = f" · ระดับ {level_scope}" if role == "level_head" and level_scope else ""
-        rows += f"""<tr>
-            <td><code>{username}</code></td>
-            <td>{fullname}</td>
-            <td><span style="font-size:12px; font-weight:700;">{role_meta['label']}{scope_txt}</span></td>
-            <td><div style='display:flex;gap:6px;'><a href='/admin/confirm_edit_teacher?target_username={username}' class='btn btn-warning' style='padding:5px 10px; font-size:11.5px;'>📝 แก้ไข</a><a href='/admin/confirm_delete_teacher?target_username={username}' class='btn btn-danger' style='padding:5px 10px; font-size:11.5px;'>🗑️ ลบ</a></div></td>
-        </tr>"""
+        scope_txt = f" · ระดับ {_he(level_scope)}" if role == "level_head" and level_scope else ""
+        q_user = urllib.parse.quote(username or "")
+        initial = _he((fullname or username or "?")[:1])
+        rows += f"""<div class="dk-stu tc-card" data-search="{_he(((fullname or '') + ' ' + (username or '')).lower(), quote=True)}" style="margin:0;">
+            <div class="dk-stu-head" style="margin-bottom:8px;">
+                <div class="dk-avatar" style="background:linear-gradient(135deg,#0f766e,#0d9488);">{initial}</div>
+                <div class="nm"><b>{_he(fullname or '-')}</b><span>@{_he(username or '')}</span></div>
+            </div>
+            <div style="margin-bottom:10px;"><span class="dk-pill {role_tone.get(role, 'mute')}">{_he(role_meta['label'])}{scope_txt}</span></div>
+            <div style="display:flex;gap:8px;">
+                <a href="/admin/confirm_edit_teacher?target_username={q_user}" class="dk-btn light sm" style="flex:1;">📝 แก้ไข</a>
+                <a href="/admin/confirm_delete_teacher?target_username={q_user}" class="dk-btn danger sm" style="flex:1;">🗑️ ลบ</a>
+            </div></div>"""
 
-    return f"""<html>{STYLE_HEADER}<body><div class="navbar"><h1>👤 จัดการครู &amp; สิทธิ์การใช้งาน</h1><a href="{back_url}" class="btn btn-secondary">⬅ ประตูหลัก</a></div><div class="main-container">
-        <div class="card">
-            <h2>➕ สร้างบัญชีครูใหม่</h2>
-            <form action="/api/admin/create_teacher" method="post">
-                <input type="text" name="u" placeholder="Username" required>
-                <input type="text" name="p" placeholder="Password" required>
-                <input type="text" name="f" placeholder="ชื่อครู" required>
-                <label style="font-size:12.5px; font-weight:700; color:#475569; display:block; margin:8px 0 4px;">บทบาท / สิทธิ์การใช้งาน</label>
-                <select name="role" id="createRoleSel" onchange="document.getElementById('createScopeWrap').style.display = this.value==='level_head' ? 'block' : 'none';">
-                    {role_options}
-                </select>
-                <div id="createScopeWrap" style="display:none;">
-                    <input type="text" name="level_scope" placeholder="ระดับชั้นที่รับผิดชอบ เช่น ม.2">
-                </div>
-                <button type="submit" class="btn-submit">➕ สร้างบัญชี</button>
-            </form>
-        </div>
-        <div class="card">
-            <h2>📋 รายชื่อครูในระบบ</h2>
-            <table><thead><tr><th>User</th><th>ชื่อ</th><th>บทบาท</th><th>การจัดการ</th></tr></thead><tbody>{rows}</tbody></table>
-        </div>
-    </div></body></html>"""
+    stats = (dk_stat("บัญชีทั้งหมด", len(teachers), "👥", "blue") + dk_stat("ครูผู้สอน", counts.get("teacher", 0), "👩‍🏫", "green")
+             + dk_stat("หัวหน้าระดับ", counts.get("level_head", 0), "🎓", "violet") + dk_stat("ฝ่ายกิจการ", counts.get("affairs", 0), "🛡️", "amber"))
+    create = f"""<div class="dk-card"><div class="dk-card-title">➕ สร้างบัญชีครูใหม่</div>
+        <form action="/api/admin/create_teacher" method="post" class="dk-grid c2" style="align-items:end;">
+            <div><label class="dk-label">Username</label><input class="dk-input" type="text" name="u" placeholder="Username" required></div>
+            <div><label class="dk-label">Password</label><input class="dk-input" type="text" name="p" placeholder="Password" required></div>
+            <div><label class="dk-label">ชื่อครู</label><input class="dk-input" type="text" name="f" placeholder="ชื่อครู" required></div>
+            <div><label class="dk-label">บทบาท / สิทธิ์การใช้งาน</label>
+                <select class="dk-select" name="role" id="createRoleSel" onchange="document.getElementById('createScopeWrap').style.display = this.value==='level_head' ? 'block' : 'none';">{role_options}</select></div>
+            <div id="createScopeWrap" style="display:none;"><label class="dk-label">ระดับชั้นที่รับผิดชอบ</label><input class="dk-input" type="text" name="level_scope" placeholder="เช่น ม.2"></div>
+            <div style="grid-column:1/-1;"><button type="submit" class="dk-btn block" style="padding:13px;">➕ สร้างบัญชี</button></div>
+        </form></div>"""
+    listing = f"""<div class="dk-card"><div class="dk-card-title">📋 รายชื่อครูในระบบ<small>{len(teachers)} บัญชี</small></div>
+        <input id="tcSearch" class="dk-input" placeholder="🔍 ค้นหาชื่อหรือ Username" style="margin-bottom:12px;">
+        <div class="dk-grid c3">{rows}</div></div>"""
+    js = """<script>(function(){var i=document.getElementById('tcSearch');if(!i)return;i.addEventListener('input',function(){var q=this.value.trim().toLowerCase();
+        document.querySelectorAll('.tc-card').forEach(function(c){c.style.display=(!q||c.getAttribute('data-search').indexOf(q)!==-1)?'':'none';});});})();</script>"""
+    perm_btn = '<a href="/admin/permissions" class="dk-btn hero">🔐 จัดการสิทธิ์</a>' if access["role"] == "admin" else ""
+    return dk_page("จัดการครู & สิทธิ์การใช้งาน", "สร้าง แก้ไข และกำหนดบทบาทของบัญชีครู", f'<div class="dk-stats">{stats}</div>{create}{listing}',
+                   back_url, perm_btn, js, icon="👤 ")
 
 @app.post("/api/admin/create_teacher")
 async def api_create_teacher(u: str = Form(...), p: str = Form(...), f: str = Form(...), role: str = Form("teacher"), level_scope: str = Form(""), user_session: Optional[str] = Cookie(None)):
@@ -5865,41 +5911,21 @@ async def admin_edit_teacher_page(target_username: str = Form(...), admin_passwo
 
     role_options = "".join([f'<option value="{key}" {"selected" if key==current_role else ""}>{meta["label"]}</option>' for key, meta in TEACHER_ROLES.items()])
     
-    return f"""
-    <html>{STYLE_HEADER}
-    <body>
-        <div class="navbar">
-            <h1><img src="{LOGO_URL}" class="nav-logo"> ✏️ แก้ไขบัญชีครู</h1>
-            <a href="/admin/teachers" class="btn btn-secondary">⬅ กลับ</a>
-        </div>
-        <div class="main-container">
-            <div class="card">
-                <h2>✏️ แก้ไขข้อมูล: {t[0]}</h2>
-                <form action="/api/admin/update_teacher" method="post">
-                    <input type="hidden" name="old_username" value="{t[0]}">
-                    <label style="font-size:13px; font-weight:700; color:#475569; display:block; margin-bottom:4px;">Username (ชื่อผู้ใช้)</label>
-                    <input type="text" name="new_username" value="{t[0]}" required>
-                    <label style="font-size:13px; font-weight:700; color:#475569; display:block; margin-bottom:4px;">Password (รหัสผ่าน)</label>
-                    <input type="text" name="new_password" value="{t[1]}" required>
-                    <label style="font-size:13px; font-weight:700; color:#475569; display:block; margin-bottom:4px;">ชื่อ-นามสกุลครู</label>
-                    <input type="text" name="new_fullname" value="{t[2]}" required>
-                    <label style="font-size:13px; font-weight:700; color:#475569; display:block; margin-bottom:4px;">บทบาท / สิทธิ์การใช้งาน</label>
-                    <select name="new_role" id="editRoleSel" onchange="document.getElementById('editScopeWrap').style.display = this.value==='level_head' ? 'block' : 'none';">
-                        {role_options}
-                    </select>
-                    <div id="editScopeWrap" style="display:{'block' if current_role=='level_head' else 'none'};">
-                        <label style="font-size:13px; font-weight:700; color:#475569; display:block; margin-bottom:4px;">ระดับชั้นที่รับผิดชอบ (หัวหน้าระดับ)</label>
-                        <input type="text" name="new_level_scope" value="{current_scope}" placeholder="เช่น ม.2">
-                    </div>
-                    <div style="background:#fef2f2; border:1px solid #fecaca; border-radius:8px; padding:12px; margin-bottom:14px; font-size:12px; color:#b91c1c;">
-                        ⚠️ หากเปลี่ยน Username ครูจะต้องใช้ชื่อใหม่ในการ Login และระบบจะอัปเดตข้อมูลในคลาสเรียนที่เกี่ยวข้องให้อัตโนมัติ
-                    </div>
-                    <button type="submit" class="btn-submit">💾 บันทึกการเปลี่ยนแปลง</button>
-                </form>
-            </div>
-        </div>
-    </body></html>
-    """
+    form = f"""<div class="dk-card"><div class="dk-card-title">✏️ แก้ไขข้อมูล: {_he(t[0])}</div>
+        <form action="/api/admin/update_teacher" method="post" style="display:grid;gap:12px;">
+            <input type="hidden" name="old_username" value="{_he(t[0], quote=True)}">
+            <div><label class="dk-label">Username (ชื่อผู้ใช้)</label><input class="dk-input" type="text" name="new_username" value="{_he(t[0], quote=True)}" required></div>
+            <div><label class="dk-label">Password (รหัสผ่าน)</label><input class="dk-input" type="text" name="new_password" value="{_he(t[1] or '', quote=True)}" required></div>
+            <div><label class="dk-label">ชื่อ-นามสกุลครู</label><input class="dk-input" type="text" name="new_fullname" value="{_he(t[2] or '', quote=True)}" required></div>
+            <div><label class="dk-label">บทบาท / สิทธิ์การใช้งาน</label>
+                <select class="dk-select" name="new_role" id="editRoleSel" onchange="document.getElementById('editScopeWrap').style.display = this.value==='level_head' ? 'block' : 'none';">{role_options}</select></div>
+            <div id="editScopeWrap" style="display:{'block' if current_role=='level_head' else 'none'};">
+                <label class="dk-label">ระดับชั้นที่รับผิดชอบ (หัวหน้าระดับ)</label><input class="dk-input" type="text" name="new_level_scope" value="{_he(current_scope, quote=True)}" placeholder="เช่น ม.2"></div>
+            <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:12px;padding:12px;font-size:12.5px;color:#b91c1c;line-height:1.6;">
+                ⚠️ หากเปลี่ยน Username ครูจะต้องใช้ชื่อใหม่ในการ Login และระบบจะอัปเดตข้อมูลในคลาสเรียนที่เกี่ยวข้องให้อัตโนมัติ</div>
+            <button type="submit" class="dk-btn block" style="padding:13px;">💾 บันทึกการเปลี่ยนแปลง</button>
+        </form></div>"""
+    return dk_page("แก้ไขบัญชีครู", f"@{_he(t[0])}", form, "/admin/teachers", icon="✏️ ")
 
 @app.post("/api/admin/update_teacher")
 async def api_update_teacher(old_username: str = Form(...), new_username: str = Form(...), new_password: str = Form(...), new_fullname: str = Form(...), new_role: str = Form("teacher"), new_level_scope: str = Form(""), user_session: Optional[str] = Cookie(None)):
@@ -6251,8 +6277,958 @@ def init_db():
     )''')
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_payments_student ON payments (student_uid)")
 
+    # 📋 ระบบตรวจระเบียบ: ตัวชี้วัด (แก้ไขได้) + ผลการตรวจรายวันรายคน
+    cursor.execute('''CREATE TABLE IF NOT EXISTS inspection_criteria (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        icon TEXT DEFAULT '✅',
+        is_active INTEGER DEFAULT 1,
+        sort_order INTEGER DEFAULT 0,
+        created_by TEXT,
+        created_at TEXT
+    )''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS inspection_records (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        inspect_date TEXT NOT NULL,
+        classroom TEXT,
+        student_uid TEXT NOT NULL,
+        student_name TEXT,
+        student_no TEXT,
+        criterion_id INTEGER NOT NULL,
+        criterion_name TEXT,
+        result TEXT NOT NULL,
+        inspector TEXT,
+        inspector_label TEXT,
+        created_at TEXT,
+        UNIQUE (inspect_date, student_uid, criterion_id)
+    )''')
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_insp_rec_date ON inspection_records (inspect_date, classroom)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_insp_rec_student ON inspection_records (student_uid)")
+    # ตัวชี้วัดเริ่มต้น (ใส่เฉพาะตอนตารางยังว่าง เพื่อไม่ฟื้นของที่แอดมินลบไปแล้ว)
+    cursor.execute("SELECT COUNT(*) FROM inspection_criteria")
+    if cursor.fetchone()[0] == 0:
+        _seed_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        for _i, (_n, _ic) in enumerate([("ทรงผม", "💈"), ("บัตรนักเรียน", "🪪"), ("การแต่งกาย", "👔")], start=1):
+            cursor.execute(
+                "INSERT INTO inspection_criteria (name, icon, is_active, sort_order, created_by, created_at) VALUES (?,?,1,?,?,?)",
+                (_n, _ic, _i, "system", _seed_now))
+
     conn.commit()
     conn.close()
+
+# ==========================================
+# 🎨 DASHBOARD UI KIT — ชุดสไตล์แดชบอร์ดกลาง (คลาสขึ้นต้น dk-) ใช้ร่วมกันทุกหน้าที่ปรับใหม่
+# ==========================================
+from html import escape as _he
+
+DASH_KIT = """
+<style>
+    body.dk-body { background:#f0f4f8; font-family:'Sarabun','Inter',sans-serif; margin:0; color:#0f172a;
+        padding-bottom:calc(96px + env(safe-area-inset-bottom,0px)); }
+    .dk-body * { box-sizing:border-box; }
+
+    /* ── Hero ── */
+    .dk-hero { background:linear-gradient(135deg,#0f172a 0%,#1e3a8a 55%,#1d4ed8 100%); color:#fff;
+        padding:calc(env(safe-area-inset-top,0px) + 16px) 16px 58px; position:relative; overflow:hidden; }
+    .dk-hero::before { content:""; position:absolute; inset:0; pointer-events:none;
+        background:radial-gradient(circle at 92% 15%,rgba(96,165,250,.28),transparent 50%),
+                   radial-gradient(circle at 8% 90%,rgba(212,175,55,.16),transparent 45%); }
+    .dk-hero-in { position:relative; max-width:1100px; margin:0 auto; }
+    .dk-hero-top { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:14px; }
+    .dk-back { width:38px; height:38px; border-radius:11px; background:rgba(255,255,255,.12);
+        border:1px solid rgba(255,255,255,.2); color:#fff; display:flex; align-items:center; justify-content:center;
+        text-decoration:none; font-size:18px; font-weight:700; }
+    .dk-hero-actions { display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
+    .dk-hero h1 { margin:0; font-size:22px; font-weight:800; display:flex; align-items:center; gap:10px; line-height:1.25; }
+    .dk-hero p { margin:5px 0 0; font-size:13px; color:rgba(255,255,255,.72); }
+    .dk-wrap { max-width:1100px; margin:-36px auto 0; padding:0 14px; position:relative; }
+
+    /* ── Stat tiles ── */
+    .dk-stats { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; margin-bottom:16px; }
+    @media (min-width:720px) { .dk-stats { grid-template-columns:repeat(4,1fr); } }
+    .dk-stat { background:#fff; border-radius:16px; padding:13px; border:1px solid #e6eaf1;
+        box-shadow:0 8px 20px -10px rgba(15,23,42,.22); display:flex; align-items:center; gap:11px; min-width:0; }
+    .dk-stat-ico { width:42px; height:42px; border-radius:12px; display:flex; align-items:center; justify-content:center; font-size:20px; flex:none; }
+    .dk-stat b { display:block; font-size:22px; font-weight:800; line-height:1.1; }
+    .dk-stat span { font-size:11.5px; color:#64748b; font-weight:600; }
+    .dk-stat b span { font-size:inherit; color:inherit; font-weight:inherit; }
+    .t-blue { background:#dbeafe; color:#1d4ed8; } .t-green { background:#dcfce7; color:#15803d; }
+    .t-red { background:#fee2e2; color:#b91c1c; } .t-amber { background:#fef3c7; color:#b45309; }
+    .t-violet { background:#ede9fe; color:#6d28d9; } .t-slate { background:#e2e8f0; color:#334155; }
+
+    /* ── Cards / layout ── */
+    .dk-card { background:#fff; border-radius:18px; padding:16px; border:1px solid #e6eaf1;
+        box-shadow:0 1px 3px rgba(15,23,42,.05); margin-bottom:14px; }
+    .dk-card-title { display:flex; align-items:center; justify-content:space-between; gap:8px;
+        font-size:14.5px; font-weight:800; margin:0 0 12px; }
+    .dk-card-title small { font-size:11.5px; font-weight:600; color:#64748b; }
+    .dk-section { font-size:12px; font-weight:800; color:#64748b; letter-spacing:.4px; margin:18px 4px 10px; }
+    .dk-grid { display:grid; gap:12px; grid-template-columns:1fr; }
+    @media (min-width:720px) { .dk-grid.c2 { grid-template-columns:repeat(2,1fr); } .dk-grid.c3 { grid-template-columns:repeat(3,1fr); } }
+    .dk-empty { text-align:center; color:#94a3b8; padding:34px 10px; font-size:14px; }
+    .dk-empty .em { font-size:38px; display:block; margin-bottom:6px; }
+    .dk-note { background:#eff6ff; border:1px solid #bfdbfe; color:#1e40af; border-radius:14px; padding:12px 14px; font-size:13px; line-height:1.7; margin-bottom:14px; }
+
+    /* ── Buttons / inputs ── */
+    .dk-btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; padding:10px 16px; border:none;
+        border-radius:11px; font-family:inherit; font-size:13.5px; font-weight:700; cursor:pointer; text-decoration:none;
+        background:linear-gradient(135deg,#1d4ed8,#1e3a8a); color:#fff; box-shadow:0 6px 14px -6px rgba(30,58,138,.5); }
+    .dk-btn:active { transform:translateY(1px); }
+    .dk-btn.hero { background:rgba(255,255,255,.14); border:1px solid rgba(255,255,255,.25); box-shadow:none; padding:8px 12px; font-size:12.5px; }
+    .dk-btn.light { background:#f1f5f9; color:#334155; box-shadow:none; }
+    .dk-btn.green { background:linear-gradient(135deg,#16a34a,#15803d); box-shadow:0 6px 14px -6px rgba(21,128,61,.5); }
+    .dk-btn.danger { background:#fee2e2; color:#b91c1c; box-shadow:none; }
+    .dk-btn.sm { padding:6px 10px; font-size:12px; border-radius:9px; }
+    .dk-btn.block { width:100%; }
+    .dk-input, .dk-select { width:100%; padding:10px 12px; border:1.5px solid #dbe2ec; border-radius:11px; font-family:inherit;
+        font-size:14px; background:#fff; color:#0f172a; }
+    .dk-body input.dk-input, .dk-body select.dk-select { margin-bottom:0; }
+    .dk-body table.dk-table { border:none; margin:0; }
+    .dk-body .dk-hero h1 { color:#fff; }
+    .dk-input:focus, .dk-select:focus { outline:none; border-color:#1d4ed8; box-shadow:0 0 0 3px rgba(29,78,216,.12); }
+    .dk-label { display:block; font-size:12px; font-weight:700; color:#64748b; margin:0 0 5px; }
+    .dk-filter { display:grid; grid-template-columns:1fr; gap:10px; align-items:end; }
+    @media (min-width:720px) { .dk-filter { grid-template-columns:repeat(4,1fr) auto; } }
+
+    /* ── Pills / chips ── */
+    .dk-pill { display:inline-flex; align-items:center; gap:4px; padding:3px 10px; border-radius:999px; font-size:11.5px; font-weight:800; }
+    .dk-pill.ok { background:#dcfce7; color:#15803d; } .dk-pill.bad { background:#fee2e2; color:#b91c1c; }
+    .dk-pill.mute { background:#f1f5f9; color:#64748b; } .dk-pill.warn { background:#fef3c7; color:#b45309; }
+    .dk-chips { display:flex; gap:8px; overflow-x:auto; padding-bottom:4px; }
+    .dk-chip { flex:none; padding:7px 14px; border-radius:999px; background:#fff; border:1.5px solid #dbe2ec; color:#475569;
+        font-size:12.5px; font-weight:700; cursor:pointer; font-family:inherit; }
+    .dk-chip.on { background:#1d4ed8; border-color:#1d4ed8; color:#fff; }
+
+    /* ── Progress ── */
+    .dk-track { height:8px; background:#e8edf5; border-radius:999px; overflow:hidden; }
+    .dk-track > i { display:block; height:100%; border-radius:999px; background:linear-gradient(90deg,#22c55e,#16a34a); }
+    .dk-track.blue > i { background:linear-gradient(90deg,#60a5fa,#1d4ed8); }
+    .dk-rate-row { display:grid; grid-template-columns:130px 1fr 54px; gap:10px; align-items:center; margin:11px 0; font-size:13px; font-weight:700; }
+    .dk-rate-row em { font-style:normal; text-align:right; color:#475569; }
+
+    /* ── Room cards ── */
+    .dk-room { display:block; text-decoration:none; color:inherit; background:#fff; border:1px solid #e6eaf1; border-radius:16px; padding:14px;
+        box-shadow:0 1px 3px rgba(15,23,42,.05); }
+    .dk-room:active { transform:scale(.985); }
+    .dk-room-top { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
+    .dk-room-top b { font-size:17px; font-weight:800; }
+    .dk-room small { display:flex; justify-content:space-between; margin-top:7px; font-size:11.5px; color:#64748b; font-weight:600; }
+
+    /* ── Student inspection rows ── */
+    .dk-stu { background:#fff; border:1.5px solid #e6eaf1; border-radius:16px; padding:12px; margin-bottom:10px; }
+    .dk-stu.has-fail { border-color:#fca5a5; background:#fffafa; }
+    .dk-stu.is-done { border-color:#86efac; }
+    .dk-stu-head { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+    .dk-avatar { width:38px; height:38px; border-radius:50%; background:linear-gradient(135deg,#1d4ed8,#1e3a8a); color:#fff;
+        display:flex; align-items:center; justify-content:center; font-weight:800; flex:none; }
+    .dk-stu-head .nm { flex:1; min-width:0; }
+    .dk-stu-head .nm b { display:block; font-size:14.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .dk-stu-head .nm span { font-size:11.5px; color:#64748b; font-weight:600; }
+    .dk-crits { display:grid; grid-template-columns:1fr; gap:8px; }
+    @media (min-width:720px) { .dk-crits { grid-template-columns:repeat(3,1fr); } }
+    .dk-crit { display:flex; align-items:center; justify-content:space-between; gap:8px; background:#f8fafc; border-radius:12px; padding:7px 8px 7px 11px; }
+    .dk-crit > span { font-size:13px; font-weight:700; min-width:0; }
+    .dk-seg { display:flex; flex:none; background:#e8edf5; border-radius:10px; padding:3px; gap:3px; }
+    .dk-seg button { border:none; background:transparent; padding:7px 12px; border-radius:8px; font-family:inherit;
+        font-size:12.5px; font-weight:800; color:#64748b; cursor:pointer; min-width:58px; }
+    .dk-seg button.on.p { background:#16a34a; color:#fff; box-shadow:0 3px 8px -3px rgba(22,163,74,.7); }
+    .dk-seg button.on.f { background:#dc2626; color:#fff; box-shadow:0 3px 8px -3px rgba(220,38,38,.7); }
+
+    /* ── Sticky save bar ── */
+    .dk-savebar { position:fixed; left:0; right:0; bottom:0; z-index:60; background:rgba(255,255,255,.96); backdrop-filter:blur(10px);
+        border-top:1px solid #e6eaf1; padding:10px 14px calc(10px + env(safe-area-inset-bottom,0px)); display:flex; align-items:center; gap:10px; justify-content:center; }
+    .dk-savebar .msg { font-size:12.5px; font-weight:700; color:#64748b; flex:1; max-width:520px; }
+    .dk-savebar .msg.dirty { color:#b45309; }
+    .dk-toast { position:fixed; left:50%; bottom:90px; transform:translateX(-50%) translateY(20px); background:#0f172a; color:#fff;
+        padding:11px 18px; border-radius:12px; font-size:13.5px; font-weight:700; opacity:0; pointer-events:none; transition:.25s; z-index:80; }
+    .dk-toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+
+    /* ── Tables / list rows ── */
+    .dk-tablewrap { overflow-x:auto; border-radius:14px; border:1px solid #e6eaf1; background:#fff; }
+    table.dk-table { width:100%; border-collapse:collapse; margin:0; box-shadow:none; border-radius:0; }
+    table.dk-table th { background:#f8fafc; color:#475569; font-size:12px; font-weight:800; padding:11px 12px; text-align:left; border-bottom:1px solid #e6eaf1; white-space:nowrap; }
+    table.dk-table td { padding:11px 12px; font-size:13.5px; border-bottom:1px solid #eef2f7; text-align:left; background:#fff; }
+    table.dk-table tr:last-child td { border-bottom:none; }
+    .dk-row { display:flex; flex-wrap:wrap; align-items:center; gap:12px; background:#fff; border:1px solid #e6eaf1; border-radius:14px; padding:12px; margin-bottom:9px; }
+    .dk-row .grow { flex:1; min-width:0; }
+    .dk-row .grow b { display:block; font-size:14.5px; }
+    .dk-row .grow span { font-size:12px; color:#64748b; font-weight:600; }
+    .dk-ico-box { width:42px; height:42px; border-radius:12px; background:#eef2ff; display:flex; align-items:center; justify-content:center; font-size:21px; flex:none; }
+    .dk-trend { display:flex; align-items:flex-end; gap:5px; height:90px; }
+    .dk-trend div { flex:1; min-width:6px; background:linear-gradient(180deg,#60a5fa,#1d4ed8); border-radius:5px 5px 2px 2px; position:relative; }
+    .dk-trend-lbl { display:flex; justify-content:space-between; font-size:10.5px; color:#94a3b8; margin-top:6px; font-weight:600; }
+    @media (max-width:520px) { table.dk-table th, table.dk-table td { padding:9px 7px; font-size:12.5px; } }
+    @media (max-width:520px) { .dk-rate-row { grid-template-columns:96px 1fr 46px; } .dk-hero h1 { font-size:19px; } }
+</style>
+"""
+
+
+def dk_page(title: str, subtitle: str, body: str, back_url: str, actions: str = "", extra: str = "", icon: str = "") -> str:
+    """ห่อเนื้อหาด้วยโครงหน้าแดชบอร์ดมาตรฐาน (hero + wrap) — body/actions/extra ต้อง escape มาแล้ว"""
+    sub = f"<p>{subtitle}</p>" if subtitle else ""
+    return f"""<html>{STYLE_HEADER}{DASH_KIT}<body class="dk-body">
+{PAGE_LOADER}
+<div class="dk-hero"><div class="dk-hero-in">
+    <div class="dk-hero-top">
+        <a href="{back_url}" class="dk-back" aria-label="กลับ">‹</a>
+        <div class="dk-hero-actions">{actions}</div>
+    </div>
+    <h1>{icon}{title}</h1>{sub}
+</div></div>
+<div class="dk-wrap">{body}</div>
+{extra}
+</body></html>"""
+
+
+def dk_stat(label: str, value, icon: str, tone: str = "blue") -> str:
+    return (f'<div class="dk-stat"><div class="dk-stat-ico t-{tone}">{icon}</div>'
+            f'<div><b>{value}</b><span>{label}</span></div></div>')
+
+
+def dk_empty(icon: str, text: str) -> str:
+    return f'<div class="dk-empty"><span class="em">{icon}</span>{text}</div>'
+
+
+# ==========================================
+# 📋 ระบบตรวจระเบียบนักเรียน (ครู / ฝ่ายกิจการ ติ๊กผ่าน-ไม่ผ่านตามตัวชี้วัด)
+#   /inspection            ตรวจรายห้อง/รายวัน
+#   /inspection/report     รายงานสรุป (+ส่งออก CSV)
+#   /inspection/criteria   เพิ่ม/ลบ/เปิด-ปิด ตัวชี้วัด
+#   /student/inspection    นักเรียนดูผลของตัวเอง
+# ==========================================
+import json as _json
+import csv as _csv
+import io as _io
+
+_SVG_CLIP = '<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>'
+_SVG_BARS = '<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>'
+_SVG_SLIDERS = '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>'
+
+# ── ไอคอนเส้น (ทำเอง แทนอิโมจิ) ใช้กับสถิติ/หัวข้อ/ปุ่มของระบบตรวจระเบียบทั้งหมด ──
+def _ic(svg_inner: str, size: int = 20, stroke: float = 2) -> str:
+    """คืน <svg> เส้น ขนาด/สีปรับได้ — สีจะรับช่วงจาก currentColor ของกล่องที่ห่ออยู่เสมอ"""
+    return (f'<svg viewBox="0 0 24 24" width="{size}" height="{size}" fill="none" '
+            f'stroke="currentColor" stroke-width="{stroke}" stroke-linecap="round" stroke-linejoin="round">{svg_inner}</svg>')
+
+_SVG_SCHOOL    = '<path d="M12 3 21 9v11H3V9Z"/><path d="M9 20v-6h6v6"/><path d="M3 9l9-6 9 6"/>'
+_SVG_BACKPACK  = '<path d="M8 3h8a2 2 0 0 1 2 2v2H6V5a2 2 0 0 1 2-2Z"/><path d="M6 7h12v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V7Z"/><path d="M9 12h6"/><path d="M10 3v2"/><path d="M14 3v2"/>'
+_SVG_USERS     = '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>'
+_SVG_CHECK_C   = '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>'
+_SVG_ALERT     = '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>'
+_SVG_CALENDAR  = '<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>'
+_SVG_SAVE      = '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>'
+_SVG_SEARCH    = '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>'
+_SVG_CLOCK     = '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>'
+_SVG_SETTINGS  = '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/>'
+_SVG_CLIPBOARD = '<path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/><line x1="8" y1="11" x2="16" y2="11"/><line x1="8" y1="15" x2="13" y2="15"/>'
+_SVG_DOWNLOAD  = '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>'
+_SVG_MEDAL     = '<circle cx="12" cy="8" r="6"/><path d="M8.21 13.89 7 23l5-3 5 3-1.21-9.12"/>'
+_SVG_SMILE     = '<circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/>'
+_SVG_INBOX     = '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11Z"/>'
+_SVG_PAUSE     = '<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>'
+_SVG_PLUS      = '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>'
+_SVG_BULB      = '<path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2Z"/>'
+_SVG_INFO      = '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>'
+_SVG_KEY       = '<circle cx="8" cy="15" r="4"/><path d="M10.5 12.5 20 3"/><path d="M17 6l3 3"/><path d="M14 9l2.5 2.5"/>'
+_SVG_FOLDER    = '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2Z"/>'
+_SVG_EDIT      = '<path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5Z"/>'
+_SVG_TRASH     = '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>'
+_SVG_EYE       = '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"/><circle cx="12" cy="12" r="3"/>'
+_SVG_USER_PLUS = '<path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/>'
+_SVG_IMAGE     = '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>'
+
+
+def inspection_menu_cells(access: dict) -> str:
+    """เมนูระบบตรวจระเบียบสำหรับหน้าแดชบอร์ดครู/แอดมิน — แสดงเฉพาะที่บทบาทนี้มีสิทธิ์"""
+    def cell(href, svg, bg, color, label):
+        return f'''<a href="{href}" class="ah-cell">
+            <div class="ah-cell-icon-wrap" style="background:{bg};color:{color};">
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{svg}</svg>
+            </div>
+            <span class="ah-cell-label">{label}</span>
+        </a>'''
+    cells = ""
+    if can_manage_inspection(access):
+        cells += cell("/inspection", _SVG_CLIP, "#ecfdf5", "#047857", "ตรวจระเบียบ")
+    if can_view_inspection_report(access):
+        cells += cell("/inspection/report", _SVG_BARS, "#eff6ff", "#1d4ed8", "รายงานระเบียบ")
+    if can_manage_inspection_criteria(access):
+        cells += cell("/inspection/criteria", _SVG_SLIDERS, "#fff7ed", "#c2410c", "ตัวชี้วัดระเบียบ")
+    return cells
+
+
+def _insp_back_url(access: dict) -> str:
+    if access.get("role") == "admin":
+        return "/admin/dashboard"
+    return f"/app/dashboard?user={urllib.parse.quote(access.get('username') or '')}"
+
+
+def _insp_today() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def _insp_valid_date(s: Optional[str]) -> str:
+    try:
+        return datetime.strptime((s or "").strip(), "%Y-%m-%d").strftime("%Y-%m-%d")
+    except ValueError:
+        return _insp_today()
+
+
+def _insp_thai_date(s: str) -> str:
+    try:
+        d = datetime.strptime(s, "%Y-%m-%d")
+        return f"{d.day:02d}/{d.month:02d}/{d.year + 543}"
+    except ValueError:
+        return s
+
+
+def _insp_level_key(lv: str):
+    digits = ''.join(ch for ch in lv if ch.isdigit())
+    return (0, int(digits), lv) if digits else (1, 0, lv)
+
+
+def get_inspection_criteria(active_only: bool = True) -> list:
+    conn = sqlite3.connect('attendance_pro.db')
+    cur = conn.cursor()
+    q = "SELECT id, name, icon, is_active, sort_order FROM inspection_criteria"
+    if active_only:
+        q += " WHERE is_active = 1"
+    q += " ORDER BY sort_order, id"
+    cur.execute(q)
+    rows = [{"id": r[0], "name": r[1], "icon": r[2] or "✅", "is_active": r[3], "sort_order": r[4]} for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def _insp_visible_students(access: dict) -> list:
+    return [s for s in get_sorted_master_students() if in_inspection_scope(access, s['class'])]
+
+
+def _insp_gate(user_session: Optional[str], checker, json_mode: bool = False):
+    """คืน (access, error_response|None)"""
+    access = get_access(user_session)
+    ok = access["authenticated"] and access["role"] != "student" and checker(access)
+    if not ok:
+        if json_mode:
+            return access, JSONResponse({"ok": False, "error": "ไม่มีสิทธิ์ใช้งานฟังก์ชันนี้"}, status_code=403)
+        return access, RedirectResponse(url="/login", status_code=303)
+    if access["role"] == "level_head" and not access["level_scope"]:
+        msg = "บัญชีของคุณยังไม่ถูกกำหนดระดับชั้นที่รับผิดชอบ กรุณาติดต่อผู้ดูแลระบบ"
+        if json_mode:
+            return access, JSONResponse({"ok": False, "error": msg}, status_code=403)
+        return access, alert_redirect(msg, type="error", url=_insp_back_url(access))
+    return access, None
+
+
+# ──────────────── หน้าตรวจระเบียบ ────────────────
+INSPECTION_JS = """
+<script>
+(function () {
+    var ROOM = __ROOM__, DATE = __DATE__;
+    var dirty = {};
+    var list = document.getElementById('stuList');
+    var filterMode = 'all', q = '';
+    var toastEl = document.getElementById('dkToast');
+
+    function toast(t) { toastEl.textContent = t; toastEl.classList.add('show'); setTimeout(function () { toastEl.classList.remove('show'); }, 2200); }
+    function keyOf(uid, cid) { return JSON.stringify([uid, cid]); }
+
+    function setVal(seg, v) {
+        seg.setAttribute('data-v', v);
+        var bs = seg.querySelectorAll('button');
+        for (var i = 0; i < bs.length; i++) bs[i].classList.toggle('on', bs[i].getAttribute('data-v') === v);
+    }
+    function markDirty(row, seg) {
+        var uid = row.getAttribute('data-uid'), cid = seg.getAttribute('data-cid');
+        var v = seg.getAttribute('data-v') || '', orig = seg.getAttribute('data-orig') || '';
+        var k = keyOf(uid, cid);
+        if (v === orig) delete dirty[k]; else dirty[k] = [uid, parseInt(cid, 10), v];
+    }
+    function refresh() {
+        var rows = list.querySelectorAll('.dk-stu');
+        var done = 0, fail = 0, shown = 0;
+        for (var i = 0; i < rows.length; i++) {
+            var segs = rows[i].querySelectorAll('.dk-seg'), marked = 0, f = 0;
+            for (var j = 0; j < segs.length; j++) {
+                var v = segs[j].getAttribute('data-v') || '';
+                if (v) marked++;
+                if (v === 'fail') f++;
+            }
+            var complete = marked === segs.length;
+            rows[i].classList.toggle('has-fail', f > 0);
+            rows[i].classList.toggle('is-done', complete && f === 0);
+            if (complete) done++;
+            if (f > 0) fail++;
+            var name = (rows[i].getAttribute('data-name') || '').toLowerCase();
+            var show = (!q || name.indexOf(q) !== -1 || (rows[i].getAttribute('data-no') || '') === q);
+            if (filterMode === 'todo') show = show && !complete;
+            if (filterMode === 'fail') show = show && f > 0;
+            rows[i].style.display = show ? '' : 'none';
+            if (show) shown++;
+        }
+        document.getElementById('stDone').textContent = done;
+        document.getElementById('stTodo').textContent = rows.length - done;
+        document.getElementById('stFail').textContent = fail;
+        document.getElementById('prog').style.width = (rows.length ? Math.round(done * 100 / rows.length) : 0) + '%';
+        document.getElementById('emptyHint').style.display = shown ? 'none' : 'block';
+        var n = Object.keys(dirty).length, msg = document.getElementById('saveMsg');
+        msg.textContent = n ? ('มีการเปลี่ยนแปลงที่ยังไม่บันทึก ' + n + ' รายการ') : 'ผลตรวจทั้งหมดถูกบันทึกแล้ว';
+        msg.classList.toggle('dirty', n > 0);
+        document.getElementById('saveBtn').disabled = n === 0;
+        document.getElementById('saveBtn').style.opacity = n ? '1' : '.5';
+    }
+
+    list.addEventListener('click', function (e) {
+        var btn = e.target.closest('.dk-seg button');
+        if (btn) {
+            var seg = btn.parentNode, row = seg.closest('.dk-stu');
+            var nv = btn.getAttribute('data-v');
+            if (seg.getAttribute('data-v') === nv) nv = '';
+            setVal(seg, nv); markDirty(row, seg); refresh(); return;
+        }
+        var ap = e.target.closest('[data-allpass]');
+        if (ap) {
+            var row2 = ap.closest('.dk-stu'), segs = row2.querySelectorAll('.dk-seg');
+            for (var i = 0; i < segs.length; i++) if (!segs[i].getAttribute('data-v')) { setVal(segs[i], 'pass'); markDirty(row2, segs[i]); }
+            refresh();
+        }
+    });
+
+    document.getElementById('passAll').addEventListener('click', function () {
+        var rows = list.querySelectorAll('.dk-stu');
+        for (var i = 0; i < rows.length; i++) {
+            if (rows[i].style.display === 'none') continue;
+            var segs = rows[i].querySelectorAll('.dk-seg');
+            for (var j = 0; j < segs.length; j++) if (!segs[j].getAttribute('data-v')) { setVal(segs[j], 'pass'); markDirty(rows[i], segs[j]); }
+        }
+        refresh(); toast('ติ๊ก “ผ่าน” ให้ช่องที่ยังว่างแล้ว — อย่าลืมกดบันทึก');
+    });
+
+    var chips = document.querySelectorAll('.dk-chip');
+    for (var c = 0; c < chips.length; c++) chips[c].addEventListener('click', function () {
+        for (var k = 0; k < chips.length; k++) chips[k].classList.remove('on');
+        this.classList.add('on'); filterMode = this.getAttribute('data-f'); refresh();
+    });
+    document.getElementById('search').addEventListener('input', function () { q = this.value.trim().toLowerCase(); refresh(); });
+
+    document.getElementById('saveBtn').addEventListener('click', function () {
+        var changes = Object.keys(dirty).map(function (k) { return dirty[k]; });
+        if (!changes.length) return;
+        var btn = this; var lbl = document.getElementById('saveBtnLabel');
+        btn.disabled = true; lbl.textContent = 'กำลังบันทึก...';
+        fetch('/api/inspection/save', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ room: ROOM, date: DATE, changes: changes }) })
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+            lbl.textContent = 'บันทึกผลตรวจ';
+            if (!j.ok) { btn.disabled = false; toast('❌ ' + (j.error || 'บันทึกไม่สำเร็จ')); return; }
+            var segs = list.querySelectorAll('.dk-seg');
+            for (var i = 0; i < segs.length; i++) segs[i].setAttribute('data-orig', segs[i].getAttribute('data-v') || '');
+            dirty = {}; refresh(); toast('✅ บันทึกแล้ว ' + j.saved + ' รายการ');
+        })
+        .catch(function () { btn.disabled = false; lbl.textContent = 'บันทึกผลตรวจ'; toast('❌ เชื่อมต่อเซิร์ฟเวอร์ไม่ได้'); });
+    });
+
+    window.addEventListener('beforeunload', function (e) { if (Object.keys(dirty).length) { e.preventDefault(); e.returnValue = ''; } });
+    refresh();
+})();
+</script>
+"""
+
+
+@app.get("/inspection", response_class=HTMLResponse)
+async def inspection_page(room: Optional[str] = None, date: Optional[str] = None, user_session: Optional[str] = Cookie(None)):
+    access, err = _insp_gate(user_session, can_manage_inspection)
+    if err: return err
+    date = _insp_valid_date(date)
+    back = _insp_back_url(access)
+    students = _insp_visible_students(access)
+    criteria = get_inspection_criteria(active_only=True)
+
+    actions = ""
+    if can_view_inspection_report(access):
+        actions += f'<a href="/inspection/report" class="dk-btn hero">{_ic(_SVG_BARS, 15)} รายงาน</a>'
+    if can_manage_inspection_criteria(access):
+        actions += f'<a href="/inspection/criteria" class="dk-btn hero">{_ic(_SVG_SLIDERS, 15)} ตัวชี้วัด</a>'
+
+    if not criteria:
+        link = '<br><a href="/inspection/criteria" class="dk-btn" style="margin-top:12px;">ไปเพิ่มตัวชี้วัด</a>' if can_manage_inspection_criteria(access) else ""
+        body = f'<div class="dk-card">{dk_empty(_ic(_SVG_CLIPBOARD, 38, 1.5), "ยังไม่มีตัวชี้วัดที่เปิดใช้งาน — โปรดให้ฝ่ายกิจการ/ผู้ดูแลระบบเพิ่มตัวชี้วัดก่อน" + link)}</div>'
+        return dk_page("ตรวจระเบียบนักเรียน", "ยังไม่มีตัวชี้วัด", body, back, actions, icon=_ic(_SVG_CLIPBOARD, 22))
+
+    rooms = sorted(set(s['class'] for s in students))
+
+    # ───── ยังไม่เลือกห้อง: การ์ดเลือกห้อง ─────
+    if not room:
+        conn = sqlite3.connect('attendance_pro.db')
+        cur = conn.cursor()
+        cur.execute("""SELECT classroom, COUNT(DISTINCT student_uid), SUM(CASE WHEN result='fail' THEN 1 ELSE 0 END)
+                       FROM inspection_records WHERE inspect_date = ? GROUP BY classroom""", (date,))
+        prog = {r[0]: (r[1], r[2] or 0) for r in cur.fetchall()}
+        conn.close()
+
+        by_level = {}
+        for r in rooms:
+            by_level.setdefault(get_grade_level(r), []).append(r)
+        count_in_room = {}
+        for s in students:
+            count_in_room[s['class']] = count_in_room.get(s['class'], 0) + 1
+
+        total_students = len(students)
+        checked_total = sum(prog.get(r, (0, 0))[0] for r in rooms)
+        fail_total = sum(prog.get(r, (0, 0))[1] for r in rooms)
+        stats = (dk_stat("ห้องที่ดูแล", len(rooms), _ic(_SVG_SCHOOL), "blue") + dk_stat("นักเรียนทั้งหมด", total_students, _ic(_SVG_BACKPACK), "violet")
+                 + dk_stat("ตรวจแล้ว (คน)", checked_total, _ic(_SVG_CHECK_C), "green") + dk_stat("ไม่ผ่าน (รายการ)", fail_total, _ic(_SVG_ALERT), "red"))
+
+        sections = ""
+        for lv in sorted(by_level, key=_insp_level_key):
+            cards = ""
+            for r in by_level[lv]:
+                n = count_in_room.get(r, 0)
+                done, fails = prog.get(r, (0, 0))
+                pct = round(done * 100 / n) if n else 0
+                badge = f'<span class="dk-pill bad">ไม่ผ่าน {fails}</span>' if fails else (
+                    '<span class="dk-pill ok">ตรวจแล้ว</span>' if n and done >= n else '<span class="dk-pill mute">รอตรวจ</span>')
+                cards += f"""<a class="dk-room" href="/inspection?room={urllib.parse.quote(r)}&date={date}">
+                    <div class="dk-room-top"><b>{_he(r)}</b>{badge}</div>
+                    <div class="dk-track blue"><i style="width:{pct}%"></i></div>
+                    <small><span>ตรวจแล้ว {done}/{n} คน</span><span>{pct}%</span></small></a>"""
+            sections += f'<div class="dk-section">ระดับชั้น {_he(lv)}</div><div class="dk-grid c3">{cards}</div>'
+
+        date_form = f"""<div class="dk-card"><form method="get" action="/inspection" class="dk-filter" style="grid-template-columns:1fr auto;">
+            <div><label class="dk-label" style="display:flex;align-items:center;gap:5px;">{_ic(_SVG_CALENDAR, 14)} วันที่ตรวจ</label><input type="date" name="date" value="{date}" class="dk-input"></div>
+            <button class="dk-btn" type="submit">ดูวันนี้</button></form></div>"""
+        body = f'<div class="dk-stats">{stats}</div>{date_form}{sections or dk_empty(_ic(_SVG_SCHOOL, 38, 1.5), "ไม่พบห้องเรียนในขอบเขตของคุณ")}'
+        return dk_page("ตรวจระเบียบนักเรียน", f"เลือกห้องเพื่อเริ่มตรวจ · วันที่ {_insp_thai_date(date)} · {len(criteria)} ตัวชี้วัด",
+                       body, back, actions, icon=_ic(_SVG_CLIPBOARD, 22))
+
+    # ───── เลือกห้องแล้ว: ฟอร์มติ๊กผ่าน/ไม่ผ่าน ─────
+    if room not in rooms:
+        return alert_redirect("ไม่พบห้องเรียนนี้ หรือคุณไม่มีสิทธิ์ตรวจห้องนี้", type="error", url="/inspection")
+    stu = [s for s in students if s['class'] == room]
+    conn = sqlite3.connect('attendance_pro.db')
+    cur = conn.cursor()
+    cur.execute("SELECT student_uid, criterion_id, result FROM inspection_records WHERE inspect_date = ? AND classroom = ?", (date, room))
+    existing = {(r[0], r[1]): r[2] for r in cur.fetchall()}
+    conn.close()
+
+    rows = ""
+    for s in stu:
+        crit_html = ""
+        for c in criteria:
+            v = existing.get((s['uid'], c['id']), "")
+            p_on = " on" if v == "pass" else ""
+            f_on = " on" if v == "fail" else ""
+            crit_html += f"""<div class="dk-crit"><span>{_he(c['icon'])} {_he(c['name'])}</span>
+                <div class="dk-seg" data-cid="{c['id']}" data-v="{v}" data-orig="{v}">
+                    <button type="button" class="p{p_on}" data-v="pass">ผ่าน</button>
+                    <button type="button" class="f{f_on}" data-v="fail">ไม่ผ่าน</button>
+                </div></div>"""
+        initial = _he(s['name'][:1]) if s['name'] else "?"
+        rows += f"""<div class="dk-stu" data-uid="{_he(s['uid'], quote=True)}" data-name="{_he(s['name'], quote=True)}" data-no="{_he(s['no'], quote=True)}">
+            <div class="dk-stu-head"><div class="dk-avatar">{initial}</div>
+                <div class="nm"><b>{_he(s['name'])}</b><span>เลขที่ {_he(s['no'])}</span></div>
+                <button type="button" class="dk-btn light sm" data-allpass>ผ่านทั้งหมด</button></div>
+            <div class="dk-crits">{crit_html}</div></div>"""
+
+    stats = (dk_stat("นักเรียนในห้อง", len(stu), _ic(_SVG_BACKPACK), "blue") + dk_stat("ตรวจครบแล้ว", '<span id="stDone">0</span>', _ic(_SVG_CHECK_C), "green")
+             + dk_stat("ยังไม่ครบ", '<span id="stTodo">0</span>', _ic(_SVG_CLOCK), "amber") + dk_stat("มีรายการไม่ผ่าน", '<span id="stFail">0</span>', _ic(_SVG_ALERT), "red"))
+    tools = f"""<div class="dk-card">
+        <div class="dk-track blue" style="margin-bottom:12px;"><i id="prog" style="width:0%"></i></div>
+        <div style="position:relative;margin-bottom:10px;">
+            <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);color:#94a3b8;display:flex;">{_ic(_SVG_SEARCH, 16)}</span>
+            <input id="search" class="dk-input" placeholder="ค้นหาชื่อ หรือเลขที่" style="padding-left:36px;">
+        </div>
+        <div class="dk-chips"><button type="button" class="dk-chip on" data-f="all">ทั้งหมด</button>
+            <button type="button" class="dk-chip" data-f="todo">ยังไม่ครบ</button>
+            <button type="button" class="dk-chip" data-f="fail">ไม่ผ่าน</button>
+            <button type="button" class="dk-chip" id="passAll" style="border-color:#86efac;color:#15803d;display:inline-flex;align-items:center;gap:5px;">{_ic(_SVG_CHECK_C, 13)} ติ๊กผ่านช่องที่ว่างทั้งหมด</button></div>
+    </div>"""
+    savebar = f"""<div class="dk-savebar"><div class="msg" id="saveMsg">ผลตรวจทั้งหมดถูกบันทึกแล้ว</div>
+        <button type="button" class="dk-btn green" id="saveBtn" disabled style="display:inline-flex;align-items:center;gap:6px;">{_ic(_SVG_SAVE, 16)}<span id="saveBtnLabel">บันทึกผลตรวจ</span></button></div><div class="dk-toast" id="dkToast"></div>"""
+    js = INSPECTION_JS.replace("__ROOM__", _json.dumps(room).replace("</", "<\\/")).replace("__DATE__", _json.dumps(date))
+    body = (f'<div class="dk-stats">{stats}</div>{tools}<div id="stuList">{rows}</div>'
+            f'<div id="emptyHint" style="display:none;">{dk_empty(_ic(_SVG_SEARCH, 38, 1.5), "ไม่พบรายชื่อตามเงื่อนไขที่เลือก")}</div>')
+    actions = f'<a href="/inspection?date={date}" class="dk-btn hero">{_ic(_SVG_SCHOOL, 15)} เปลี่ยนห้อง</a>'
+    return dk_page(f"ห้อง {_he(room)}", f"ตรวจระเบียบวันที่ {_insp_thai_date(date)} · แตะ “ผ่าน/ไม่ผ่าน” ของแต่ละตัวชี้วัด แล้วกดบันทึก",
+                   body, back, actions, savebar + js, icon=_ic(_SVG_CLIPBOARD, 22))
+
+
+@app.post("/api/inspection/save")
+async def api_inspection_save(request: Request, user_session: Optional[str] = Cookie(None)):
+    access, err = _insp_gate(user_session, can_manage_inspection, json_mode=True)
+    if err: return err
+    try:
+        data = await request.json()
+        room = str(data.get("room", "")).strip()
+        date = datetime.strptime(str(data.get("date", "")).strip(), "%Y-%m-%d").strftime("%Y-%m-%d")
+        changes = data.get("changes", [])
+        if not isinstance(changes, list) or len(changes) > 20000:
+            raise ValueError
+    except Exception:
+        return JSONResponse({"ok": False, "error": "ข้อมูลที่ส่งมาไม่ถูกต้อง"}, status_code=400)
+    if not room or not in_inspection_scope(access, room):
+        return JSONResponse({"ok": False, "error": "คุณไม่มีสิทธิ์ตรวจห้องนี้"}, status_code=403)
+    if date > _insp_today():
+        return JSONResponse({"ok": False, "error": "ไม่สามารถบันทึกผลตรวจล่วงหน้าได้"}, status_code=400)
+
+    stu_map = {s['uid']: s for s in get_sorted_master_students() if s['class'] == room}
+    crit_map = {c['id']: c for c in get_inspection_criteria(active_only=False)}
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    inspector = access.get("fullname") or access.get("username") or "-"
+    saved = cleared = 0
+    new_fails = {}
+    conn = sqlite3.connect('attendance_pro.db')
+    cur = conn.cursor()
+    try:
+        for ch in changes:
+            if not isinstance(ch, list) or len(ch) != 3:
+                continue
+            uid, cid, v = ch
+            if uid not in stu_map or cid not in crit_map or v not in ("pass", "fail", ""):
+                continue
+            s, c = stu_map[uid], crit_map[cid]
+            if v == "":
+                cur.execute("DELETE FROM inspection_records WHERE inspect_date=? AND student_uid=? AND criterion_id=?", (date, uid, cid))
+                cleared += 1
+                continue
+            if not c["is_active"]:
+                continue  # ตัวชี้วัดที่ปิดอยู่ รับเฉพาะการล้างค่า ไม่รับค่าใหม่
+            cur.execute("""INSERT INTO inspection_records
+                (inspect_date, classroom, student_uid, student_name, student_no, criterion_id, criterion_name, result, inspector, inspector_label, created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(inspect_date, student_uid, criterion_id) DO UPDATE SET
+                    result=excluded.result, inspector=excluded.inspector, inspector_label=excluded.inspector_label,
+                    created_at=excluded.created_at, criterion_name=excluded.criterion_name, classroom=excluded.classroom""",
+                (date, room, uid, s['name'], s['no'], cid, c['name'], v, access.get("username"), inspector, now))
+            saved += 1
+            if v == "fail":
+                new_fails.setdefault(uid, []).append(c['name'])
+        conn.commit()
+    finally:
+        conn.close()
+
+    # 🔔 แจ้งนักเรียนที่ได้รับผล “ไม่ผ่าน” (เฉพาะการตรวจของวันนี้)
+    if date == _insp_today():
+        for uid, names in list(new_fails.items())[:300]:
+            try:
+                await push_student_notify("ผลตรวจระเบียบ", "ไม่ผ่าน: " + ", ".join(names) + " — โปรดปรับปรุงให้เรียบร้อย",
+                                          tone="warning", target_uids=[uid])
+            except Exception:
+                pass
+    add_log(f"{inspector} บันทึกผลตรวจระเบียบห้อง {room} วันที่ {date} ({saved} รายการ)")
+    return JSONResponse({"ok": True, "saved": saved + cleared})
+
+
+# ──────────────── จัดการตัวชี้วัด ────────────────
+@app.get("/inspection/criteria", response_class=HTMLResponse)
+async def inspection_criteria_page(user_session: Optional[str] = Cookie(None)):
+    access, err = _insp_gate(user_session, can_manage_inspection_criteria)
+    if err: return err
+    items = get_inspection_criteria(active_only=False)
+    conn = sqlite3.connect('attendance_pro.db')
+    cur = conn.cursor()
+    cur.execute("SELECT criterion_id, COUNT(*) FROM inspection_records GROUP BY criterion_id")
+    usage = dict(cur.fetchall())
+    conn.close()
+
+    rows = ""
+    for i, c in enumerate(items):
+        state = '<span class="dk-pill ok">เปิดใช้งาน</span>' if c['is_active'] else '<span class="dk-pill mute">ปิดอยู่</span>'
+        toggle_label = "ปิด" if c['is_active'] else "เปิด"
+        up = f"""<form method="post" action="/api/inspection/criteria/move" style="margin:0;"><input type="hidden" name="cid" value="{c['id']}">
+                 <input type="hidden" name="direction" value="up"><button class="dk-btn light sm" {'disabled style="opacity:.35"' if i == 0 else ''}>↑</button></form>"""
+        down = f"""<form method="post" action="/api/inspection/criteria/move" style="margin:0;"><input type="hidden" name="cid" value="{c['id']}">
+                 <input type="hidden" name="direction" value="down"><button class="dk-btn light sm" {'disabled style="opacity:.35"' if i == len(items) - 1 else ''}>↓</button></form>"""
+        rows += f"""<div class="dk-row">
+            <div class="dk-ico-box">{_he(c['icon'])}</div>
+            <div class="grow"><b>{_he(c['name'])}</b><span>{state} · ตรวจไปแล้ว {usage.get(c['id'], 0)} ครั้ง</span></div>
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">
+                {up}{down}
+                <form method="post" action="/api/inspection/criteria/toggle" style="margin:0;"><input type="hidden" name="cid" value="{c['id']}">
+                    <button class="dk-btn light sm">{toggle_label}</button></form>
+                <form method="post" action="/api/inspection/criteria/delete" style="margin:0;"
+                      onsubmit="return confirm('ลบตัวชี้วัด “{_he(c['name'], quote=True)}” ?\\nประวัติผลตรวจเดิมยังคงอยู่ในรายงาน');">
+                    <input type="hidden" name="cid" value="{c['id']}"><button class="dk-btn danger sm">ลบ</button></form>
+            </div></div>"""
+
+    active_n = sum(1 for c in items if c['is_active'])
+    stats = dk_stat("ตัวชี้วัดทั้งหมด", len(items), _ic(_SVG_CLIPBOARD), "blue") + dk_stat("เปิดใช้งาน", active_n, _ic(_SVG_CHECK_C), "green") + \
+        dk_stat("ปิดอยู่", len(items) - active_n, _ic(_SVG_PAUSE), "slate") + dk_stat("ผลตรวจที่บันทึกแล้ว", sum(usage.values()), _ic(_SVG_BARS), "violet")
+    add_form = f"""<div class="dk-card"><div class="dk-card-title" style="display:flex;align-items:center;gap:6px;">{_ic(_SVG_PLUS, 16)} เพิ่มตัวชี้วัดใหม่</div>
+        <form method="post" action="/api/inspection/criteria/add" style="display:grid;grid-template-columns:70px 1fr auto;gap:10px;align-items:end;">
+            <div><label class="dk-label">ไอคอน</label><input class="dk-input" name="icon" maxlength="4" placeholder="✅" style="text-align:center;"></div>
+            <div><label class="dk-label">ชื่อตัวชี้วัด</label><input class="dk-input" name="name" maxlength="40" required placeholder="เช่น เล็บ, รองเท้า, ถุงเท้า"></div>
+            <button class="dk-btn" type="submit">เพิ่ม</button></form></div>"""
+    body = (f'<div class="dk-stats">{stats}</div>{add_form}'
+            f'<div class="dk-note" style="display:flex;align-items:flex-start;gap:6px;"><span style="flex-shrink:0;margin-top:1px;">{_ic(_SVG_BULB, 15)}</span><span>ตัวชี้วัดที่ “ปิด” จะไม่แสดงในหน้าตรวจ แต่ประวัติเดิมยังอยู่ · ตัวชี้วัดที่ “ลบ” จะหายจากหน้าตรวจ ส่วนประวัติที่เคยบันทึกไว้ยังคงแสดงในรายงาน</span></div>'
+            f'<div class="dk-card-title" style="margin:6px 4px 10px;">รายการตัวชี้วัด</div>{rows or dk_empty(_ic(_SVG_CLIPBOARD, 38, 1.5), "ยังไม่มีตัวชี้วัด")}')
+    return dk_page("ตัวชี้วัดการตรวจระเบียบ", "เพิ่ม ลบ เปิด/ปิด และจัดลำดับหัวข้อที่ครูใช้ติ๊กผ่าน/ไม่ผ่าน", body,
+                   "/inspection" if can_manage_inspection(access) else _insp_back_url(access), icon=_ic(_SVG_SLIDERS, 22))
+
+
+def _insp_criteria_mutation(user_session, fn):
+    access, err = _insp_gate(user_session, can_manage_inspection_criteria)
+    if err: return err
+    conn = sqlite3.connect('attendance_pro.db')
+    try:
+        msg, kind = fn(conn.cursor(), access)
+        conn.commit()
+    finally:
+        conn.close()
+    return alert_redirect(msg, type=kind, url="/inspection/criteria")
+
+
+@app.post("/api/inspection/criteria/add")
+async def api_inspection_criteria_add(name: str = Form(""), icon: str = Form(""), user_session: Optional[str] = Cookie(None)):
+    name = " ".join(name.split())[:40]
+    icon = icon.strip()[:4] or "✅"
+    def run(cur, access):
+        if not name:
+            return "กรุณากรอกชื่อตัวชี้วัด", "error"
+        cur.execute("SELECT 1 FROM inspection_criteria WHERE name = ?", (name,))
+        if cur.fetchone():
+            return f"มีตัวชี้วัด “{name}” อยู่แล้ว", "warning"
+        cur.execute("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM inspection_criteria")
+        nxt = cur.fetchone()[0]
+        cur.execute("INSERT INTO inspection_criteria (name, icon, is_active, sort_order, created_by, created_at) VALUES (?,?,1,?,?,?)",
+                    (name, icon, nxt, access.get("fullname") or access.get("username"), datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        return f"เพิ่มตัวชี้วัด “{name}” เรียบร้อยแล้ว", "success"
+    return _insp_criteria_mutation(user_session, run)
+
+
+@app.post("/api/inspection/criteria/toggle")
+async def api_inspection_criteria_toggle(cid: int = Form(...), user_session: Optional[str] = Cookie(None)):
+    def run(cur, access):
+        cur.execute("SELECT name, is_active FROM inspection_criteria WHERE id = ?", (cid,))
+        row = cur.fetchone()
+        if not row:
+            return "ไม่พบตัวชี้วัดนี้", "error"
+        new_state = 0 if row[1] else 1
+        cur.execute("UPDATE inspection_criteria SET is_active = ? WHERE id = ?", (new_state, cid))
+        return f"{'เปิด' if new_state else 'ปิด'}ใช้งานตัวชี้วัด “{row[0]}” แล้ว", "success"
+    return _insp_criteria_mutation(user_session, run)
+
+
+@app.post("/api/inspection/criteria/delete")
+async def api_inspection_criteria_delete(cid: int = Form(...), user_session: Optional[str] = Cookie(None)):
+    def run(cur, access):
+        cur.execute("SELECT name FROM inspection_criteria WHERE id = ?", (cid,))
+        row = cur.fetchone()
+        if not row:
+            return "ไม่พบตัวชี้วัดนี้ (อาจถูกลบไปแล้ว)", "error"
+        cur.execute("DELETE FROM inspection_criteria WHERE id = ?", (cid,))
+        return f"ลบตัวชี้วัด “{row[0]}” เรียบร้อยแล้ว", "success"
+    return _insp_criteria_mutation(user_session, run)
+
+
+@app.post("/api/inspection/criteria/move")
+async def api_inspection_criteria_move(cid: int = Form(...), direction: str = Form(...), user_session: Optional[str] = Cookie(None)):
+    def run(cur, access):
+        cur.execute("SELECT id FROM inspection_criteria ORDER BY sort_order, id")
+        ids = [r[0] for r in cur.fetchall()]
+        if cid not in ids or direction not in ("up", "down"):
+            return "ไม่พบตัวชี้วัดนี้", "error"
+        i = ids.index(cid)
+        j = i - 1 if direction == "up" else i + 1
+        if 0 <= j < len(ids):
+            ids[i], ids[j] = ids[j], ids[i]
+        for pos, _id in enumerate(ids, start=1):
+            cur.execute("UPDATE inspection_criteria SET sort_order = ? WHERE id = ?", (pos, _id))
+        return "จัดลำดับตัวชี้วัดแล้ว", "success"
+    return _insp_criteria_mutation(user_session, run)
+
+
+# ──────────────── รายงาน ────────────────
+def _insp_load_records(access: dict, d_from: str, d_to: str, level: str = "", room: str = "") -> list:
+    conn = sqlite3.connect('attendance_pro.db')
+    cur = conn.cursor()
+    cur.execute("""SELECT inspect_date, classroom, student_uid, student_name, student_no, criterion_id, criterion_name, result, inspector_label
+                   FROM inspection_records WHERE inspect_date BETWEEN ? AND ? ORDER BY inspect_date DESC, classroom""", (d_from, d_to))
+    out = []
+    for r in cur.fetchall():
+        cls = r[1] or ""
+        if not in_inspection_scope(access, cls):
+            continue
+        if level and get_grade_level(cls) != level:
+            continue
+        if room and cls != room:
+            continue
+        out.append({"date": r[0], "room": cls, "uid": r[2], "name": r[3] or "", "no": r[4] or "", "cid": r[5],
+                    "crit": r[6] or "", "result": r[7], "by": r[8] or ""})
+    conn.close()
+    return out
+
+
+def _insp_report_range(d_from: Optional[str], d_to: Optional[str]):
+    today = datetime.now()
+    f = _insp_valid_date(d_from) if d_from else (today - timedelta(days=6)).strftime("%Y-%m-%d")
+    t = _insp_valid_date(d_to) if d_to else today.strftime("%Y-%m-%d")
+    if f > t:
+        f, t = t, f
+    return f, t
+
+
+@app.get("/inspection/report", response_class=HTMLResponse)
+async def inspection_report_page(date_from: Optional[str] = None, date_to: Optional[str] = None,
+                                 level: Optional[str] = "", room: Optional[str] = "", user_session: Optional[str] = Cookie(None)):
+    access, err = _insp_gate(user_session, can_view_inspection_report)
+    if err: return err
+    d_from, d_to = _insp_report_range(date_from, date_to)
+    level, room = (level or "").strip(), (room or "").strip()
+    if access["role"] == "level_head":
+        level = access["level_scope"]
+    recs = _insp_load_records(access, d_from, d_to, level, room)
+
+    visible = _insp_visible_students(access)
+    levels = sorted(set(get_grade_level(s['class']) for s in visible), key=_insp_level_key)
+    rooms = sorted(set(s['class'] for s in visible if not level or get_grade_level(s['class']) == level))
+    lv_opts = '<option value="">ทุกระดับชั้น</option>' + "".join(
+        f'<option value="{_he(l, quote=True)}" {"selected" if l == level else ""}>{_he(l)}</option>' for l in levels)
+    rm_opts = '<option value="">ทุกห้อง</option>' + "".join(
+        f'<option value="{_he(r, quote=True)}" {"selected" if r == room else ""}>{_he(r)}</option>' for r in rooms)
+    lv_field = "" if access["role"] == "level_head" else f'<div><label class="dk-label">ระดับชั้น</label><select name="level" class="dk-select">{lv_opts}</select></div>'
+    if access["role"] == "level_head":
+        lv_field = f'<div><label class="dk-label">ระดับชั้น</label><input class="dk-input" value="{_he(level)}" disabled></div>'
+    filter_form = f"""<div class="dk-card"><form method="get" action="/inspection/report" class="dk-filter">
+        <div><label class="dk-label">ตั้งแต่วันที่</label><input type="date" name="date_from" value="{d_from}" class="dk-input"></div>
+        <div><label class="dk-label">ถึงวันที่</label><input type="date" name="date_to" value="{d_to}" class="dk-input"></div>
+        {lv_field}
+        <div><label class="dk-label">ห้อง</label><select name="room" class="dk-select">{rm_opts}</select></div>
+        <button class="dk-btn" type="submit">แสดงรายงาน</button></form></div>"""
+
+    total = len(recs)
+    passed = sum(1 for r in recs if r['result'] == 'pass')
+    failed = total - passed
+    rate = round(passed * 100 / total) if total else 0
+    students_checked = len(set(r['uid'] for r in recs))
+    stats = (dk_stat("ผลตรวจทั้งหมด", total, _ic(_SVG_CLIPBOARD), "blue") + dk_stat("อัตราผ่าน", f"{rate}%", _ic(_SVG_MEDAL), "green")
+             + dk_stat("ไม่ผ่าน (รายการ)", failed, _ic(_SVG_ALERT), "red") + dk_stat("นักเรียนที่ถูกตรวจ", students_checked, _ic(_SVG_BACKPACK), "violet"))
+
+    # อัตราผ่านรายตัวชี้วัด
+    per_c = {}
+    for r in recs:
+        d = per_c.setdefault(r['cid'], {"name": r['crit'], "p": 0, "f": 0})
+        d["p" if r['result'] == 'pass' else "f"] += 1
+    crit_html = ""
+    for d in sorted(per_c.values(), key=lambda x: x["name"]):
+        n = d["p"] + d["f"]
+        pct = round(d["p"] * 100 / n) if n else 0
+        crit_html += f'<div class="dk-rate-row"><span>{_he(d["name"])}</span><div class="dk-track"><i style="width:{pct}%"></i></div><em>{pct}%</em></div>'
+    crit_card = f'<div class="dk-card"><div class="dk-card-title">อัตราผ่านรายตัวชี้วัด<small>ไม่ผ่าน {failed} / {total}</small></div>{crit_html or dk_empty(_ic(_SVG_INBOX, 38, 1.5), "ไม่มีข้อมูลในช่วงนี้")}</div>'
+
+    # แนวโน้มรายวัน (อัตราผ่าน)
+    per_day = {}
+    for r in recs:
+        d = per_day.setdefault(r['date'], [0, 0])
+        d[0] += 1 if r['result'] == 'pass' else 0
+        d[1] += 1
+    days = sorted(per_day)[-31:]
+    trend_card = ""
+    if days:
+        bars = "".join(f'<div title="{_insp_thai_date(d)} · ผ่าน {round(per_day[d][0] * 100 / per_day[d][1])}%" style="height:{max(6, round(per_day[d][0] * 100 / per_day[d][1]))}%"></div>' for d in days)
+        trend_card = f'<div class="dk-card"><div class="dk-card-title">แนวโน้มอัตราผ่านรายวัน</div><div class="dk-trend">{bars}</div><div class="dk-trend-lbl"><span>{_insp_thai_date(days[0])}</span><span>{_insp_thai_date(days[-1])}</span></div></div>'
+
+    # สรุปรายห้อง
+    per_room = {}
+    for r in recs:
+        d = per_room.setdefault(r['room'], {"n": 0, "f": 0, "s": set()})
+        d["n"] += 1
+        d["f"] += 1 if r['result'] == 'fail' else 0
+        d["s"].add(r['uid'])
+    room_rows = "".join(
+        f'<tr><td><b>{_he(k)}</b></td><td>{len(v["s"])}</td><td>{v["n"]}</td><td>{v["f"]}</td>'
+        f'<td><span class="dk-pill {"ok" if v["n"] and (v["n"] - v["f"]) * 100 / v["n"] >= 90 else "warn"}">{round((v["n"] - v["f"]) * 100 / v["n"]) if v["n"] else 0}%</span></td></tr>'
+        for k, v in sorted(per_room.items()))
+    room_card = ""
+    if room_rows:
+        room_card = f"""<div class="dk-card"><div class="dk-card-title">สรุปรายห้อง</div><div class="dk-tablewrap"><table class="dk-table">
+            <thead><tr><th>ห้อง</th><th>ตรวจ (คน)</th><th>ผลตรวจ</th><th>ไม่ผ่าน</th><th>อัตราผ่าน</th></tr></thead><tbody>{room_rows}</tbody></table></div></div>"""
+
+    # นักเรียนที่ไม่ผ่านบ่อย
+    per_stu = {}
+    for r in recs:
+        if r['result'] != 'fail':
+            continue
+        d = per_stu.setdefault(r['uid'], {"name": r['name'], "room": r['room'], "no": r['no'], "crit": {}, "days": set()})
+        d["crit"][r['crit']] = d["crit"].get(r['crit'], 0) + 1
+        d["days"].add(r['date'])
+    fail_rows = ""
+    for d in sorted(per_stu.values(), key=lambda x: (-len(x["days"]), x["room"], x["name"]))[:100]:
+        chips = " ".join(f'<span class="dk-pill bad">{_he(k)} ×{v}</span>' for k, v in sorted(d["crit"].items()))
+        fail_rows += f'<tr><td><b>{_he(d["name"])}</b><br><span style="font-size:11.5px;color:#64748b;">{_he(d["room"])} · เลขที่ {_he(d["no"])}</span></td><td>{len(d["days"])} วัน</td><td>{chips}</td></tr>'
+    fail_card = (f'<div class="dk-card"><div class="dk-card-title">นักเรียนที่ไม่ผ่านระเบียบ<small>{len(per_stu)} คน</small></div><div class="dk-tablewrap"><table class="dk-table">'
+                 f'<thead><tr><th>นักเรียน</th><th>วันที่ไม่ผ่าน</th><th>หัวข้อที่ไม่ผ่าน</th></tr></thead><tbody>{fail_rows}</tbody></table></div></div>'
+                 if fail_rows else f'<div class="dk-card">{dk_empty(_ic(_SVG_SMILE, 38, 1.5), "ไม่มีนักเรียนที่ไม่ผ่านระเบียบในช่วงนี้")}</div>')
+
+    qs = urllib.parse.urlencode({"date_from": d_from, "date_to": d_to, "level": level, "room": room})
+    actions = f'<a href="/inspection/report.csv?{qs}" class="dk-btn hero">{_ic(_SVG_DOWNLOAD, 15)} CSV</a>'
+    if can_manage_inspection(access):
+        actions += f'<a href="/inspection" class="dk-btn hero">{_ic(_SVG_CLIPBOARD, 15)} ตรวจระเบียบ</a>'
+    body = f'<div class="dk-stats">{stats}</div>{filter_form}<div class="dk-grid c2">{crit_card}{trend_card}</div>{room_card}{fail_card}'
+    return dk_page("รายงานการตรวจระเบียบ", f"{_insp_thai_date(d_from)} – {_insp_thai_date(d_to)}", body, _insp_back_url(access), actions, icon=_ic(_SVG_BARS, 22))
+
+
+def _csv_safe(v) -> str:
+    s = str(v if v is not None else "")
+    return "'" + s if s[:1] in ("=", "+", "-", "@") else s
+
+
+@app.get("/inspection/report.csv")
+async def inspection_report_csv(date_from: Optional[str] = None, date_to: Optional[str] = None,
+                                level: Optional[str] = "", room: Optional[str] = "", user_session: Optional[str] = Cookie(None)):
+    access, err = _insp_gate(user_session, can_view_inspection_report)
+    if err: return err
+    d_from, d_to = _insp_report_range(date_from, date_to)
+    level = access["level_scope"] if access["role"] == "level_head" else (level or "").strip()
+    recs = _insp_load_records(access, d_from, d_to, level, (room or "").strip())
+    buf = _io.StringIO()
+    w = _csv.writer(buf)
+    w.writerow(["วันที่", "ห้อง", "เลขที่", "ชื่อ-สกุล", "ตัวชี้วัด", "ผล", "ผู้ตรวจ"])
+    for r in recs:
+        w.writerow([_csv_safe(r['date']), _csv_safe(r['room']), _csv_safe(r['no']), _csv_safe(r['name']), _csv_safe(r['crit']),
+                    "ผ่าน" if r['result'] == 'pass' else "ไม่ผ่าน", _csv_safe(r['by'])])
+    return Response(content=("﻿" + buf.getvalue()).encode("utf-8"), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="inspection_{d_from}_{d_to}.csv"'})
+
+
+# ──────────────── มุมมองนักเรียน (อ่านอย่างเดียว) ────────────────
+@app.get("/student/inspection", response_class=HTMLResponse)
+async def student_inspection_page(user_session: Optional[str] = Cookie(None)):
+    if not user_session or not user_session.startswith("student_"):
+        return RedirectResponse(url="/login", status_code=303)
+    uid = urllib.parse.unquote(user_session.replace("student_", "", 1))
+    me = next((s for s in get_sorted_master_students() if s['uid'] == uid), None)
+    if not me:
+        resp = RedirectResponse(url="/login", status_code=303)
+        resp.delete_cookie(key="user_session")
+        return resp
+    since = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+    conn = sqlite3.connect('attendance_pro.db')
+    cur = conn.cursor()
+    cur.execute("""SELECT inspect_date, criterion_name, result, inspector_label FROM inspection_records
+                   WHERE student_uid = ? AND inspect_date >= ? ORDER BY inspect_date DESC, criterion_id""", (uid, since))
+    recs = cur.fetchall()
+    conn.close()
+    total = len(recs)
+    fails = sum(1 for r in recs if r[2] == 'fail')
+    rate = round((total - fails) * 100 / total) if total else 0
+    stats = (dk_stat("ตรวจแล้ว (30 วัน)", total, _ic(_SVG_CLIPBOARD), "blue") + dk_stat("อัตราผ่าน", f"{rate}%" if total else "-", _ic(_SVG_MEDAL), "green")
+             + dk_stat("ไม่ผ่าน", fails, _ic(_SVG_ALERT), "red") + dk_stat("ห้อง", _he(me['class']), _ic(_SVG_SCHOOL), "violet"))
+    by_day = {}
+    for d, crit, res, by in recs:
+        by_day.setdefault(d, []).append((crit, res, by))
+    days_html = ""
+    for d, items in by_day.items():
+        pills = " ".join(f'<span class="dk-pill {"ok" if res == "pass" else "bad"}">{"✓" if res == "pass" else "✗"} {_he(c or "-")}</span>' for c, res, _ in items)
+        who = _he(items[0][2] or "-")
+        days_html += f'<div class="dk-row"><div class="grow"><b>{_insp_thai_date(d)}</b><span>ผู้ตรวจ: {who}</span><div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">{pills}</div></div></div>'
+    body = (f'<div class="dk-stats">{stats}</div>'
+            + (days_html or f'<div class="dk-card">{dk_empty(_ic(_SVG_INBOX, 38, 1.5), "ยังไม่มีผลตรวจระเบียบใน 30 วันที่ผ่านมา")}</div>'))
+    return dk_page("ผลตรวจระเบียบของฉัน", f"{_he(me['name'])} · ย้อนหลัง 30 วัน", body, "/student/dashboard",
+                   extra=realtime_notify_script(uid), icon=_ic(_SVG_CLIPBOARD, 22))
+
+
 
 THAI_WEEKDAYS = {1: "จันทร์", 2: "อังคาร", 3: "พุธ", 4: "พฤหัสบดี", 5: "ศุกร์", 6: "เสาร์", 7: "อาทิตย์"}
 
