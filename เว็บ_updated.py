@@ -374,6 +374,8 @@ _P["medal-gold"] = '<path d="M8.5 14L7 22l5-3 5 3-1.5-8" stroke="#b45309" fill="
 _P["medal-silver"] = '<path d="M8.5 14L7 22l5-3 5 3-1.5-8" stroke="#475569" fill="none"/><circle cx="12" cy="9" r="6" fill="#e2e8f0" stroke="#475569"/>'
 _P["medal-bronze"] = '<path d="M8.5 14L7 22l5-3 5 3-1.5-8" stroke="#7c2d12" fill="none"/><circle cx="12" cy="9" r="6" fill="#fdba74" stroke="#7c2d12"/>'
 
+_P["camera"] = '<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>'
+_P["scan-face"] = '<path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><path d="M9 9h.01M15 9h.01"/>'
 KX_ICONS = _P
 
 # emoji -> (ชื่อไอคอน, สีเฉพาะ | None)  (สีใช้เฉพาะตอนอยู่ในข้อความทั่วไป; ในกล่องไอคอนจะใช้สีของกล่อง)
@@ -396,6 +398,8 @@ _m("arrow-right", None, "➔", "➜", "➡")
 _m("corner-left", None, "↩")
 _m("zap", None, "⚡", "🔌")
 _m("save", None, "💾")
+_m("camera", None, "📷", "📸")
+_m("scan-face", None)
 _m("backpack", None, "🎒")
 _m("school", None, "🏫")
 _m("building", None, "🏢")
@@ -1781,6 +1785,9 @@ PERMISSIONS = {
     "manage_student_registry":  {"label": "จัดการทะเบียนนักเรียน (เพิ่ม/แก้ไข/ลบ)", "default_roles": ("admin", "registrar")},
     "manage_payments":          {"label": "จัดการการเงิน / รายการเรียกเก็บ",   "default_roles": ("admin", "finance")},
     "manage_subject_scope":     {"label": "จัดการวิชาที่รับผิดชอบ / มอบวิชาให้ครูย่อย", "default_roles": ("admin", "subject_head")},
+    "face_scan":                {"label": "สแกนหน้าเช็กชื่อ (ทดลอง)",        "default_roles": ("admin", "teacher", "subject_head", "level_head", "affairs")},
+    "manage_face_data":         {"label": "ลงทะเบียน/ลบข้อมูลใบหน้านักเรียน (ทดลอง)", "default_roles": ("admin", "affairs", "registrar")},
+    "face_gate":                {"label": "สแกนหน้าเข้า-ออกโรงเรียน (ทดลอง)",   "default_roles": ("admin", "affairs", "level_head")},
 }
 # บทบาทที่ปรับสิทธิ์ผ่านตารางได้ (admin มีสิทธิ์ทุกอย่างเสมอ ไม่ต้องตั้งค่า)
 CONFIGURABLE_ROLES = ("teacher", "trainee", "subject_head", "level_head", "affairs", "registrar", "finance")
@@ -4074,6 +4081,8 @@ async def admin_dashboard(user_session: Optional[str] = Cookie(None)):
                 {adm_cell("/admin/conduct", '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>', "#fff1f2", "#be123c", "คะแนนประพฤติ")}
                 {adm_cell("/admin/history", '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/>', "#fff7ed", "#c2410c", "ประวัติเช็กชื่อ")}
                 {adm_cell("/admin/payments", '<rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/>', "#eef2ff", "#4338ca", "ชำระเงิน")}
+                {adm_cell("/app/facegate", '<path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><path d="M9 9h.01M15 9h.01"/>', "#f0fdf4", "#15803d", "สแกนหน้าเข้า-ออก (ทดลอง)")}
+                {adm_cell("/admin/face_enroll", '<circle cx="12" cy="12" r="9"/><path d="M9 10h.01M15 10h.01M8.5 15a4.5 4.5 0 0 0 7 0"/>', "#ecfeff", "#0891b2", "ลงทะเบียนใบหน้า (ทดลอง)")}
                 {adm_cell("/admin/grades_visibility", '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>', "#ecfeff", "#0e7490", "การมองเห็นคะแนน")}
             </div>
 
@@ -4636,6 +4645,10 @@ async def app_dashboard(user: str, user_session: Optional[str] = Cookie(None)):
         tools += dk_tool("/admin/student_accounts", "lock", "โปรไฟล์นักเรียน", "violet")
     if can_manage_payments(access):
         tools += dk_tool("/admin/payments", "credit-card", "การเงิน", "amber")
+    if can_face_gate(access):
+        tools += dk_tool("/app/facegate", "scan-face", "สแกนหน้าเข้า-ออก (ทดลอง)", "green")
+    if can_manage_face_data(access):
+        tools += dk_tool("/admin/face_enroll", "camera", "ลงทะเบียนใบหน้า (ทดลอง)", "violet")
 
     stats = (dk_stat("วิชาที่ดูแล", len(subjects), "📚", "green") + dk_stat("นักเรียนในวิชา", total_students, "🎒", "blue")
              + dk_stat("เช็กชื่อวันนี้", f"{done_today}/{len(subjects)}", "✅", "violet")
@@ -5282,6 +5295,12 @@ async def app_rollcall_sheet(group_id: int, user: str, user_session: Optional[st
     students_in_class = [s for s in master_students if s['uid'] in assigned_uids]
     today_val = datetime.now().strftime("%d/%m/%Y")
     default_today_input = datetime.now().strftime("%Y-%m-%d")
+    face_btn = face_script = ""
+    if can_face_scan(get_access(user_session)):
+        face_btn = (f'<button type="button" class="btn-otp-trigger" style="background:linear-gradient(135deg,#06b6d4,#0e7490);border-bottom-color:#155e75;box-shadow:0 6px 16px rgba(6,182,212,.25);" '
+                    f'onclick="FaceScan.open({{groupId:{group_id}}})"><span style="display:inline-flex;align-items:center;gap:8px;">{ic("scan-face", 20)} สแกนหน้าเช็กชื่ออัตโนมัติ</span>'
+                    f'<span style="background:#f59e0b;color:#1c1917;border-radius:20px;padding:2px 9px;font-size:11px;font-weight:800;">ทดลอง</span></button>')
+        face_script = '<script src="/facescan.js"></script>'
 
     conn = sqlite3.connect('attendance_pro.db')
     cursor = conn.cursor()
@@ -5642,6 +5661,7 @@ async def app_rollcall_sheet(group_id: int, user: str, user_session: Optional[st
     {admin_notif}
     
     <!-- ปุ่มเปิดระบบสแกนเช็กชื่ออัตโนมัติ -->
+    {face_btn}
     <button class="btn-otp-trigger" onclick="openOTPModal()">
         <span>⚡ เปิดลงทะเบียนเช็กชื่อด่วน (OTP / QR Code)</span>
     </button>
@@ -5694,7 +5714,8 @@ async def app_rollcall_sheet(group_id: int, user: str, user_session: Optional[st
 
 <!-- เสียงบี๊บแจ้งเตือนเมื่อนักเรียนเช็กอิน -->
 <audio id="beepSound" src="https://assets.mixkit.co/active_storage/sfx/2869/2869-84.wav" preload="auto"></audio>
-
+<script>window.RC_GROUP_ID={group_id};</script><script src="/facelive.js"></script>
+{face_script}
 <script>
 const activeGroupId = {group_id};
 let timerInterval = null;
@@ -6155,8 +6176,59 @@ def parse_students_xlsx(data: bytes) -> dict:
             out.append((name, no, cls, branch))
         wb.close()
         return {"rows": out, "sheet": ws.title, "skipped": skipped}
+    # ไม่ใช่รูปแบบตารางเดี่ยว -> ลองรูปแบบ "ทะเบียนรายห้อง" (ห้องละชีต ชั้นอยู่ในหัวเรื่อง) อ่านให้ครบทุกชีต
+    roster = _parse_roster_sheets(wb, clean)
     wb.close()
-    return {"rows": [], "sheet": "", "skipped": [], "error": "ไม่พบหัวตารางที่ต้องการ (เลขที่ / ชื่อ / สกุล / ชั้น / สาขา)"}
+    if roster["rows"]:
+        return roster
+    return {"rows": [], "sheet": "", "skipped": [], "error": "ไม่พบหัวตารางที่ต้องการ (เลขที่ / ชื่อ / สกุล / ชั้น / สาขา) หรือรูปแบบรายชื่อรายห้อง (ห้องละชีต)"}
+
+def _parse_roster_sheets(wb, clean) -> dict:
+    """รูปแบบไฟล์ทะเบียนรายห้อง: หนึ่งชีต = หนึ่งห้อง
+    แถว 1 = 'รายชื่อนักเรียน ... ชั้น ปวช.1/1 จำนวน 36 คน ...', หัวตาราง เลขที่ / เลขประจำตัว / สาขา / สาขาย่อย / เพศ / ชื่อ - สกุล
+    อ่านถึงบรรทัด 'ข้อมูล ณ วันที่ ...' เท่านั้น (ข้างล่างเป็นรายชื่อผู้ออก/พักการเรียน) และข้ามแถวที่มีหมายเหตุ เช่น ลาออก/จำหน่าย
+    -> {'rows','sheet','skipped','left','notes'}"""
+    import re
+    out, skipped, left, notes, used = [], [], [], [], []
+    for ws in wb.worksheets:
+        rows = list(ws.iter_rows(values_only=True))
+        title = ""
+        for r in rows[:3]:
+            for c in r:
+                t = clean(c)
+                if "ชั้น" in t and "รายชื่อ" in t: title = t; break
+            if title: break
+        m = re.search(r"ชั้น\s*(\S+)", title)
+        if not m: continue
+        cls = m.group(1)
+        claimed = re.search(r"จำนวน\s*(\d+)\s*คน", title)
+        hdr = None
+        for i, r in enumerate(rows[:8]):
+            heads = [clean(c) for c in r]
+            if "เลขที่" in heads and "สาขา" in heads and any(h.startswith("ชื่อ") for h in heads):
+                hdr = (i, heads.index("เลขที่"), heads.index("สาขา"), next(j for j, h in enumerate(heads) if h.startswith("ชื่อ")))
+                break
+        if not hdr: continue
+        hi, c_no, c_br, c_first = hdr
+        c_last = c_first + 1
+        got = 0
+        for r in rows[hi + 1:]:
+            cell = lambda k: clean(r[k]) if k < len(r) else ""
+            if cell(c_no).startswith("ข้อมูล ณ"): break
+            try: no = str(int(float(cell(c_no))))
+            except ValueError: continue
+            name = f"{cell(c_first)} {cell(c_last)}".strip()
+            note = " ".join(x for x in (clean(c) for c in r[c_last + 2:]) if x)
+            if note:
+                left.append(f"{cls} เลขที่ {no} {name} ({note})"); continue
+            branch = cell(c_br)
+            if not (name and branch):
+                skipped.append(f"แถวไม่ครบ: {cls} เลขที่ {no} {name or '(ไม่มีชื่อ)'}"); continue
+            out.append((name, no, cls, branch)); got += 1
+        used.append(ws.title)
+        if claimed and int(claimed.group(1)) != got:
+            notes.append(f"{cls}: หัวไฟล์ระบุ {claimed.group(1)} คน แต่อ่านได้ {got} คน")
+    return {"rows": out, "sheet": ", ".join(used), "skipped": skipped, "left": left, "notes": notes}
 
 def _import_plan(rows: list) -> tuple:
     """แยกเป็น (ใหม่, ซ้ำ/ชนกับของเดิม)"""
@@ -6174,7 +6246,7 @@ def _import_plan(rows: list) -> tuple:
 @app.get("/admin/import_students", response_class=HTMLResponse)
 async def admin_import_students_page(user_session: Optional[str] = Cookie(None)):
     if not gate_perm(user_session, can_manage_student_registry): return RedirectResponse(url="/login", status_code=303)
-    body = f"""<div class="dk-note">📄 ไฟล์ .xlsx ต้องมีหัวตาราง <b>เลขที่ · ชื่อ · สกุล · ชั้น · สาขา</b> (ระบบจะหาชีตที่มีหัวตารางนี้ให้เอง)<br>ก่อนบันทึกจะมีหน้าตรวจรายชื่อให้ดูก่อน และข้ามคนที่มีอยู่แล้วให้อัตโนมัติ</div>
+    body = f"""<div class="dk-note">📄 ไฟล์ .xlsx ใช้ได้ 2 แบบ: (1) หัวตาราง <b>เลขที่ · ชื่อ · สกุล · ชั้น · สาขา</b> (ระบบหาชีตให้เอง) หรือ (2) <b>ทะเบียนรายห้อง ห้องละชีต</b> (ระบบอ่านทุกชีต ข้ามคนลาออก/พักการเรียน/จำหน่ายให้)<br>ก่อนบันทึกจะมีหน้าตรวจรายชื่อให้ดูก่อน และข้ามคนที่มีอยู่แล้วให้อัตโนมัติ</div>
     <div class="dk-card"><form method="post" action="/api/admin/import_students/preview" enctype="multipart/form-data">
         <label class="dk-label">เลือกไฟล์ Excel</label>
         <input class="dk-input" type="file" name="file" accept=".xlsx" required style="padding:14px;margin-bottom:14px;">
@@ -6249,9 +6321,14 @@ async def admin_import_students_review(t: str, user_session: Optional[str] = Coo
     payload = _he("\n".join(",".join(r) for r in new), quote=True)
     stats = (dk_stat("พบในไฟล์", len(res["rows"]), "📄", "blue") + dk_stat("จะเพิ่มใหม่", len(new), "✅", "green")
              + dk_stat("ซ้ำ/ข้าม", len(dup), "⏭️", "amber") + dk_stat("แถวไม่ครบ", len(res["skipped"]), "⚠️", "red"))
+    extra_notes = ""
+    if res.get("left"):
+        extra_notes += f'<div class="dk-note">⏭️ ข้ามนักเรียนที่ลาออก/พักการเรียน/จำหน่าย {len(res["left"])} คน<br>' + "<br>".join(_he(x) for x in res["left"][:10]) + '</div>'
+    if res.get("notes"):
+        extra_notes += '<div class="dk-note" style="background:#fffbeb;border-color:#fde68a;color:#92400e;">⚠️ ' + "<br>".join(_he(x) for x in res["notes"]) + '</div>'
     btn = (f'<form method="post" action="/api/admin/import_students/commit"><input type="hidden" name="payload" value="{payload}">'
            f'<button class="dk-btn green block" style="padding:14px;" data-confirm="ยืนยันเพิ่มนักเรียน {len(new)} คนเข้าทะเบียน?">{ic("check", 16)} ยืนยันเพิ่ม {len(new)} คน</button></form>') if new else dk_empty("ℹ️", "ไม่มีนักเรียนใหม่ — ทุกคนมีในทะเบียนแล้ว")
-    body = (f'<div class="dk-stats">{stats}</div><div class="dk-card"><div class="dk-card-title">แยกตามห้อง<small>ชีต: {_he(res["sheet"])}</small></div>{chips or "-"}</div>'
+    body = (f'<div class="dk-stats">{stats}</div>{extra_notes}<div class="dk-card"><div class="dk-card-title">แยกตามห้อง<small>ชีต: {_he(res["sheet"])}</small></div>{chips or "-"}</div>'
             f'<div class="dk-section">ตัวอย่างรายชื่อ</div><div class="dk-card">{sample or dk_empty("📄", "ไม่มี")}</div>{btn}')
     return dk_page("ตรวจรายชื่อก่อนบันทึก", "ยังไม่มีการบันทึกจนกว่าจะกดยืนยัน", body, "/admin/import_students", icon="📥 ", theme="dk-teal")
 
@@ -6275,6 +6352,567 @@ async def api_import_students_commit(payload: str = Form(...), user_session: Opt
         for r in new: f.write(", ".join(r) + "\n")
     add_log(f"{access['fullname']} นำเข้านักเรียนจาก Excel {len(new)} คน")
     return alert_redirect(f"เพิ่มนักเรียน {len(new)} คนเรียบร้อยแล้ว", type="success", url="/admin/students")
+
+# ==========================================
+# 📷 สแกนหน้าเช็กชื่ออัตโนมัติ (BETA / ช่วงทดสอบ)
+# ==========================================
+# - ประมวลผลใบหน้าบนเบราว์เซอร์ของครู (face-api.js) ไม่ส่งภาพวิดีโอขึ้นเซิร์ฟเวอร์
+# - เซิร์ฟเวอร์เก็บเฉพาะ "เวกเตอร์ใบหน้า 128 ค่า" ของนักเรียน (ตาราง face_descriptors) ไม่เก็บรูปเพิ่ม
+# - สิทธิ์ปรับได้ที่ /admin/permissions: face_scan (ใช้สแกน) / manage_face_data (ลงทะเบียน-ลบใบหน้า)
+FACE_LIB_URL = os.environ.get("FACE_LIB_URL", "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.12/dist/face-api.js")
+FACE_MODEL_URL = os.environ.get("FACE_MODEL_URL", "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.12/model/")
+
+def can_face_scan(access: dict) -> bool:
+    return has_permission(access, "face_scan")
+
+def can_face_gate(access: dict) -> bool:
+    return has_permission(access, "face_gate")
+
+def can_manage_face_data(access: dict) -> bool:
+    return has_permission(access, "manage_face_data")
+
+def _fi(name: str, size: int = 16) -> str:
+    return f'<span style="display:inline-flex;vertical-align:-3px;margin-right:4px;">{ic(name, size)}</span>'
+
+def _face_cfg_js() -> str:
+    icons = {k: _fi(v) for k, v in {"scan": "scan-face", "camera": "camera", "flip": "refresh", "image": "image", "trash": "trash", "check": "check", "flask": "flask"}.items()}
+    return "window.FACE_CFG=" + _kxjson.dumps({"lib": FACE_LIB_URL, "models": FACE_MODEL_URL}) + ";window.FI=" + _kxjson.dumps(icons) + ";"
+
+FACE_SCAN_JS = r"""
+(function(){
+var C=window.FACE_CFG||{}, FI=window.FI||{}, TH=0.50, TH_FAST=0.40, GAP=0.035, MINFACE=14;
+var S={};
+function load(src){return new Promise(function(res,rej){if(window.faceapi){return res();}var s=document.createElement('script');s.src=src;s.onload=res;s.onerror=function(){rej(new Error('โหลดไลบรารีใบหน้าไม่สำเร็จ'));};document.head.appendChild(s);});}
+var libP=null;
+function lib(){ if(!libP) libP=load(C.lib).catch(function(e){libP=null;throw e;}); return libP; }
+var netP={};
+function loadNets(kind){ kind=kind||'enroll'; if(netP[kind]) return netP[kind];
+  netP[kind]=lib().then(function(){var f=faceapi.nets,a=[f.faceLandmark68Net.loadFromUri(C.models),f.faceRecognitionNet.loadFromUri(C.models)];
+    if(kind==='scan') a.push(f.tinyFaceDetector.loadFromUri(C.models)); else a.push(f.ssdMobilenetv1.loadFromUri(C.models));
+    return Promise.all(a);}).catch(function(e){netP[kind]=null;throw e;});
+  return netP[kind]; }
+window.FaceNets={load:loadNets};
+function el(t,css,html){var e=document.createElement(t);if(css)e.style.cssText=css;if(html!=null)e.innerHTML=html;return e;}
+function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+function radios(uid){return Array.prototype.filter.call(document.getElementsByName('status_'+uid),function(r){return r.type==='radio';});}
+function setStatus(uid,val){var r=radios(uid).filter(function(x){return x.value===val;})[0];if(r){r.checked=true;return true;}return false;}
+function curStatus(uid){var r=radios(uid).filter(function(x){return x.checked;})[0];return r?r.value:null;}
+var actx=null;
+function beep(ok){try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();var o=actx.createOscillator(),g=actx.createGain();o.connect(g);g.connect(actx.destination);o.frequency.value=ok===false?330:880;g.gain.value=0.05;o.start();setTimeout(function(){o.stop();},ok===false?160:90);}catch(e){}}
+
+function FaceScan(){}
+FaceScan.open=function(opts){
+  if(S.open) return; opts=opts||{}; S={open:true,opts:opts,gate:!!opts.gate,dir:'in',found:{},cool:{},facing:'environment',tracks:[],tid:0,running:true,n:0,far:true,it:0,tile:0};
+  var gate=S.gate;
+  var ov=el('div','position:fixed;inset:0;z-index:2000;background:#020617;color:#f8fafc;display:flex;flex-direction:column;font-family:Sarabun,sans-serif;');
+  var tog=gate?'<span id="fsDir" style="display:inline-flex;background:#1e293b;border-radius:10px;padding:3px;margin-right:6px;"><button data-d="in" style="border:0;border-radius:8px;padding:7px 12px;font-weight:800;font-family:inherit;">เข้า</button><button data-d="out" style="border:0;border-radius:8px;padding:7px 12px;font-weight:800;font-family:inherit;">ออก</button></span>':'';
+  ov.innerHTML='<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:wrap;padding:10px 14px;background:#0f172a;border-bottom:2px solid #d4af37;">'
+   +'<div style="font-weight:800;font-size:15px;">'+FI.scan+(gate?'สแกนหน้าเข้า-ออก':'สแกนหน้าเช็กชื่อ')+' <span style="background:#f59e0b;color:#1c1917;border-radius:20px;padding:2px 9px;font-size:11px;font-weight:800;margin-left:6px;">ทดลอง</span></div>'
+   +'<div>'+tog+'<button id="fsFar" style="border:1px solid #334155;border-radius:9px;padding:7px 11px;font-weight:700;font-family:inherit;margin-right:6px;">ระยะไกล</button><button id="fsFlip" style="background:#1e293b;color:#cbd5e1;border:1px solid #334155;border-radius:9px;padding:7px 11px;font-weight:700;font-family:inherit;margin-right:6px;">'+FI.flip+'สลับกล้อง</button><button id="fsDone" style="background:#10b981;color:#fff;border:0;border-radius:9px;padding:8px 14px;font-weight:800;font-family:inherit;">'+(gate?'ปิด':'เสร็จสิ้น')+'</button></div></div>'
+   +'<div id="fsStage" style="position:relative;flex:1;min-height:0;background:#000;display:flex;align-items:center;justify-content:center;overflow:hidden;"><video id="fsVid" playsinline muted autoplay style="max-width:100%;max-height:100%;"></video><canvas id="fsOv" style="position:absolute;pointer-events:none;"></canvas>'
+   +'<div id="fsMsg" style="position:absolute;left:0;right:0;top:12px;text-align:center;"><span style="background:rgba(2,6,23,.8);padding:7px 14px;border-radius:20px;font-size:13px;font-weight:700;">กำลังเตรียมระบบ...</span></div>'
+   +'<input id="fsZoom" type="range" style="display:none;position:absolute;left:14px;right:14px;bottom:80px;width:calc(100% - 28px);accent-color:#34d399;" aria-label="ซูม">'
+   +'<div id="fsBanner" style="position:absolute;left:12px;right:12px;bottom:14px;display:none;border-radius:16px;padding:14px 16px;font-weight:800;font-size:17px;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,.5);"></div></div>'
+   +'<div style="background:#0f172a;padding:10px 14px;max-height:30vh;overflow:auto;border-top:1px solid #1e293b;"><div style="font-weight:800;font-size:14px;margin-bottom:6px;">'+(gate?'สแกนแล้วรอบนี้ <span id="fsCnt" style="color:#34d399;">0</span> คน':'พบแล้ว <span id="fsCnt" style="color:#34d399;">0</span> / <span id="fsTot">0</span> คน')+' <span id="fsNoEnr" style="color:#fbbf24;font-size:12px;font-weight:600;"></span></div><div id="fsList" style="display:flex;flex-wrap:wrap;gap:6px;"></div></div>';
+  document.body.appendChild(ov); S.ov=ov; document.body.style.overflow='hidden';
+  S.vid=ov.querySelector('#fsVid'); S.cv=ov.querySelector('#fsOv'); S.msg=ov.querySelector('#fsMsg span'); S.banner=ov.querySelector('#fsBanner');
+  ov.querySelector('#fsDone').onclick=function(){finish();};
+  var farBtn=ov.querySelector('#fsFar');
+  var paintFar=function(){farBtn.style.background=S.far?'#0e7490':'#1e293b';farBtn.style.color=S.far?'#fff':'#94a3b8';farBtn.textContent=S.far?'ระยะไกล: เปิด':'ระยะไกล: ปิด';};paintFar();
+  farBtn.onclick=function(){S.far=!S.far;paintFar();startCam();};
+  ov.querySelector('#fsFlip').onclick=function(){S.facing=S.facing==='environment'?'user':'environment';startCam();};
+  if(gate){var paint=function(){ov.querySelectorAll('#fsDir button').forEach(function(b){var on=b.dataset.d===S.dir;b.style.background=on?(S.dir==='in'?'#10b981':'#f59e0b'):'transparent';b.style.color=on?'#fff':'#94a3b8';});};paint();
+    ov.querySelectorAll('#fsDir button').forEach(function(b){b.onclick=function(){S.dir=b.dataset.d;paint();};});}
+  S.facing=gate?'user':'environment';
+  var url=gate?'/api/face/descriptors_all':'/api/face/descriptors/'+opts.groupId;
+  Promise.all([loadNets('scan'),fetch(url,{credentials:'same-origin'}).then(function(r){if(!r.ok)throw new Error('ไม่มีสิทธิ์/โหลดข้อมูลใบหน้าไม่สำเร็จ');return r.json();})])
+   .then(function(a){S.studs=a[1].students.filter(function(s){return s.descs&&s.descs.length;});S.noEnroll=a[1].students.filter(function(s){return !(s.descs&&s.descs.length);});
+     S.studs.forEach(function(s){s.arr=s.descs.map(function(d){return new Float32Array(d);});});
+     if(!gate){ov.querySelector('#fsTot').textContent=a[1].students.length;
+       if(S.noEnroll.length) ov.querySelector('#fsNoEnr').textContent='(ยังไม่ลงทะเบียนใบหน้า '+S.noEnroll.length+' คน — ต้องเช็กเอง)';}
+     else ov.querySelector('#fsNoEnr').textContent='(ลงทะเบียนใบหน้าแล้ว '+S.studs.length+' คน)';
+     if(!S.studs.length){say('ยังไม่มีนักเรียนที่ลงทะเบียนใบหน้า — ให้ผู้ดูแลลงทะเบียนที่เมนู "ลงทะเบียนใบหน้า" ก่อน',true);return;}
+     return startCam().then(function(){say(gate?'ให้นักเรียนมองกล้อง ระบบจะบันทึกให้ทันที':'เล็งกล้องให้เห็นนักเรียน ระบบจะเช็กให้เองทันที');loop();raf();});})
+   .catch(function(e){say(e.message||'เกิดข้อผิดพลาด',true);});
+};
+function say(t,bad){if(!S.msg)return;S.msg.textContent=t;S.msg.style.background=bad?'rgba(153,27,27,.92)':'rgba(2,6,23,.8)';}
+function startCam(){
+  if(S.stream){S.stream.getTracks().forEach(function(t){t.stop();});S.stream=null;}
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){say('เบราว์เซอร์นี้ใช้กล้องไม่ได้ (ต้องเปิดผ่าน HTTPS)',true);return Promise.reject(new Error('no camera'));}
+  return navigator.mediaDevices.getUserMedia({video:{facingMode:S.facing,width:{ideal:S.far?1920:1280},height:{ideal:S.far?1080:720},frameRate:{ideal:30}},audio:false}).then(function(st){
+    S.stream=st;setupZoom(st);S.vid.srcObject=st;S.vid.style.transform=S.facing==='user'?'scaleX(-1)':'none';S.tracks=[];
+    return new Promise(function(r){S.vid.onloadedmetadata=function(){S.vid.play();r();};});
+  }).catch(function(e){say('เปิดกล้องไม่ได้: โปรดอนุญาตการใช้กล้อง',true);throw e;});
+}
+function setupZoom(st){
+  var z=S.ov&&S.ov.querySelector('#fsZoom'); if(!z)return; z.style.display='none';
+  try{var tr=st.getVideoTracks()[0],cap=tr.getCapabilities&&tr.getCapabilities();
+    if(cap&&cap.zoom&&cap.zoom.max>cap.zoom.min){z.min=cap.zoom.min;z.max=cap.zoom.max;z.step=cap.zoom.step||0.1;z.value=(tr.getSettings&&tr.getSettings().zoom)||cap.zoom.min;z.style.display='block';
+      z.oninput=function(){tr.applyConstraints({advanced:[{zoom:parseFloat(z.value)}]}).catch(function(){});};}}catch(e){}
+}
+function dist(a,b){var s=0;for(var i=0;i<128;i++){var d=a[i]-b[i];s+=d*d;}return Math.sqrt(s);}
+function matchOne(desc){
+  var best=null,b1=9,b2=9;
+  for(var i=0;i<S.studs.length;i++){var st=S.studs[i],d=9;for(var k=0;k<st.arr.length;k++){var x=dist(desc,st.arr[k]);if(x<d)d=x;}
+    if(d<b1){b2=b1;b1=d;best=st;}else if(d<b2){b2=d;}}
+  if(!best||b1>TH) return {st:null,d:b1};
+  if(S.studs.length>1 && (b2-b1)<GAP && b1>TH_FAST) return {st:null,d:b1,amb:true};
+  return {st:best,d:b1};
+}
+function iou(a,b){var x1=Math.max(a.x,b.x),y1=Math.max(a.y,b.y),x2=Math.min(a.x+a.w,b.x+b.w),y2=Math.min(a.y+a.h,b.y+b.h);var i=Math.max(0,x2-x1)*Math.max(0,y2-y1);return i/(a.w*a.h+b.w*b.h-i||1);}
+function recog(v,t){
+  var W=v.videoWidth,H=v.videoHeight,m=0.4;
+  var x=Math.max(0,t.x-t.w*m),y=Math.max(0,t.y-t.h*m),w=Math.min(W-x,t.w*(1+2*m)),h=Math.min(H-y,t.h*(1+2*m));
+  var k=Math.min(5,Math.max(0.4,224/Math.max(w,h))),cc=S.crop||(S.crop=document.createElement('canvas'));cc.width=Math.max(32,Math.round(w*k));cc.height=Math.max(32,Math.round(h*k));
+  cc.getContext('2d').drawImage(v,x,y,w,h,0,0,cc.width,cc.height);
+  return faceapi.detectSingleFace(cc,new faceapi.TinyFaceDetectorOptions({inputSize:224,scoreThreshold:0.3})).withFaceLandmarks().withFaceDescriptor();
+}
+function detect(canvas,size,thr){return faceapi.detectAllFaces(canvas,new faceapi.TinyFaceDetectorOptions({inputSize:size,scoreThreshold:thr}));}
+function tileRect(W,H,i){var tw=Math.round(W*0.46),th=Math.round(H*0.62),xs=[0,Math.round((W-tw)/2),W-tw],ys=[0,H-th];return {x:xs[i%3],y:ys[Math.floor(i/3)%2],w:tw,h:th};}
+function loop(){
+  if(!S.running) return;
+  var v=S.vid; if(!v||!v.videoWidth||v.readyState<2){setTimeout(loop,100);return;}
+  var W=v.videoWidth,H=v.videoHeight,sc=Math.min(1,960/W),c=S.work||(S.work=document.createElement('canvas'));
+  c.width=Math.round(W*sc);c.height=Math.round(H*sc);c.getContext('2d').drawImage(v,0,0,c.width,c.height);
+  var boxes=[];
+  var allFound=!S.gate&&S.studs&&Object.keys(S.found).length>=S.studs.length;
+  detect(c,512,0.5).then(function(d1){
+    d1.forEach(function(d){boxes.push({x:d.box.x/sc,y:d.box.y/sc,w:d.box.width/sc,h:d.box.height/sc});});
+    if(!S.far||allFound||W<1000) return [];
+    var r=tileRect(W,H,S.tile++%6),tc=S.tcv||(S.tcv=document.createElement('canvas'));tc.width=r.w;tc.height=r.h;
+    tc.getContext('2d').drawImage(v,r.x,r.y,r.w,r.h,0,0,r.w,r.h);
+    return detect(tc,416,0.4).then(function(d2){return d2.map(function(d){return {x:d.box.x+r.x,y:d.box.y+r.y,w:d.box.width,h:d.box.height};});});
+  }).then(function(extra){
+    extra.forEach(function(b){boxes.push(b);});
+    var now=Date.now(),used={};
+    boxes.sort(function(a,b){return b.w*b.h-a.w*a.h;});
+    boxes.forEach(function(b){
+      if(b.w<MINFACE) return;
+      var best=null,bi=0.25,dupOf=false;
+      S.tracks.forEach(function(t){var o=iou(t,b);if(used[t.id]){if(o>0.3)dupOf=true;return;}if(o>bi){bi=o;best=t;}});
+      if(dupOf&&!best) return;
+      if(best){used[best.id]=1;best.x=b.x;best.y=b.y;best.w=b.w;best.h=b.h;best.seen=now;}
+      else{S.tid++;var t={id:S.tid,x:b.x,y:b.y,w:b.w,h:b.h,dx:b.x,dy:b.y,dw:b.w,dh:b.h,seen:now,lastTry:0,hits:[],uid:null,label:null,cand:null};used[t.id]=1;S.tracks.push(t);}
+    });
+    S.tracks=S.tracks.filter(function(t){return now-t.seen<(t.uid?1200:2500);});
+    var todo=S.tracks.filter(function(t){return !t.uid&&t.seen===now&&now-t.lastTry>250;}).sort(function(a,b){return b.w*b.h-a.w*a.h;}).slice(0,2);
+    return todo.reduce(function(p,t){return p.then(function(){t.lastTry=Date.now();return recog(v,t).then(function(r){
+      if(!r) return; var m=matchOne(r.descriptor);
+      var small=t.w<60;
+      if(!m.st||(small&&m.d>0.45)){t.cand=null;return;}
+      var u=m.st.uid,n=Date.now();t.hits.push({u:u,t:n});t.hits=t.hits.filter(function(h){return n-h.t<5000;});
+      var same=t.hits.filter(function(h){return h.u===u;}).length;
+      if((!small&&m.d<=TH_FAST)||same>=(small?3:2)) lock(t,m.st); else t.cand=m.st.name;
+    }).catch(function(){});});},Promise.resolve());
+  }).catch(function(){}).then(function(){ if(S.running) setTimeout(loop,0); });
+}
+function lock(t,st){
+  t.uid=st.uid;t.label=st.name;
+  if(S.gate){ if(Date.now()-(S.cool[st.uid]||0)>8000){S.cool[st.uid]=Date.now();gateSend(st);} }
+  else if(!S.found[st.uid]){S.found[st.uid]=true;onFound(st);}
+}
+function raf(){ if(!S.running)return; draw(); requestAnimationFrame(raf); }
+function draw(){
+  var v=S.vid,cv=S.cv; if(!v||!v.videoWidth)return; var dw=v.clientWidth,dh=v.clientHeight;
+  if(cv.width!==dw||cv.height!==dh){cv.width=dw;cv.height=dh;} cv.style.left=v.offsetLeft+'px';cv.style.top=v.offsetTop+'px';
+  var g=cv.getContext('2d');g.clearRect(0,0,dw,dh);var sx=dw/v.videoWidth,sy=dh/v.videoHeight,mir=S.facing==='user',now=Date.now();
+  g.lineWidth=3;g.font='bold 15px Sarabun,sans-serif';
+  S.tracks.forEach(function(t){
+    if(now-t.seen>(t.uid?900:1500))return;
+    t.dx+=(t.x-t.dx)*0.45;t.dy+=(t.y-t.dy)*0.45;t.dw+=(t.w-t.dw)*0.45;t.dh+=(t.h-t.dh)*0.45;
+    var x=t.dx*sx,y=t.dy*sy,w=t.dw*sx,h=t.dh*sy; if(mir)x=dw-x-w;
+    var col=t.uid?'#34d399':(t.cand?'#fbbf24':'rgba(255,255,255,.4)');
+    g.strokeStyle=col;g.strokeRect(x,y,w,h);
+    var txt=t.uid?t.label:(t.cand||''); if(txt){var tw=g.measureText(txt).width+12,ty=Math.max(22,y-4);g.fillStyle='rgba(2,6,23,.75)';g.fillRect(x,ty-18,tw,22);g.fillStyle=col;g.fillText(txt,x+6,ty-2);}
+  });
+}
+function onFound(st){
+  setStatus(st.uid,'มา'); beep(); showBanner(st.name+' มาแล้ว','ok');
+  var row=document.getElementById('row_'+st.no); if(row){row.style.background='rgba(16,185,129,.12)';setTimeout(function(){row.style.background='transparent';},2000);}
+  S.ov.querySelector('#fsCnt').textContent=Object.keys(S.found).length;
+  var chip=el('span','background:#064e3b;color:#a7f3d0;border:1px solid #10b981;border-radius:20px;padding:4px 10px;font-size:12.5px;font-weight:700;',FI.check+esc(st.no)+' '+esc(st.name));
+  S.ov.querySelector('#fsList').insertBefore(chip,S.ov.querySelector('#fsList').firstChild);
+}
+function showBanner(txt,tone){var b=S.banner;if(!b)return;b.style.display='block';b.style.background=tone==='ok'?'#047857':(tone==='warn'?'#b45309':'#991b1b');b.style.color='#fff';b.textContent=txt;clearTimeout(S.bt);S.bt=setTimeout(function(){b.style.display='none';},4500);}
+function gateSend(st){
+  var dir=S.dir;
+  fetch('/api/face/gate',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:st.uid,direction:dir})})
+   .then(function(r){return r.json();}).then(function(r){
+     if(!r.ok){showBanner(r.msg||'บันทึกไม่สำเร็จ','bad');beep(false);return;}
+     var w=dir==='in'?'เข้า':'ออก',tone,txt;
+     if(r.status==='dup'){tone='warn';txt=r.name+' สแกน'+w+'ไปแล้วเมื่อ '+r.time+' น.';beep(false);}
+     else{tone='ok';txt=r.name+' '+w+' เวลา '+r.time+' น.'+(dir==='out'&&r.in_time?' (เข้า '+r.in_time+' น.)':'');beep();
+       S.n++;S.ov.querySelector('#fsCnt').textContent=S.n;
+       var chip=el('span','background:'+(dir==='in'?'#064e3b':'#78350f')+';color:#fff;border-radius:20px;padding:4px 10px;font-size:12.5px;font-weight:700;',w+' '+esc(r.time)+' '+esc(st.name));
+       var L=S.ov.querySelector('#fsList');L.insertBefore(chip,L.firstChild);}
+     showBanner(txt,tone);
+   }).catch(function(){showBanner('เชื่อมต่อเซิร์ฟเวอร์ไม่ได้','bad');});
+}
+function finish(){
+  S.running=false; clearTimeout(S.bt); if(S.stream){S.stream.getTracks().forEach(function(t){t.stop();});S.stream=null;}
+  var gate=S.gate;
+  var missing=(!gate&&S.studs)?S.studs.filter(function(s){return !S.found[s.uid]&&curStatus(s.uid)==='มา';}):[];
+  if(missing.length && confirm('ยังไม่พบ '+missing.length+' คน (ที่ลงทะเบียนใบหน้าแล้ว)\nตั้งเป็น "ขาด" ให้เลยหรือไม่?\n(กด ยกเลิก = ปล่อยเป็น "มา" แล้วแก้เองทีละคน)')){
+    missing.forEach(function(s){setStatus(s.uid,'ขาด');});
+  }
+  if(S.ov){S.ov.remove();} document.body.style.overflow=''; var n=S.n; S={open:false};
+  if(gate){ if(n) location.reload(); return; }
+  alert('สแกนเสร็จแล้ว — ตรวจรายชื่อด้านล่าง แล้วกด "บันทึก" เพื่อยืนยัน\n(ฟีเจอร์สแกนหน้าอยู่ในช่วงทดสอบ ควรตรวจทานผลทุกครั้ง)');
+}
+window.FaceScan=FaceScan;
+})();
+"""
+
+FACE_LIVE_JS = r"""
+(function(){
+if(window.__faceLive)return; window.__faceLive=1;
+var box=null,retry=1500,ws=null;
+function ensure(){ if(box)return box; box=document.createElement('div'); box.style.cssText='position:fixed;top:10px;right:10px;left:10px;max-width:380px;margin-left:auto;z-index:3000;display:flex;flex-direction:column;gap:8px;pointer-events:none;font-family:Sarabun,sans-serif;'; document.body.appendChild(box); return box; }
+var actx=null;
+function ding(){try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();var o=actx.createOscillator(),g=actx.createGain();o.connect(g);g.connect(actx.destination);o.frequency.value=988;g.gain.value=0.04;o.start();setTimeout(function(){o.stop();},110);}catch(e){}}
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+var CHK='<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+function toast(d){
+  var inn=d.direction==='in',b=ensure(),t=document.createElement('div');
+  t.style.cssText='pointer-events:auto;background:#0f172a;color:#f8fafc;border-left:5px solid '+(inn?'#10b981':'#f59e0b')+';border-radius:14px;padding:11px 14px;box-shadow:0 12px 30px rgba(0,0,0,.35);display:flex;gap:10px;align-items:center;transition:all .3s;transform:translateX(30px);opacity:0;';
+  t.innerHTML='<span style="color:'+(inn?'#34d399':'#fbbf24')+';display:inline-flex;">'+CHK+'</span><div style="flex:1;min-width:0;"><div style="font-weight:800;font-size:14px;">'+esc(d.name)+' '+(inn?'มาแล้ว':'ออกจากโรงเรียน')+'</div><div style="font-size:12px;color:#94a3b8;">'+esc(d.cls)+' · '+(inn?'สแกนเข้า ':'สแกนออก ')+esc(d.time)+' น.</div></div>';
+  b.insertBefore(t,b.firstChild); requestAnimationFrame(function(){t.style.transform='none';t.style.opacity='1';});
+  while(b.children.length>4)b.removeChild(b.lastChild);
+  setTimeout(function(){t.style.opacity='0';t.style.transform='translateX(30px)';setTimeout(function(){t.remove();},350);},6000);
+  ding();
+}
+function mark(d){
+  if(!window.RC_GROUP_ID||!d.gids||d.gids.indexOf(window.RC_GROUP_ID)<0||d.direction!=='in')return;
+  document.querySelectorAll('.status-group').forEach(function(g){
+    if(g.getAttribute('data-student-name')===d.name&&g.getAttribute('data-student-no')===String(d.no)){
+      var row=g.closest('.student-row-card')||g.parentNode; var old=row.querySelector('.gate-badge'); if(old)old.remove();
+      var s=document.createElement('span'); s.className='gate-badge'; s.style.cssText='display:inline-flex;align-items:center;gap:4px;margin:0 0 8px;background:#064e3b;color:#a7f3d0;border:1px solid #10b981;border-radius:20px;padding:3px 10px;font-size:12px;font-weight:700;';
+      s.innerHTML=CHK.replace(/20/g,'13')+'มาแล้ว (สแกนเข้า '+esc(d.time)+' น.)'; row.insertBefore(s,g);
+      row.style.background='rgba(16,185,129,.12)'; setTimeout(function(){row.style.background='transparent';},2500);
+    }
+  });
+}
+function connect(){
+  var p=location.protocol==='https:'?'wss://':'ws://'; ws=new WebSocket(p+location.host+'/ws/staff');
+  ws.onopen=function(){retry=1500;};
+  ws.onmessage=function(e){var d;try{d=JSON.parse(e.data);}catch(x){return;} if(d.type!=='gate')return; mark(d); if(!window.FACE_NO_LIVE)toast(d);};
+  ws.onclose=function(e){ if(e.code===4401)return; setTimeout(connect,retry); retry=Math.min(retry*1.7,15000); };
+}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',connect);else connect();
+})();
+"""
+
+FACE_ENROLL_JS = r"""
+(function(){
+var $=function(i){return document.getElementById(i);};
+var list=[],busy=false,cam=null,camUid=null;
+function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+function status(t,bad){var n=$('feMsg');n.style.display='block';n.style.background=bad?'#fef2f2':'#ecfdf5';n.style.borderColor=bad?'#fecaca':'#a7f3d0';n.style.color=bad?'#991b1b':'#065f46';n.textContent=t;}
+function api(url,body){return fetch(url,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(function(r){return r.json();});}
+function render(){
+  var q=($('feQ').value||'').trim().toLowerCase(),c=$('feCls').value,h='',n=0,done=0;
+  list.forEach(function(s){ if(c&&s.class!==c)return; if(q&&(s.name+' '+s.no+' '+s.class).toLowerCase().indexOf(q)<0)return; n++; if(s.count)done++;
+    h+='<div class="dk-row" style="margin:0 0 8px;gap:10px;align-items:center;">'
+     +(s.photo?'<img src="'+esc(s.photo)+'" style="width:44px;height:44px;border-radius:50%;object-fit:cover;border:2px solid #e2e8f0;flex:none;">':'<div style="width:44px;height:44px;border-radius:50%;background:#f1f5f9;flex:none;"></div>')
+     +'<div class="grow"><b>'+esc(s.name)+'</b><span>'+esc(s.class)+' · เลขที่ '+esc(s.no)+'</span></div>'
+     +(s.count?'<span class="dk-pill ok">ลงทะเบียนแล้ว</span>':'<span class="dk-pill mute">ยังไม่มี</span>')
+     +'<button class="dk-btn light sm" data-up="'+esc(s.uid)+'">'+FI.image+'</button><button class="dk-btn light sm" data-cam="'+esc(s.uid)+'">'+FI.camera+'</button>'
+     +(s.count?'<button class="dk-btn light sm" data-del="'+esc(s.uid)+'">'+FI.trash+'</button>':'')+'</div>'; });
+  $('feList').innerHTML=h||'<div class="dk-empty">ไม่พบนักเรียน</div>'; $('feStat').textContent='ลงทะเบียนแล้ว '+done+' / '+n+' คน (ที่แสดง)';
+}
+function reload(){return fetch('/api/face/enroll_list',{credentials:'same-origin'}).then(function(r){return r.json();}).then(function(d){list=d.students;var cs={};list.forEach(function(s){cs[s.class]=1;});$('feCls').innerHTML='<option value="">ทุกห้อง</option>'+Object.keys(cs).sort().map(function(c){return '<option>'+esc(c)+'</option>';}).join('');render();});}
+function loadImg(src){return new Promise(function(res,rej){var i=new Image();i.onload=function(){res(i);};i.onerror=rej;i.src=src;});}
+function one(input){return faceapi.detectAllFaces(input,new faceapi.SsdMobilenetv1Options({minConfidence:0.5})).withFaceLandmarks().withFaceDescriptors().then(function(r){
+  if(r.length!==1) return null; if(r[0].detection.box.width<60) return null; return Array.prototype.slice.call(r[0].descriptor).map(function(x){return Math.round(x*10000)/10000;});});}
+function batch(){
+  if(busy)return; var todo=list.filter(function(s){return !s.count&&s.photo;}); if(!todo.length){status('ไม่มีนักเรียนที่มีรูปโปรไฟล์และยังไม่ลงทะเบียน');return;}
+  if(!confirm('สร้างข้อมูลใบหน้าจากรูปโปรไฟล์ '+todo.length+' คน?'))return; busy=true; var ok=0,fail=[];
+  status('กำลังโหลดโมเดล...'); FaceNets.load().then(function(){
+    var i=0; (function next(){ if(i>=todo.length){busy=false;status('เสร็จ: สำเร็จ '+ok+' คน, ไม่สำเร็จ '+fail.length+' คน'+(fail.length?' (รูปไม่ชัด/มีหลายหน้า/ไม่เจอหน้า — ให้กดปุ่มกล้องถ่ายใหม่): '+fail.slice(0,8).join(', '):''),fail.length>0);reload();return;}
+      var s=todo[i++]; status('กำลังประมวลผล '+i+'/'+todo.length+' : '+s.name);
+      loadImg(s.photo).then(one).then(function(d){ if(!d){fail.push(s.name);return;} return api('/api/face/enroll',{uid:s.uid,descriptors:[d],mode:'replace',source:'photo'}).then(function(r){if(r.ok)ok++;else fail.push(s.name);}); }).catch(function(){fail.push(s.name);}).then(next); })();
+  }).catch(function(e){busy=false;status(e.message||'โหลดโมเดลไม่สำเร็จ',true);});
+}
+function fileDesc(f){var u=URL.createObjectURL(f);return loadImg(u).then(one).then(function(d){URL.revokeObjectURL(u);return d;}).catch(function(){URL.revokeObjectURL(u);return null;});}
+var upUid=null;
+function uploadFor(uid,files){
+  if(busy||!files.length)return; busy=true; var s=list.filter(function(x){return x.uid===uid;})[0],got=[],i=0;
+  status('กำลังโหลดโมเดล...'); FaceNets.load().then(function(){(function next(){
+    if(i>=files.length){busy=false; if(!got.length){status('ไม่พบใบหน้าที่ใช้ได้ในรูป (ต้องมีคนเดียว หน้าชัด)',true);return;}
+      api('/api/face/enroll',{uid:uid,descriptors:got.slice(0,6),mode:'replace',source:'upload'}).then(function(r){status(r.ok?'บันทึกใบหน้า '+s.name+' แล้ว ('+got.length+'/'+files.length+' รูปใช้ได้)':(r.msg||'บันทึกไม่สำเร็จ'),!r.ok);reload();}); return;}
+    status('กำลังประมวลผล '+(i+1)+'/'+files.length); fileDesc(files[i++]).then(function(d){if(d)got.push(d);next();}); })();
+  }).catch(function(e){busy=false;status(e.message||'โหลดโมเดลไม่สำเร็จ',true);});
+}
+function norm(t){return String(t||'').toLowerCase().replace(/\.[a-z0-9]+$/,'').replace(/[\s_\-.,]+/g,'');}
+function stripN(t){return String(t||'').toLowerCase().replace(/\.[a-z0-9]+$/,'').replace(/([^\d\s_\-])[\s_\-]*\d{1,2}$/,'$1').replace(/[\s_\-.,]+/g,'');}
+function bulkUpload(files){
+  if(busy||!files.length)return; var idx={};
+  list.forEach(function(s){ [s.name,s.name+s.no,s.sid].forEach(function(k){if(k)idx[norm(k)]=s;}); });
+  var groups={},unmatched=[];
+  Array.prototype.forEach.call(files,function(f){ var raw=f.name.replace(/\.[a-z0-9]+$/i,''); var s=idx[norm(raw)]||idx[stripN(raw)]; if(!s){unmatched.push(f.name);return;} (groups[s.uid]=groups[s.uid]||[]).push(f); });
+  var uids=Object.keys(groups); if(!uids.length){status('ชื่อไฟล์ไม่ตรงกับนักเรียนคนใดเลย — ใช้ "ชื่อ สกุล" หรือรหัสนักเรียน',true);return;}
+  busy=true; var ok=0,fail=[],i=0;
+  status('กำลังโหลดโมเดล...'); FaceNets.load().then(function(){(function next(){
+    if(i>=uids.length){busy=false;status('เสร็จ: สำเร็จ '+ok+' คน, ไม่สำเร็จ '+fail.length+(fail.length?' ('+fail.slice(0,6).join(', ')+')':'')+(unmatched.length?' · ชื่อไฟล์ไม่ตรง '+unmatched.length+' ไฟล์: '+unmatched.slice(0,4).join(', '):''),fail.length>0||unmatched.length>0);reload();return;}
+    var uid=uids[i++],s=list.filter(function(x){return x.uid===uid;})[0]; status('กำลังประมวลผล '+i+'/'+uids.length+' : '+s.name);
+    var got=[],j=0; (function nf(){ if(j>=groups[uid].length){ if(!got.length){fail.push(s.name);next();return;} api('/api/face/enroll',{uid:uid,descriptors:got.slice(0,6),mode:'replace',source:'upload'}).then(function(r){if(r.ok)ok++;else fail.push(s.name);}).then(next); return;} fileDesc(groups[uid][j++]).then(function(d){if(d)got.push(d);nf();}); })();
+  })();}).catch(function(e){busy=false;status(e.message||'โหลดโมเดลไม่สำเร็จ',true);});
+}
+function openCam(uid){
+  var s=list.filter(function(x){return x.uid===uid;})[0]; camUid=uid; $('camBox').style.display='block'; $('camName').textContent=s.name+' ('+s.class+')'; status('กำลังเตรียมกล้อง...');
+  FaceNets.load().then(function(){return navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:1280},height:{ideal:720}},audio:false});}).then(function(st){cam=st;$('camVid').srcObject=st;$('camVid').play();status('ให้นักเรียนมองตรงกล้อง แล้วกด "ถ่าย 3 ภาพ"');}).catch(function(e){status('เปิดกล้องไม่ได้ (ต้องใช้ HTTPS และอนุญาตกล้อง)',true);});
+}
+function closeCam(){ if(cam){cam.getTracks().forEach(function(t){t.stop();});cam=null;} $('camBox').style.display='none'; camUid=null; }
+function shoot(){
+  if(!cam||busy)return; busy=true; var got=[],tries=0,v=$('camVid');
+  (function snap(){ if(got.length>=3||tries>=10){busy=false; if(got.length<2){status('จับใบหน้าได้ไม่พอ ลองใหม่ (หน้าตรง แสงพอ มีแค่ 1 คนในภาพ)',true);return;}
+      api('/api/face/enroll',{uid:camUid,descriptors:got,mode:'replace',source:'camera'}).then(function(r){ if(r.ok){status('บันทึกใบหน้าแล้ว ('+got.length+' ภาพ)');closeCam();reload();} else status(r.msg||'บันทึกไม่สำเร็จ',true);}); return; }
+    tries++; var c=document.createElement('canvas'); c.width=v.videoWidth; c.height=v.videoHeight; c.getContext('2d').drawImage(v,0,0);
+    one(c).then(function(d){ if(d)got.push(d); setTimeout(snap,350); }).catch(function(){setTimeout(snap,350);}); })();
+}
+document.addEventListener('click',function(e){
+  var b=e.target.closest&&e.target.closest('button'); if(!b)return;
+  if(b.dataset.cam) openCam(b.dataset.cam);
+  else if(b.dataset.up){ upUid=b.dataset.up; $('feFile').value=''; $('feFile').click(); }
+  else if(b.dataset.del){ if(confirm('ลบข้อมูลใบหน้าของนักเรียนคนนี้?')) api('/api/face/delete',{uid:b.dataset.del}).then(function(r){status(r.ok?'ลบแล้ว':'ลบไม่สำเร็จ',!r.ok);reload();}); }
+});
+$('feBulkBtn').onclick=function(){$('feBulk').value='';$('feBulk').click();};
+$('feFile').onchange=function(){uploadFor(upUid,Array.prototype.slice.call(this.files));};
+$('feBulk').onchange=function(){bulkUpload(Array.prototype.slice.call(this.files));};
+$('feBatch').onclick=batch; $('camShoot').onclick=shoot; $('camClose').onclick=closeCam; $('feQ').oninput=render; $('feCls').onchange=render;
+reload();
+})();
+"""
+
+@app.get("/facescan.js")
+async def face_scan_js():
+    return Response(content=_face_cfg_js() + FACE_SCAN_JS, media_type="application/javascript", headers={"Cache-Control": "no-cache"})
+
+@app.get("/facelive.js")
+async def face_live_js():
+    return Response(content=FACE_LIVE_JS, media_type="application/javascript", headers={"Cache-Control": "no-cache"})
+
+# ── ช่องแจ้งเตือนเรียลไทม์เฉพาะครู/บุคลากร (กรองฝั่งเซิร์ฟเวอร์ ไม่ส่งชื่อนักเรียนให้ผู้ที่ไม่เกี่ยวข้อง) ──
+STAFF_CONNS: dict = {}
+
+@app.websocket("/ws/staff")
+async def websocket_staff(websocket: WebSocket):
+    await websocket.accept()
+    access = get_access(websocket.cookies.get("user_session"))
+    if not access["authenticated"] or access["role"] == "student":
+        await websocket.close(code=4401); return
+    STAFF_CONNS[websocket] = access
+    try:
+        while True:
+            await websocket.receive_text()
+    except Exception:
+        pass
+    finally:
+        STAFF_CONNS.pop(websocket, None)
+
+def _student_teacher_scope(uid: str) -> tuple:
+    """(ชุด username ครูที่เกี่ยวข้องกับนักเรียนคนนี้, [group_id])"""
+    gids, users = [], set()
+    conn = sqlite3.connect('attendance_pro.db')
+    try:
+        gids = [r[0] for r in conn.execute("SELECT group_id FROM group_assignments WHERE student_uid=?", (uid,)).fetchall()]
+        for g in gids:
+            r = conn.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (g,)).fetchone()
+            if r and r[0]: users.add(r[0])
+            users.update(x[0] for x in conn.execute("SELECT teacher_username FROM group_teachers WHERE group_id=?", (g,)).fetchall())
+            users.update(x[0] for x in conn.execute("SELECT head_username FROM subject_head_groups WHERE group_id=?", (g,)).fetchall())
+    except sqlite3.Error:
+        pass
+    finally:
+        conn.close()
+    return users, gids
+
+async def staff_push_gate(st: dict, direction: str, hhmm: str):
+    users, gids = _student_teacher_scope(st["uid"])
+    msg = _kxjson.dumps({"type": "gate", "name": st["name"], "no": st["no"], "cls": st["class"], "direction": direction, "time": hhmm, "gids": gids})
+    for ws, acc in list(STAFF_CONNS.items()):
+        if acc["role"] == "admin" or acc["username"] in users:
+            try: await ws.send_text(msg)
+            except Exception: STAFF_CONNS.pop(ws, None)
+
+@app.get("/faceenroll.js")
+async def face_enroll_js():
+    return Response(content=FACE_ENROLL_JS, media_type="application/javascript", headers={"Cache-Control": "no-cache"})
+
+def _face_load_map(uids=None) -> dict:
+    conn = sqlite3.connect('attendance_pro.db')
+    try:
+        rows = conn.execute("SELECT uid, descriptors FROM face_descriptors").fetchall()
+    finally:
+        conn.close()
+    out = {}
+    for uid, d in rows:
+        if uids is not None and uid not in uids: continue
+        try: out[uid] = _kxjson.loads(d)
+        except Exception: pass
+    return out
+
+@app.get("/api/face/descriptors/{group_id}")
+async def api_face_descriptors(group_id: int, user_session: Optional[str] = Cookie(None)):
+    access = get_access(user_session)
+    if not access["authenticated"] or access["role"] == "student" or not can_face_scan(access):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    if access["role"] != "admin" and not can_rollcall_group(access["username"], group_id):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    conn = sqlite3.connect('attendance_pro.db')
+    try:
+        uids = {r[0] for r in conn.execute("SELECT student_uid FROM group_assignments WHERE group_id=?", (group_id,)).fetchall()}
+    finally:
+        conn.close()
+    fmap = _face_load_map(uids)
+    studs = [{"uid": s["uid"], "name": s["name"], "no": s["no"], "class": s["class"], "descs": fmap.get(s["uid"], [])}
+             for s in get_sorted_master_students() if s["uid"] in uids]
+    return JSONResponse({"students": studs}, headers={"Cache-Control": "no-store"})
+
+@app.get("/api/face/enroll_list")
+async def api_face_enroll_list(user_session: Optional[str] = Cookie(None)):
+    access = gate_perm(user_session, can_manage_face_data)
+    if not access: return JSONResponse({"error": "forbidden"}, status_code=403)
+    conn = sqlite3.connect('attendance_pro.db')
+    try:
+        photos = dict(conn.execute("SELECT uid, photo_url FROM student_accounts").fetchall())
+        sids = dict(conn.execute("SELECT uid, student_id FROM student_accounts").fetchall())
+        counts = {r[0]: len(_kxjson.loads(r[1] or "[]")) for r in conn.execute("SELECT uid, descriptors FROM face_descriptors").fetchall()}
+    finally:
+        conn.close()
+    studs = [{"uid": s["uid"], "name": s["name"], "no": s["no"], "class": s["class"], "photo": photos.get(s["uid"]) or "", "sid": sids.get(s["uid"]) or "", "count": counts.get(s["uid"], 0)}
+             for s in get_sorted_master_students() if in_discipline_scope(access, s["class"]) or access["role"] not in ("level_head",)]
+    return JSONResponse({"students": studs}, headers={"Cache-Control": "no-store"})
+
+@app.post("/api/face/enroll")
+async def api_face_enroll(request: Request, user_session: Optional[str] = Cookie(None)):
+    access = gate_perm(user_session, can_manage_face_data)
+    if not access: return JSONResponse({"ok": False, "msg": "forbidden"}, status_code=403)
+    try: data = await request.json()
+    except Exception: return JSONResponse({"ok": False, "msg": "bad json"}, status_code=400)
+    uid = str(data.get("uid", ""))
+    descs = data.get("descriptors")
+    if not isinstance(descs, list) or not (1 <= len(descs) <= 6): return JSONResponse({"ok": False, "msg": "ข้อมูลไม่ถูกต้อง"})
+    clean = []
+    for d in descs:
+        if not isinstance(d, list) or len(d) != 128: return JSONResponse({"ok": False, "msg": "ข้อมูลไม่ถูกต้อง"})
+        try: clean.append([round(float(x), 4) for x in d])
+        except (TypeError, ValueError): return JSONResponse({"ok": False, "msg": "ข้อมูลไม่ถูกต้อง"})
+    target = next((s for s in get_sorted_master_students() if s["uid"] == uid), None)
+    if not target: return JSONResponse({"ok": False, "msg": "ไม่พบนักเรียน"})
+    if access["role"] == "level_head" and not in_discipline_scope(access, target["class"]):
+        return JSONResponse({"ok": False, "msg": "นอกระดับชั้นที่รับผิดชอบ"}, status_code=403)
+    conn = sqlite3.connect('attendance_pro.db')
+    if data.get("mode") == "append":
+        old = conn.execute("SELECT descriptors FROM face_descriptors WHERE uid=?", (uid,)).fetchone()
+        try: prev = _kxjson.loads(old[0]) if old and old[0] else []
+        except Exception: prev = []
+        clean = (prev + clean)[-6:]
+    conn.execute("""INSERT INTO face_descriptors (uid, descriptors, source, updated_by, updated_at) VALUES (?,?,?,?,?)
+        ON CONFLICT(uid) DO UPDATE SET descriptors=excluded.descriptors, source=excluded.source, updated_by=excluded.updated_by, updated_at=excluded.updated_at""",
+        (uid, _kxjson.dumps(clean), str(data.get("source", ""))[:20], access["username"], datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    conn.commit(); conn.close()
+    add_log(f"{access['fullname']} ลงทะเบียนใบหน้า {target['name']} ({data.get('source', '')})")
+    return JSONResponse({"ok": True})
+
+@app.post("/api/face/delete")
+async def api_face_delete(request: Request, user_session: Optional[str] = Cookie(None)):
+    access = gate_perm(user_session, can_manage_face_data)
+    if not access: return JSONResponse({"ok": False}, status_code=403)
+    try: uid = str((await request.json()).get("uid", ""))
+    except Exception: return JSONResponse({"ok": False}, status_code=400)
+    target = next((s for s in get_sorted_master_students() if s["uid"] == uid), None)
+    if access["role"] == "level_head" and (not target or not in_discipline_scope(access, target["class"])):
+        return JSONResponse({"ok": False}, status_code=403)
+    conn = sqlite3.connect('attendance_pro.db'); conn.execute("DELETE FROM face_descriptors WHERE uid=?", (uid,)); conn.commit(); conn.close()
+    add_log(f"{access['fullname']} ลบข้อมูลใบหน้า {uid}")
+    return JSONResponse({"ok": True})
+
+@app.get("/admin/face_enroll", response_class=HTMLResponse)
+async def admin_face_enroll_page(user_session: Optional[str] = Cookie(None)):
+    access = gate_perm(user_session, can_manage_face_data)
+    if not access: return RedirectResponse(url="/login", status_code=303)
+    back = "/admin/dashboard" if access["role"] == "admin" else staff_home_url(access)
+    body = f"""<div class="dk-note">{ic('flask', 16)} <b>ฟีเจอร์สแกนหน้า — อยู่ในช่วงทดสอบ</b><br>
+        ระบบเก็บเฉพาะ "เวกเตอร์ใบหน้า" (ตัวเลข 128 ค่า) ไม่เก็บวิดีโอ · ควรได้รับความยินยอมจากนักเรียน/ผู้ปกครองก่อนลงทะเบียนใบหน้า<br>
+        วิธีที่แม่นที่สุดคือกดปุ่มกล้อง ({ic('camera', 14)}) ถ่ายหน้าตรงรายคน (หน้าตรง แสงพอ ไม่สวมหน้ากาก/หมวก) · หรือสร้างอัตโนมัติจากรูปโปรไฟล์</div>
+    <div id="feMsg" class="dk-note" style="display:none;"></div>
+    <div class="dk-card"><div class="dk-filter" style="grid-template-columns:1fr 1fr;">
+        <div><label class="dk-label">ค้นหา</label><input id="feQ" class="dk-input" placeholder="ชื่อ / เลขที่"></div>
+        <div><label class="dk-label">ห้อง</label><select id="feCls" class="dk-input"></select></div></div>
+        <div id="feStat" style="font-size:13px;color:#64748b;margin:10px 0;"></div>
+        <button id="feBatch" class="dk-btn green block" style="padding:12px;margin-bottom:8px;">{ic('star', 16)} สร้างจากรูปโปรไฟล์ (เฉพาะคนที่ยังไม่มี)</button>
+        <button id="feBulkBtn" class="dk-btn light block" style="padding:12px;margin-bottom:4px;">{ic('upload', 16)} อัปโหลดรูปหลายคนพร้อมกัน</button>
+        <div style="font-size:12px;color:#64748b;margin-bottom:12px;">ตั้งชื่อไฟล์เป็น <b>ชื่อ สกุล</b> หรือ <b>รหัสนักเรียน</b> เช่น "สุชาดา สุดตา.jpg" · หนึ่งคนอัปได้หลายรูป (ชื่อ สกุล 1.jpg, 2.jpg) · รูปควรเห็นหน้าตรง มีคนเดียว</div>
+        <input id="feFile" type="file" accept="image/*" multiple style="display:none;"><input id="feBulk" type="file" accept="image/*" multiple style="display:none;">
+        <div id="feList"></div></div>
+    <div id="camBox" style="display:none;position:fixed;inset:0;z-index:1500;background:rgba(2,6,23,.92);padding:16px;overflow:auto;">
+        <div style="max-width:480px;margin:0 auto;color:#fff;text-align:center;"><h3 id="camName" style="margin:6px 0 10px;"></h3>
+        <video id="camVid" playsinline muted autoplay style="width:100%;border-radius:14px;background:#000;transform:scaleX(-1);"></video>
+        <div style="display:flex;gap:8px;margin-top:12px;"><button id="camShoot" class="dk-btn green block" style="padding:13px;">{ic('camera', 16)} ถ่าย 3 ภาพ</button><button id="camClose" class="dk-btn light block" style="padding:13px;">ปิด</button></div></div></div>"""
+    extra = f'<script>{_face_cfg_js()}</script><script src="/facescan.js"></script><script src="/faceenroll.js"></script>'
+    return dk_page("ลงทะเบียนใบหน้า", "สำหรับระบบสแกนหน้าเช็กชื่อ (ทดลอง)", body, back, extra=extra, icon=ic('scan-face', 22), theme="dk-teal")
+
+
+
+@app.get("/api/face/descriptors_all")
+async def api_face_descriptors_all(user_session: Optional[str] = Cookie(None)):
+    access = gate_perm(user_session, can_face_gate)
+    if not access: return JSONResponse({"error": "forbidden"}, status_code=403)
+    fmap = _face_load_map()
+    studs = [{"uid": s["uid"], "name": s["name"], "no": s["no"], "class": s["class"], "descs": fmap.get(s["uid"], [])}
+             for s in get_sorted_master_students() if s["uid"] in fmap]
+    return JSONResponse({"students": studs}, headers={"Cache-Control": "no-store"})
+
+@app.post("/api/face/gate")
+async def api_face_gate(request: Request, user_session: Optional[str] = Cookie(None)):
+    access = gate_perm(user_session, can_face_gate)
+    if not access: return JSONResponse({"ok": False, "msg": "ไม่มีสิทธิ์"}, status_code=403)
+    try: data = await request.json()
+    except Exception: return JSONResponse({"ok": False, "msg": "bad json"}, status_code=400)
+    uid, direction = str(data.get("uid", "")), data.get("direction")
+    if direction not in ("in", "out"): return JSONResponse({"ok": False, "msg": "ทิศทางไม่ถูกต้อง"})
+    st = next((x for x in get_sorted_master_students() if x["uid"] == uid), None)
+    if not st: return JSONResponse({"ok": False, "msg": "ไม่พบนักเรียน"})
+    now = datetime.now(); today, hhmm = now.strftime("%Y-%m-%d"), now.strftime("%H:%M")
+    conn = sqlite3.connect('attendance_pro.db')
+    try:
+        prev = conn.execute("SELECT time FROM face_gate_logs WHERE uid=? AND date=? AND direction=? ORDER BY id LIMIT 1", (uid, today, direction)).fetchone()
+        if prev:
+            return JSONResponse({"ok": True, "status": "dup", "name": st["name"], "time": prev[0]})
+        in_row = conn.execute("SELECT time FROM face_gate_logs WHERE uid=? AND date=? AND direction='in' ORDER BY id LIMIT 1", (uid, today)).fetchone() if direction == "out" else None
+        conn.execute("INSERT INTO face_gate_logs (uid, name, classroom, direction, date, time, scanned_by) VALUES (?,?,?,?,?,?,?)",
+                     (uid, st["name"], st["class"], direction, today, now.strftime("%H:%M:%S")[:5], access["username"]))
+        conn.commit()
+    finally:
+        conn.close()
+    try: await staff_push_gate(st, direction, hhmm)
+    except Exception as e: print(f"staff push error: {e}")
+    return JSONResponse({"ok": True, "status": "ok", "name": st["name"], "time": hhmm, "in_time": in_row[0] if in_row else ""})
+
+@app.get("/app/facegate", response_class=HTMLResponse)
+async def face_gate_page(date: Optional[str] = None, user_session: Optional[str] = Cookie(None)):
+    access = gate_perm(user_session, can_face_gate)
+    if not access: return RedirectResponse(url="/login", status_code=303)
+    day = date if date and len(date) == 10 else datetime.now().strftime("%Y-%m-%d")
+    conn = sqlite3.connect('attendance_pro.db')
+    try:
+        rows = conn.execute("SELECT name, classroom, direction, time FROM face_gate_logs WHERE date=? ORDER BY id DESC", (day,)).fetchall()
+    finally:
+        conn.close()
+    n_in = sum(1 for r in rows if r[2] == "in"); n_out = sum(1 for r in rows if r[2] == "out")
+    items = "".join(
+        f'<div class="dk-row" style="margin:0 0 8px;"><div class="grow"><b>{_he(r[0])}</b><span>{_he(r[1])}</span></div>'
+        f'<span class="dk-pill {"ok" if r[2] == "in" else "mute"}">{"เข้า" if r[2] == "in" else "ออก"} {_he(r[3])} น.</span></div>' for r in rows)
+    back = "/admin/dashboard" if access["role"] == "admin" else staff_home_url(access)
+    body = (f'<div class="dk-note">{ic("flask", 16)} <b>ฟีเจอร์ทดลอง</b> — สแกนใบหน้านักเรียนตอนเข้า/ออก ระบบบันทึกเวลาให้อัตโนมัติ ถ้าสแกนซ้ำจะแจ้งว่าสแกนไปตอนกี่โมงแล้ว</div>'
+            f'<div class="dk-stats">{dk_stat("เข้าแล้ว", n_in, ic("check", 20), "green")}{dk_stat("ออกแล้ว", n_out, ic("log-out", 20), "amber")}</div>'
+            f'<button id="gateOpen" class="dk-btn green block" style="padding:16px;margin-bottom:14px;font-size:15px;">{ic("scan-face", 20)} เปิดกล้องสแกนหน้าเข้า-ออก</button>'
+            f'<div class="dk-card"><div class="dk-card-title">บันทึกวันที่ {_he(day)}<small>{len(rows)} รายการ</small></div>'
+            f'<form method="get" style="margin-bottom:12px;"><input class="dk-input" type="date" name="date" value="{_he(day, quote=True)}" onchange="this.form.submit()"></form>'
+            f'{items or dk_empty(ic("scan-face", 32), "ยังไม่มีการสแกนในวันนี้")}</div>')
+    extra = f'<script>{_face_cfg_js()}</script><script src="/facescan.js"></script><script>document.getElementById("gateOpen").onclick=function(){{FaceScan.open({{gate:true}});}};</script>'
+    return dk_page("สแกนหน้าเข้า-ออก", "ทดลองใช้งาน", body, back, extra=extra, icon=ic("scan-face", 22), theme="dk-teal", head_extra="<script>window.FACE_NO_LIVE=1;</script>")
 
 # ==========================================
 # 🎖️ ระบบคะแนนความประพฤติ
@@ -7023,6 +7661,13 @@ def init_db():
         pass  # คอลัมน์มีอยู่แล้ว
     cursor.execute("UPDATE leave_requests SET leave_type='อื่นๆ' WHERE leave_type IS NULL OR leave_type=''")
     # 🔐 ตารางสิทธิ์แบบ Role-based ที่แก้ไขได้จากหน้าแอดมิน (ไม่ต้องแก้โค้ด)
+    cursor.execute('''CREATE TABLE IF NOT EXISTS face_gate_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, uid TEXT, name TEXT, classroom TEXT, direction TEXT, date TEXT, time TEXT, scanned_by TEXT
+    )''')
+    cursor.execute('''CREATE INDEX IF NOT EXISTS idx_face_gate ON face_gate_logs (date, uid, direction)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS face_descriptors (
+        uid TEXT PRIMARY KEY, descriptors TEXT, source TEXT, updated_by TEXT, updated_at TEXT
+    )''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS role_permissions (
         role TEXT,
         perm_key TEXT,
@@ -7385,6 +8030,7 @@ def dk_page(title: str, subtitle: str, body: str, back_url: Optional[str], actio
 </div></div>
 <div class="dk-wrap">{body}</div>
 {extra}
+<script src="/facelive.js"></script>
 </body></html>"""
 
 
