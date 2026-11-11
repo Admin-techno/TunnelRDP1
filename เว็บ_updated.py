@@ -257,610 +257,6 @@ async def websocket_notify_endpoint(websocket: WebSocket):
         manager.disconnect(websocket)
 
 # ==========================================
-# 🧩 KX LAYER — ไอคอน SVG ชุดเดียวทั้งระบบ + UI ของเราเอง (ยืนยัน/ปฏิทิน/ตัวเลือก/หน้าโหลดทันที)
-#   • KX_ICONS  : ไอคอนเส้น 24x24 (วาดเอง) ใช้ผ่าน ic("ชื่อ") ฝั่งเซิร์ฟเวอร์ และแทน emoji อัตโนมัติฝั่งเบราว์เซอร์
-#   • /kx.js    : สคริปต์กลาง (แคชได้) ถูกฝังใน STYLE_HEADER ทุกหน้า
-# ==========================================
-import json as _kxjson
-import hashlib as _kxhash
-
-_P = {}  # ชื่อ -> markup ภายใน <svg viewBox="0 0 24 24">
-
-_P["home"] = '<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>'
-_P["user"] = '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>'
-_P["users"] = '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>'
-_P["user-check"] = '<path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><polyline points="17 11 19 13 23 9"/>'
-_P["user-plus"] = '<path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/>'
-_P["check"] = '<polyline points="20 6 9 17 4 12"/>'
-_P["check-circle"] = '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>'
-_P["x"] = '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>'
-_P["x-circle"] = '<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>'
-_P["octagon-x"] = '<polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>'
-_P["alert-triangle"] = '<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>'
-_P["alert-circle"] = '<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>'
-_P["info"] = '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>'
-_P["help"] = '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>'
-_P["calendar"] = '<rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>'
-_P["clock"] = '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>'
-_P["hourglass"] = '<path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.17a2 2 0 0 0-.59-1.42L12 12l-4.41 4.41A2 2 0 0 0 7 17.83V22"/><path d="M7 2v4.17a2 2 0 0 0 .59 1.42L12 12l4.41-4.41A2 2 0 0 0 17 6.17V2"/>'
-_P["pause"] = '<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>'
-_P["search"] = '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>'
-_P["plus"] = '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>'
-_P["minus"] = '<line x1="5" y1="12" x2="19" y2="12"/>'
-_P["trash"] = '<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>'
-_P["edit"] = '<path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>'
-_P["save"] = '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>'
-_P["file-text"] = '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>'
-_P["clipboard-check"] = '<path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><polyline points="9 14 11 16 15 12"/>'
-_P["bar-chart"] = '<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>'
-_P["trending-up"] = '<polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/>'
-_P["activity"] = '<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>'
-_P["sliders"] = '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>'
-_P["settings"] = '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>'
-_P["lock"] = '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>'
-_P["unlock"] = '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/>'
-_P["key"] = '<path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>'
-_P["shield"] = '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>'
-_P["bell"] = '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>'
-_P["megaphone"] = '<path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/>'
-_P["book"] = '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>'
-_P["book-open"] = '<path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>'
-_P["credit-card"] = '<rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/>'
-_P["eye"] = '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>'
-_P["eye-off"] = '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>'
-_P["download"] = '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>'
-_P["upload"] = '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>'
-_P["star"] = '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>'
-_P["award"] = '<circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/>'
-_P["trophy"] = '<path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2z"/>'
-_P["crown"] = '<path d="M2 18l2-11 5 5 3-8 3 8 5-5 2 11z"/><line x1="2" y1="21" x2="22" y2="21"/>'
-_P["map-pin"] = '<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>'
-_P["map"] = '<polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/>'
-_P["compass"] = '<circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/>'
-_P["smartphone"] = '<rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/>'
-_P["mail"] = '<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>'
-_P["image"] = '<rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>'
-_P["layers"] = '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>'
-_P["list"] = '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>'
-_P["refresh"] = '<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>'
-_P["arrow-right"] = '<line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>'
-_P["arrow-left"] = '<line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/>'
-_P["corner-left"] = '<polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/>'
-_P["chevron-down"] = '<polyline points="6 9 12 15 18 9"/>'
-_P["chevron-left"] = '<polyline points="15 18 9 12 15 6"/>'
-_P["chevron-right"] = '<polyline points="9 18 15 12 9 6"/>'
-_P["zap"] = '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>'
-_P["flag"] = '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/>'
-_P["tag"] = '<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/>'
-_P["target"] = '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>'
-_P["scissors"] = '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/>'
-_P["id-card"] = '<rect x="2" y="5" width="20" height="14" rx="2"/><circle cx="8.5" cy="11" r="2.2"/><path d="M5 16c.4-1.6 1.8-2.4 3.5-2.4S11.6 14.4 12 16"/><line x1="14" y1="10" x2="19" y2="10"/><line x1="14" y1="14" x2="18" y2="14"/>'
-_P["shirt"] = '<path d="M20.38 3.46L16 2a4 4 0 0 1-8 0L3.62 3.46a2 2 0 0 0-1.34 2.23l.58 3.47a1 1 0 0 0 .99.84H6v10c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V10h2.15a1 1 0 0 0 .99-.84l.58-3.47a2 2 0 0 0-1.34-2.23z"/>'
-_P["grad-cap"] = '<path d="M22 10L12 5 2 10l10 5 10-5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/><line x1="22" y1="10" x2="22" y2="16"/>'
-_P["school"] = '<path d="M3 21h18"/><path d="M5 21V8l7-5 7 5v13"/><path d="M9 21v-6h6v6"/><circle cx="12" cy="10" r="1.2"/>'
-_P["building"] = '<rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 22v-4h6v4"/><line x1="8" y1="6" x2="8.01" y2="6"/><line x1="12" y1="6" x2="12.01" y2="6"/><line x1="16" y1="6" x2="16.01" y2="6"/><line x1="8" y1="10" x2="8.01" y2="10"/><line x1="12" y1="10" x2="12.01" y2="10"/><line x1="16" y1="10" x2="16.01" y2="10"/>'
-_P["backpack"] = '<path d="M9 4a3 3 0 0 1 6 0"/><path d="M6 8a3 3 0 0 1 3-3h6a3 3 0 0 1 3 3v12a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2z"/><path d="M9 14h6v4H9z"/>'
-_P["database"] = '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>'
-_P["monitor"] = '<rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>'
-_P["log-out"] = '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>'
-_P["folder"] = '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>'
-_P["globe"] = '<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>'
-_P["wifi"] = '<path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/>'
-_P["signal"] = '<line x1="4" y1="20" x2="4" y2="16"/><line x1="9" y1="20" x2="9" y2="12"/><line x1="14" y1="20" x2="14" y2="8"/><line x1="19" y1="20" x2="19" y2="4"/>'
-_P["heart"] = '<path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>'
-_P["thermometer"] = '<path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z"/>'
-_P["send"] = '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>'
-_P["dollar"] = '<line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>'
-_P["rocket"] = '<path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="M12 15l-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/>'
-_P["wrench"] = '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>'
-_P["flask"] = '<path d="M9 3h6"/><path d="M10 3v6L4.5 19a1.5 1.5 0 0 0 1.3 2.2h12.4a1.5 1.5 0 0 0 1.3-2.2L14 9V3"/><path d="M7.5 15h9"/>'
-_P["bot"] = '<rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="12" cy="3.5" r="1"/><circle cx="9" cy="14" r="1"/><circle cx="15" cy="14" r="1"/>'
-_P["palette"] = '<circle cx="13.5" cy="6.5" r="1"/><circle cx="17.5" cy="10.5" r="1"/><circle cx="8.5" cy="7.5" r="1"/><circle cx="6.5" cy="12.5" r="1"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.93 0 1.5-.67 1.5-1.5 0-.43-.19-.82-.43-1.12-.23-.29-.4-.65-.4-1.04 0-.83.67-1.5 1.5-1.5H16c3.31 0 6-2.69 6-6 0-4.97-4.5-9-10-9z"/>'
-_P["puzzle"] = '<path d="M19.4 11H18V7a2 2 0 0 0-2-2h-4V3.6a2.6 2.6 0 0 0-5.2 0V5H4a2 2 0 0 0-2 2v4h1.4a2.6 2.6 0 0 1 0 5.2H2V20a2 2 0 0 0 2 2h4v-1.4a2.6 2.6 0 0 1 5.2 0V22h4a2 2 0 0 0 2-2v-4h1.4a2.6 2.6 0 0 0 0-5.2z"/>'
-_P["calculator"] = '<rect x="4" y="2" width="16" height="20" rx="2"/><line x1="8" y1="6" x2="16" y2="6"/><line x1="8" y1="11" x2="8.01" y2="11"/><line x1="12" y1="11" x2="12.01" y2="11"/><line x1="16" y1="11" x2="16.01" y2="11"/><line x1="8" y1="15" x2="8.01" y2="15"/><line x1="12" y1="15" x2="12.01" y2="15"/><line x1="16" y1="15" x2="16.01" y2="15"/>'
-_P["receipt"] = '<path d="M5 3v18l2-1.5L9 21l2-1.5 2 1.5 2-1.5 2 1.5V3z"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="9" y1="12" x2="15" y2="12"/>'
-_P["inbox"] = '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>'
-_P["lightbulb"] = '<path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.2 1 2V18h6v-1.3c0-.8.4-1.5 1-2A7 7 0 0 0 12 2z"/>'
-_P["message"] = '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>'
-_P["ban"] = '<circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>'
-_P["sun"] = '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>'
-_P["dot-red"] = '<circle cx="12" cy="12" r="6" fill="#ef4444" stroke="none"/>'
-_P["dot-green"] = '<circle cx="12" cy="12" r="6" fill="#22c55e" stroke="none"/>'
-_P["dot-yellow"] = '<circle cx="12" cy="12" r="6" fill="#eab308" stroke="none"/>'
-_P["dot-orange"] = '<circle cx="12" cy="12" r="6" fill="#f97316" stroke="none"/>'
-_P["dot-gray"] = '<circle cx="12" cy="12" r="6" fill="#cbd5e1" stroke="none"/>'
-_P["diamond"] = '<path d="M12 3l9 9-9 9-9-9z" fill="#3b82f6" stroke="none"/>'
-_P["medal-gold"] = '<path d="M8.5 14L7 22l5-3 5 3-1.5-8" stroke="#b45309" fill="none"/><circle cx="12" cy="9" r="6" fill="#fbbf24" stroke="#b45309"/>'
-_P["medal-silver"] = '<path d="M8.5 14L7 22l5-3 5 3-1.5-8" stroke="#475569" fill="none"/><circle cx="12" cy="9" r="6" fill="#e2e8f0" stroke="#475569"/>'
-_P["medal-bronze"] = '<path d="M8.5 14L7 22l5-3 5 3-1.5-8" stroke="#7c2d12" fill="none"/><circle cx="12" cy="9" r="6" fill="#fdba74" stroke="#7c2d12"/>'
-
-_P["camera"] = '<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>'
-_P["scan-face"] = '<path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><path d="M9 9h.01M15 9h.01"/>'
-KX_ICONS = _P
-
-# emoji -> (ชื่อไอคอน, สีเฉพาะ | None)  (สีใช้เฉพาะตอนอยู่ในข้อความทั่วไป; ในกล่องไอคอนจะใช้สีของกล่อง)
-_E = {}
-def _m(name, color, *emojis):
-    for e in emojis:
-        _E[e] = (name, color)
-_m("check-circle", "#16a34a", "✅", "✔", "☑")
-_m("check", None, "✓")
-_m("x-circle", "#dc2626", "❌", "❎")
-_m("x", None, "✗", "✕", "✖")
-_m("alert-triangle", "#d97706", "⚠", "△")
-_m("alert-circle", "#dc2626", "🚨")
-_m("info", "#2563eb", "ℹ")
-_m("clipboard-check", None, "📋")
-_m("bar-chart", None, "📊")
-_m("trending-up", None, "📈")
-_m("arrow-left", None, "⬅")
-_m("arrow-right", None, "➔", "➜", "➡")
-_m("corner-left", None, "↩")
-_m("zap", None, "⚡", "🔌")
-_m("save", None, "💾")
-_m("camera", None, "📷", "📸")
-_m("scan-face", None)
-_m("backpack", None, "🎒")
-_m("school", None, "🏫")
-_m("building", None, "🏢")
-_m("grad-cap", None, "🎓")
-_m("dot-red", None, "🔴")
-_m("dot-green", None, "🟢")
-_m("dot-yellow", None, "🟡")
-_m("dot-orange", None, "🟠")
-_m("dot-gray", None, "⚪")
-_m("diamond", None, "🔷")
-_m("lock", None, "🔒", "🔐")
-_m("unlock", None, "🔓")
-_m("key", None, "🔑")
-_m("calendar", None, "📅", "🗓", "📆")
-_m("clock", None, "⏰", "⏱", "🕐", "🕑", "🕒", "⌚")
-_m("hourglass", None, "⏳", "⌛")
-_m("pause", None, "⏸")
-_m("plus", None, "➕")
-_m("minus", None, "➖")
-_m("award", None, "🎖", "🏅")
-_m("medal-gold", None, "🥇")
-_m("medal-silver", None, "🥈")
-_m("medal-bronze", None, "🥉")
-_m("trophy", None, "🏆")
-_m("crown", None, "👑")
-_m("edit", None, "📝", "✏", "✎")
-_m("eye", None, "👁")
-_m("eye-off", None, "🙈")
-_m("trash", None, "🗑")
-_m("octagon-x", None, "🛑")
-_m("ban", None, "🚫", "⛔")
-_m("shield", None, "🛡")
-_m("bell", None, "🔔")
-_m("megaphone", None, "📣", "📢")
-_m("search", None, "🔍", "🔎")
-_m("book", None, "📘", "📖")
-_m("book-open", None, "📚")
-_m("file-text", None, "📜", "📄", "📃")
-_m("user", None, "👤", "👩", "👨", "🧑", "👧", "👦", "👩‍🏫", "👨‍🏫", "🧑‍🏫")
-_m("users", None, "👥", "🧑‍🤝‍🧑", "🤝")
-_m("map-pin", None, "📍", "📌")
-_m("map", None, "🗺")
-_m("compass", None, "🧭")
-_m("smartphone", None, "📱")
-_m("mail", None, "📩", "✉", "📧")
-_m("upload", None, "📤")
-_m("download", None, "📥")
-_m("refresh", None, "🔄")
-_m("image", None, "🖼")
-_m("sliders", None, "⚙", "🎛")
-_m("wrench", None, "🔧", "🛠", "🏗", "🚧")
-_m("flask", None, "🧪")
-_m("puzzle", None, "🧩")
-_m("bot", None, "🤖")
-_m("palette", None, "🎨")
-_m("calculator", None, "🧮")
-_m("receipt", None, "🧾")
-_m("credit-card", None, "💳")
-_m("dollar", None, "💰", "💵")
-_m("inbox", None, "📭", "📬")
-_m("lightbulb", None, "💡")
-_m("message", None, "💬")
-_m("target", None, "🎯")
-_m("star", None, "🌟", "✨", "⭐", "🎉")
-_m("rocket", None, "🚀")
-_m("activity", None, "🩺")
-_m("thermometer", None, "🤒")
-_m("globe", None, "🌐")
-_m("wifi", None, "📡")
-_m("signal", None, "📶")
-_m("monitor", None, "🖥")
-_m("database", None, "🗄")
-_m("folder", None, "📁", "🗂")
-_m("tag", None, "🏷")
-_m("log-out", None, "🚪")
-_m("scissors", None, "💈")
-_m("id-card", None, "🪪")
-_m("shirt", None, "👔")
-_m("sun", None, "🏖")
-KX_EMOJI = _E
-
-
-def ic(name: str, size: int = 18, color: str = "currentColor", cls: str = "") -> str:
-    """ไอคอน SVG ฝั่งเซิร์ฟเวอร์ (เส้น 2px สีตามตัวอักษร)"""
-    inner = KX_ICONS.get(name, KX_ICONS["info"])
-    return (f'<svg class="{cls}" viewBox="0 0 24 24" width="{size}" height="{size}" fill="none" stroke="{color}" '
-            f'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{inner}</svg>')
-
-
-KX_CSS = r"""
-<style>
-/* ── ไอคอน SVG แทน emoji ── */
-.kx-i { display:inline-flex; width:1.15em; height:1.15em; vertical-align:-0.2em; flex:none; }
-.kx-i svg { width:100%; height:100%; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
-.dk-stat-ico .kx-i, .dk-ico-box .kx-i, .dk-hi .kx-i, .dk-empty .em .kx-i, .kx-lead .kx-i, .kx-card-ic .kx-i { color:inherit !important; }
-.dk-stat-ico .kx-i { width:22px; height:22px; } .dk-ico-box .kx-i { width:22px; height:22px; }
-.dk-hi .kx-i { width:22px; height:22px; }
-.dk-empty .em { display:flex; width:68px; height:68px; margin:0 auto 12px; border-radius:20px; background:#eef2ff; color:#4f46e5; align-items:center; justify-content:center; font-size:0; }
-.dk-empty .em .kx-i { width:32px; height:32px; }
-.dk-hi { display:inline-flex; width:40px; height:40px; flex:none; border-radius:12px; background:rgba(255,255,255,.14); border:1px solid rgba(255,255,255,.25); align-items:center; justify-content:center; color:#fff; font-size:0; }
-/* ไอคอนนำหน้าหัวข้อเก่า ๆ → กล่องสี */
-.navbar h1 > .kx-i:first-child, .app-header h1 > .kx-i:first-child { width:34px; height:34px; padding:7px; border-radius:11px; background:rgba(255,255,255,.14); border:1px solid rgba(255,255,255,.25); color:#fff !important; vertical-align:middle; }
-.card h2 > .kx-i:first-child { width:30px; height:30px; padding:6px; border-radius:10px; background:#eef2ff; color:#4338ca !important; }
-.card h2:has(> .kx-i:first-child)::before { display:none; }
-.card h2:has(> .kx-i:first-child) { justify-content:flex-start; gap:10px; }
-
-/* ── หน้าโหลดทันที ── */
-.kx-load { position:fixed; inset:0; z-index:100000; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:20px;
-    background:radial-gradient(circle at 50% 35%, rgba(13,58,102,.95) 0%, rgba(10,36,71,.97) 45%, rgba(6,14,31,.98) 100%);
-    opacity:0; visibility:hidden; transition:opacity .1s ease, visibility .1s; }
-.kx-load.on { opacity:1; visibility:visible; }
-.kx-load-rings { position:relative; width:120px; height:120px; display:flex; align-items:center; justify-content:center; }
-.kx-load-rings i { position:absolute; border-radius:50%; border:2px solid transparent; }
-.kx-load-rings .r1 { width:120px; height:120px; border-top-color:#60a5fa; border-right-color:#60a5fa33; animation:kxSpin 1.2s linear infinite; }
-.kx-load-rings .r2 { width:94px; height:94px; border-bottom-color:#93c5fd; border-left-color:#93c5fd22; animation:kxSpin 1.8s linear infinite reverse; }
-.kx-load-rings img { width:62px; height:62px; object-fit:contain; border-radius:16px; background:#0a4a7a; padding:5px; box-shadow:0 0 26px 3px rgba(96,165,250,.45); animation:kxPulse 1.6s ease-in-out infinite; }
-.kx-load-text { color:#e2e8f0; font-weight:700; font-size:14px; letter-spacing:.3px; font-family:'Sarabun','Inter',sans-serif; }
-.kx-load-bar { width:150px; height:4px; border-radius:4px; background:#1e3a5f; overflow:hidden; }
-.kx-load-bar i { display:block; width:40%; height:100%; border-radius:4px; background:linear-gradient(90deg,#3b82f6,#93c5fd); animation:kxBar 1s ease-in-out infinite; }
-@keyframes kxSpin { to { transform:rotate(360deg); } }
-@keyframes kxPulse { 0%,100% { transform:scale(1); } 50% { transform:scale(1.06); } }
-@keyframes kxBar { 0% { transform:translateX(-100%); } 100% { transform:translateX(350%); } }
-
-/* ── กล่องยืนยัน / sheet ของเราเอง ── */
-.kx-ov { position:fixed; inset:0; z-index:99990; background:rgba(11,17,32,.55); backdrop-filter:blur(5px); display:flex; align-items:center; justify-content:center; padding:20px; opacity:0; transition:opacity .18s; }
-.kx-ov.on { opacity:1; }
-.kx-ov.sheet { align-items:flex-end; padding:0; }
-.kx-card { background:#fff; width:100%; max-width:380px; border-radius:24px; padding:26px 22px 20px; text-align:center; box-shadow:0 24px 48px -12px rgba(15,23,42,.45); transform:scale(.93); transition:transform .22s cubic-bezier(.34,1.56,.64,1); font-family:'Sarabun','Inter',sans-serif; }
-.kx-ov.on .kx-card { transform:scale(1); }
-.kx-card-ic { width:60px; height:60px; border-radius:18px; margin:0 auto 14px; display:flex; align-items:center; justify-content:center; font-size:0; }
-.kx-card-ic .kx-i { width:28px; height:28px; }
-.kx-card-ic.bad { background:#fee2e2; color:#dc2626; } .kx-card-ic.info { background:#dbeafe; color:#1d4ed8; } .kx-card-ic.warn { background:#fef3c7; color:#d97706; }
-.kx-card-t { font-size:18px; font-weight:800; color:#0f172a; margin-bottom:6px; }
-.kx-card-m { font-size:14px; color:#64748b; line-height:1.65; margin-bottom:20px; white-space:pre-line; }
-.kx-card-b { display:flex; gap:10px; } .kx-card-b.col { flex-direction:column; }
-.kx-b { flex:1; border:none; border-radius:13px; padding:13px 12px; font-family:inherit; font-size:14.5px; font-weight:800; cursor:pointer; }
-.kx-b:active { transform:translateY(1px); }
-.kx-b.light { background:#f1f5f9; color:#475569; } .kx-b.red { background:linear-gradient(135deg,#ef4444,#dc2626); color:#fff; box-shadow:0 8px 16px -8px rgba(220,38,38,.6); }
-.kx-b.blue { background:linear-gradient(135deg,#1d4ed8,#1e3a8a); color:#fff; box-shadow:0 8px 16px -8px rgba(30,58,138,.6); }
-.kx-b.green { background:linear-gradient(135deg,#16a34a,#15803d); color:#fff; box-shadow:0 8px 16px -8px rgba(21,128,61,.6); }
-.kx-panel { background:#fff; width:100%; max-width:520px; margin:0 auto; border-radius:24px 24px 0 0; padding:10px 16px calc(18px + env(safe-area-inset-bottom,0px)); max-height:78vh; display:flex; flex-direction:column; transform:translateY(30px); transition:transform .22s ease; font-family:'Sarabun','Inter',sans-serif; box-shadow:0 -12px 40px -10px rgba(15,23,42,.4); }
-.kx-ov.on .kx-panel { transform:translateY(0); }
-.kx-grab { width:44px; height:5px; border-radius:5px; background:#d5dbe6; margin:2px auto 12px; flex:none; }
-.kx-p-t { font-size:15px; font-weight:800; color:#0f172a; margin:0 4px 10px; flex:none; }
-.kx-list { overflow-y:auto; margin:0 -4px; padding:0 4px; }
-.kx-opt { width:100%; display:flex; align-items:center; justify-content:space-between; gap:10px; text-align:left; background:#fff; border:1.5px solid #e6eaf1; border-radius:14px; padding:13px 14px; margin-bottom:8px; font-family:inherit; font-size:14.5px; font-weight:600; color:#0f172a; cursor:pointer; }
-.kx-opt.on { border-color:#1d4ed8; background:#eff6ff; color:#1d4ed8; font-weight:800; }
-.kx-opt.dis { opacity:.4; pointer-events:none; }
-.kx-optg { font-size:11.5px; font-weight:800; color:#94a3b8; margin:10px 4px 6px; }
-.kx-opt .kx-i { width:18px; height:18px; }
-.kx-q { width:100%; padding:11px 13px; border:1.5px solid #dbe2ec; border-radius:12px; font-family:inherit; font-size:14px; margin-bottom:10px; flex:none; box-sizing:border-box; }
-@media (min-width:720px) { .kx-ov.sheet { align-items:center; padding:20px; } .kx-panel { border-radius:24px; max-width:420px; } }
-
-/* ── ช่องเลือก (select / date) ของเราเอง ── */
-.kx-sel { position:relative; }
-.kx-native { position:absolute !important; left:0; top:0; width:100% !important; height:100% !important; opacity:0 !important; pointer-events:none !important; margin:0 !important; }
-.kx-trigger { width:100%; display:flex; align-items:center; justify-content:space-between; gap:8px; text-align:left; cursor:pointer; font-family:'Sarabun','Inter',sans-serif; box-sizing:border-box; min-height:42px; }
-.kx-trigger > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex:1; }
-.kx-trigger > .kx-i { width:16px; height:16px; color:#64748b; }
-.kx-trigger.ph > span { color:#94a3b8; }
-.kx-trigger:disabled { opacity:.55; cursor:not-allowed; }
-
-/* ── ปฏิทิน ── */
-.kx-cal-h { display:flex; align-items:center; justify-content:space-between; gap:6px; margin-bottom:10px; flex:none; }
-.kx-cal-h b { font-size:15.5px; font-weight:800; color:#0f172a; flex:1; text-align:center; }
-.kx-cal-n { width:38px; height:38px; border:none; border-radius:11px; background:#f1f5f9; color:#334155; font-size:15px; font-weight:800; cursor:pointer; display:flex; align-items:center; justify-content:center; font-family:inherit; }
-.kx-cal-n .kx-i { width:18px; height:18px; }
-.kx-cal-w, .kx-cal-g { display:grid; grid-template-columns:repeat(7,1fr); gap:4px; }
-.kx-cal-w span { text-align:center; font-size:11.5px; font-weight:800; color:#94a3b8; padding:4px 0; }
-.kx-cal-d { aspect-ratio:1; border:none; border-radius:12px; background:transparent; font-family:inherit; font-size:14.5px; font-weight:700; color:#0f172a; cursor:pointer; }
-.kx-cal-d.t { background:#eff6ff; color:#1d4ed8; }
-.kx-cal-d.s { background:linear-gradient(135deg,#1d4ed8,#1e3a8a); color:#fff; box-shadow:0 6px 12px -6px rgba(30,58,138,.7); }
-.kx-cal-d.x { opacity:.3; pointer-events:none; }
-.kx-cal-d.e { visibility:hidden; }
-.kx-cal-f { display:flex; gap:8px; margin-top:14px; flex:none; }
-</style>
-"""
-
-KX_JS = r"""
-(function () {
-'use strict';
-var ICONS = __ICONS__, EMOJI = __EMOJI__;
-var KX = window.KX = window.KX || {};
-function svg(n) { var p = ICONS[n]; return p ? '<svg viewBox="0 0 24 24" aria-hidden="true">' + p + '</svg>' : ''; }
-function ich(n) { return '<span class="kx-i">' + svg(n) + '</span>'; }
-function eh(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
-KX.icon = ich;
-
-/* ───────── emoji → ไอคอน SVG ───────── */
-var keys = Object.keys(EMOJI).sort(function (a, b) { return b.length - a.length; });
-var RE = new RegExp('(' + keys.map(function (k) { return k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }).join('|') + ')\\uFE0F?', 'g');
-var SKIP = { SCRIPT: 1, STYLE: 1, TEXTAREA: 1, TITLE: 1, NOSCRIPT: 1, svg: 1, SVG: 1 };
-function convText(node) {
-    var t = node.nodeValue; if (!t || t.search(RE) < 0) return;
-    var p = node.parentNode; if (!p || SKIP[p.nodeName]) return;
-    if (p.nodeName === 'OPTION') { node.nodeValue = t.replace(RE, '').replace(/^\s+/, ''); return; }
-    if (p.closest && p.closest('[data-noicon]')) return;
-    var frag = document.createDocumentFragment(), last = 0, m; RE.lastIndex = 0;
-    while ((m = RE.exec(t))) {
-        if (m.index > last) frag.appendChild(document.createTextNode(t.slice(last, m.index)));
-        var info = EMOJI[m[1]]; var s = document.createElement('span'); s.className = 'kx-i';
-        if (info[1]) s.style.color = info[1]; s.innerHTML = svg(info[0]); frag.appendChild(s); last = RE.lastIndex;
-    }
-    if (last < t.length) frag.appendChild(document.createTextNode(t.slice(last)));
-    p.replaceChild(frag, node);
-}
-function convTree(root) {
-    if (!root) return;
-    if (root.nodeType === 3) { convText(root); return; }
-    if (root.nodeType !== 1 || SKIP[root.nodeName]) return;
-    var w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, { acceptNode: function (n) { var p = n.parentNode; return (p && !SKIP[p.nodeName]) ? 1 : 2; } });
-    var list = [], n; while ((n = w.nextNode())) list.push(n);
-    list.forEach(convText);
-    var els = root.querySelectorAll ? root.querySelectorAll('[placeholder],input[type=submit],input[type=button]') : [];
-    Array.prototype.forEach.call(els, function (el) {
-        var v = el.getAttribute('placeholder'); if (v && v.search(RE) >= 0) el.setAttribute('placeholder', v.replace(RE, '').trim());
-        if (el.tagName === 'INPUT' && /submit|button/.test(el.type) && el.value && el.value.search(RE) >= 0) el.value = el.value.replace(RE, '').trim();
-    });
-}
-
-/* ───────── หน้าโหลดทันที ───────── */
-var iconSrc = null, loaderEl = null, loaderTimer = null;
-function grabIcon() {
-    var im = document.querySelector('.ktech-loader-icon');
-    if (im && im.src) { iconSrc = im.src; try { sessionStorage.setItem('kxIcon', iconSrc); } catch (e) {} }
-    else { try { iconSrc = sessionStorage.getItem('kxIcon'); } catch (e) {} }
-}
-KX.loading = function (on, text) {
-    if (on) {
-        if (!document.body) return;
-        if (!loaderEl) {
-            loaderEl = document.createElement('div'); loaderEl.className = 'kx-load';
-            loaderEl.innerHTML = '<div class="kx-load-rings"><i class="r1"></i><i class="r2"></i>' + (iconSrc ? '<img src="' + iconSrc + '" alt="">' : '') + '</div><div class="kx-load-text"></div><div class="kx-load-bar"><i></i></div>';
-            document.body.appendChild(loaderEl);
-        }
-        loaderEl.querySelector('.kx-load-text').textContent = text || 'กำลังโหลด...';
-        void loaderEl.offsetWidth; loaderEl.classList.add('on');
-        clearTimeout(loaderTimer); loaderTimer = setTimeout(function () { KX.loading(false); }, 12000);
-    } else if (loaderEl) { loaderEl.classList.remove('on'); clearTimeout(loaderTimer); }
-};
-KX.go = function (href) { KX.loading(true); setTimeout(function () { window.location.href = href; }, 0); };
-var DL = /(\/export|\/download|\.(csv|xlsx|xls|pdf|zip)(\?|$))/i;
-function isNav(a) {
-    var h = a.getAttribute('href');
-    if (!h || h.charAt(0) === '#' || /^(javascript:|mailto:|tel:|data:|blob:)/i.test(h)) return false;
-    if (a.target && a.target !== '_self') return false;
-    if (a.hasAttribute('download') || a.hasAttribute('data-noload')) return false;
-    try { var u = new URL(a.href, location.href); if (u.pathname === location.pathname && u.search === location.search && u.hash) return false; } catch (e) { return false; }
-    return true;
-}
-document.addEventListener('click', function (e) {
-    if (e.defaultPrevented || e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-    var a = e.target.closest && e.target.closest('a[href]'); if (!a || !isNav(a)) return;
-    KX.loading(true);
-    if (DL.test(a.href)) setTimeout(function () { KX.loading(false); }, 3500);
-});
-document.addEventListener('submit', function (e) {
-    var f = e.target; if (e.defaultPrevented || !f || (f.target && f.target !== '_self') || f.hasAttribute('data-noload')) return;
-    KX.loading(true, 'กำลังดำเนินการ...');
-});
-window.addEventListener('beforeunload', function () { KX.loading(true); });
-window.addEventListener('pageshow', function (e) { if (e.persisted) KX.loading(false); });
-
-/* ───────── กล่อง / sheet ของเราเอง ───────── */
-function overlay(html, cls) {
-    var o = document.createElement('div'); o.className = 'kx-ov ' + (cls || ''); o.innerHTML = html; document.body.appendChild(o);
-    convTree(o); requestAnimationFrame(function () { o.classList.add('on'); }); return o;
-}
-function closeOv(o) { o.classList.remove('on'); setTimeout(function () { if (o.parentNode) o.parentNode.removeChild(o); }, 200); }
-KX.dialog = function (opt) {
-    return new Promise(function (res) {
-        var btns = (opt.buttons || []).map(function (b, i) { return '<button type="button" class="kx-b ' + b.cls + '" data-i="' + i + '">' + eh(b.text) + '</button>'; }).join('');
-        var o = overlay('<div class="kx-card"><div class="kx-card-ic ' + (opt.tone || 'info') + '">' + ich(opt.icon || 'help') + '</div><div class="kx-card-t">' + eh(opt.title) + '</div><div class="kx-card-m">' + eh(opt.message || '') + '</div><div class="kx-card-b ' + (opt.col ? 'col' : '') + '">' + btns + '</div></div>');
-        o.addEventListener('click', function (e) {
-            var b = e.target.closest('[data-i]');
-            if (b) { closeOv(o); res(+b.getAttribute('data-i')); } else if (e.target === o) { closeOv(o); res(-1); }
-        });
-    });
-};
-KX.confirm = function (opt) {
-    var d = !!opt.danger;
-    return KX.dialog({ title: opt.title || (d ? 'ยืนยันการลบ' : 'ยืนยันการทำรายการ'), message: opt.message, tone: d ? 'bad' : 'info', icon: d ? 'trash' : 'help',
-        buttons: [{ text: opt.cancelText || 'ยกเลิก', cls: 'light' }, { text: opt.okText || (d ? 'ลบ' : 'ยืนยัน'), cls: d ? 'red' : 'blue' }] }).then(function (i) { return i === 1; });
-};
-function confirmOpts(el) {
-    var m = el.getAttribute('data-confirm') || '';
-    return { message: m, danger: el.hasAttribute('data-danger') || /ลบ|ปฏิเสธ/.test(m), okText: el.getAttribute('data-ok') || (/ปฏิเสธ/.test(m) ? 'ปฏิเสธ' : (/อนุมัติ/.test(m) ? 'อนุมัติ' : null)) };
-}
-document.addEventListener('click', function (e) {
-    var el = e.target.closest && e.target.closest('[data-confirm]'); if (!el || el.tagName === 'FORM') return;
-    if (el.__kxok) { el.__kxok = false; return; }
-    e.preventDefault(); e.stopPropagation();
-    KX.confirm(confirmOpts(el)).then(function (ok) {
-        if (!ok) return;
-        if (el.tagName === 'A') KX.go(el.href); else { el.__kxok = true; el.click(); }
-    });
-}, true);
-document.addEventListener('submit', function (e) {
-    var f = e.target; if (!f || !f.hasAttribute || !f.hasAttribute('data-confirm')) return;
-    if (f.__kxok) { f.__kxok = false; return; }
-    e.preventDefault(); e.stopPropagation();
-    KX.confirm(confirmOpts(f)).then(function (ok) { if (ok) { f.__kxok = true; KX.loading(true, 'กำลังดำเนินการ...'); f.submit(); } });
-}, true);
-
-/* ───────── กันออกจากหน้าตอนมีของยังไม่บันทึก (แทน dialog ของเบราว์เซอร์) ───────── */
-var G = null;
-function askLeave(go) {
-    KX.dialog({ title: 'ยังไม่ได้บันทึก', message: G && G.message || 'มีการเปลี่ยนแปลงที่ยังไม่ได้บันทึก', tone: 'warn', icon: 'alert-triangle', col: true,
-        buttons: [{ text: 'บันทึกแล้วออก', cls: 'green' }, { text: 'ออกโดยไม่บันทึก', cls: 'red' }, { text: 'อยู่หน้านี้ต่อ', cls: 'light' }] }).then(function (i) {
-        if (i === 0 && G && G.save) { G.save().then(function (ok) { if (ok) { var g = G; G = null; go(); } }); }
-        else if (i === 1) { G = null; go(); }
-    });
-}
-KX.guard = function (cfg) {
-    G = cfg; try { history.pushState({ kxg: 1 }, '', location.href); } catch (e) {}
-    document.addEventListener('click', function (e) {
-        if (!G || !G.dirty() || e.defaultPrevented) return;
-        var a = e.target.closest && e.target.closest('a[href]'); if (!a || !isNav(a)) return;
-        e.preventDefault(); e.stopPropagation(); askLeave(function () { KX.go(a.href); });
-    }, true);
-    window.addEventListener('popstate', function () {
-        if (!G) return;
-        if (G.dirty()) { try { history.pushState({ kxg: 1 }, '', location.href); } catch (e) {} askLeave(function () { history.go(-2); }); }
-        else { G = null; history.back(); }
-    });
-};
-
-/* ───────── แผ่นเลือกจากด้านล่าง ───────── */
-function sheet(inner) {
-    var o = overlay('<div class="kx-panel"><div class="kx-grab"></div>' + inner + '</div>', 'sheet');
-    o.addEventListener('click', function (e) { if (e.target === o) closeOv(o); }); return o;
-}
-function copyLook(el, btn) {
-    var cs = getComputedStyle(el);
-    btn.style.padding = cs.padding; btn.style.fontSize = cs.fontSize; btn.style.fontWeight = cs.fontWeight;
-    btn.style.borderRadius = cs.borderTopLeftRadius; btn.style.border = cs.borderTopWidth + ' ' + cs.borderTopStyle + ' ' + cs.borderTopColor;
-    btn.style.background = cs.backgroundColor; btn.style.color = cs.color; btn.style.minHeight = cs.height;
-}
-function makeWrap(el) {
-    var cs = getComputedStyle(el), par = el.parentNode, w = document.createElement('div'); w.className = 'kx-sel';
-    w.style.margin = cs.margin; if (cs.flex && cs.flex !== '0 1 auto') w.style.flex = cs.flex;
-    if (el.style.width) w.style.width = el.style.width;
-    else if (par && par.clientWidth && el.offsetWidth >= par.clientWidth * 0.9) w.style.width = '100%';
-    else w.style.width = el.offsetWidth + 'px';
-    if (el.style.maxWidth) w.style.maxWidth = el.style.maxWidth;
-    var gc = cs.gridColumnStart; if (gc && gc !== 'auto') w.style.gridColumn = cs.gridColumnStart + ' / ' + cs.gridColumnEnd;
-    return w;
-}
-function buildTrigger(el) {
-    var btn = document.createElement('button'); btn.type = 'button'; btn.className = 'kx-trigger ' + el.className.replace(/kx-native/g, '');
-    copyLook(el, btn); btn.style.margin = '0'; btn.style.width = '100%'; btn.style.height = 'auto';
-    return btn;
-}
-function needsLoader(el) { var a = el.getAttribute('onchange') || ''; return /location|submit/.test(a); }
-function fire(el) { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }
-
-function enhanceSelect(sel) {
-    if (sel.__kx || sel.multiple || sel.size > 1 || sel.hasAttribute('data-native') || sel.closest('#screenlock-overlay,.kx-ov')) return;
-    sel.__kx = 1;
-    var wrap = makeWrap(sel), btn = buildTrigger(sel);
-    sel.parentNode.insertBefore(wrap, sel); wrap.appendChild(sel); sel.classList.add('kx-native'); sel.tabIndex = -1; wrap.appendChild(btn);
-    function label() {
-        var o = sel.options[sel.selectedIndex], txt = o ? o.text.trim() : '';
-        btn.innerHTML = '<span></span>' + ich('chevron-down'); btn.firstChild.textContent = txt || sel.getAttribute('data-ph') || 'เลือก...';
-        btn.classList.toggle('ph', !txt || (o && o.value === '' && !!sel.required)); btn.disabled = sel.disabled;
-    }
-    label();
-    sel.addEventListener('change', label);
-    new MutationObserver(label).observe(sel, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['disabled'] });
-    btn.addEventListener('click', function () {
-        var lab = (sel.id && document.querySelector('label[for="' + sel.id + '"]')) || (wrap.parentNode && wrap.parentNode.querySelector('label'));
-        var title = (lab && lab.textContent.trim()) || sel.getAttribute('aria-label') || sel.getAttribute('data-title') || 'เลือกรายการ';
-        var html = '<div class="kx-p-t">' + eh(title) + '</div>';
-        if (sel.options.length > 10) html += '<input class="kx-q" placeholder="ค้นหา..." type="search">';
-        html += '<div class="kx-list">'; var lastG = null;
-        Array.prototype.forEach.call(sel.options, function (o, i) {
-            if (o.parentNode.tagName === 'OPTGROUP' && o.parentNode !== lastG) { lastG = o.parentNode; html += '<div class="kx-optg">' + eh(lastG.label) + '</div>'; }
-            html += '<button type="button" class="kx-opt' + (i === sel.selectedIndex ? ' on' : '') + (o.disabled ? ' dis' : '') + '" data-i="' + i + '"><span>' + eh(o.text.trim() || '—') + '</span>' + (i === sel.selectedIndex ? ich('check') : '') + '</button>';
-        });
-        html += '</div>';
-        var o = sheet(html), q = o.querySelector('.kx-q');
-        if (q) q.addEventListener('input', function () { var v = q.value.trim().toLowerCase(); Array.prototype.forEach.call(o.querySelectorAll('.kx-opt'), function (b) { b.style.display = b.textContent.toLowerCase().indexOf(v) >= 0 ? '' : 'none'; }); });
-        o.querySelector('.kx-list').addEventListener('click', function (e) {
-            var b = e.target.closest('.kx-opt'); if (!b) return;
-            var i = +b.getAttribute('data-i'); closeOv(o);
-            if (i !== sel.selectedIndex) { sel.selectedIndex = i; if (needsLoader(sel)) KX.loading(true); fire(sel); label(); }
-        });
-    });
-}
-
-/* ───────── ปฏิทิน (ปี พ.ศ.) ───────── */
-var TM = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
-var TD = ['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'];
-function p2(n) { return (n < 10 ? '0' : '') + n; }
-function isoOf(y, m, d) { return y + '-' + p2(m + 1) + '-' + p2(d); }
-function thDate(v) { if (!v) return ''; var p = v.split('-'); return p[2] + '/' + p[1] + '/' + (+p[0] + 543); }
-function enhanceDate(inp) {
-    if (inp.__kx || inp.closest('.kx-ov')) return; inp.__kx = 1;
-    var wrap = makeWrap(inp), btn = buildTrigger(inp);
-    inp.parentNode.insertBefore(wrap, inp); wrap.appendChild(inp); inp.classList.add('kx-native'); inp.tabIndex = -1; wrap.appendChild(btn);
-    function label() { var v = inp.value; btn.innerHTML = '<span></span>' + ich('calendar'); btn.firstChild.textContent = v ? thDate(v) : 'เลือกวันที่'; btn.classList.toggle('ph', !v); btn.disabled = inp.disabled; }
-    label(); inp.addEventListener('change', label);
-    btn.addEventListener('click', function () {
-        var cur = inp.value ? new Date(inp.value + 'T00:00:00') : new Date(); if (isNaN(cur)) cur = new Date();
-        var vy = cur.getFullYear(), vm = cur.getMonth(), now = new Date(), today = isoOf(now.getFullYear(), now.getMonth(), now.getDate());
-        var o = sheet('<div class="kx-cal-h"></div><div class="kx-cal-w">' + TD.map(function (d) { return '<span>' + d + '</span>'; }).join('') + '</div><div class="kx-cal-g"></div><div class="kx-cal-f"></div>');
-        var head = o.querySelector('.kx-cal-h'), grid = o.querySelector('.kx-cal-g'), foot = o.querySelector('.kx-cal-f');
-        function ok(iso) { return !((inp.min && iso < inp.min) || (inp.max && iso > inp.max)); }
-        function draw() {
-            head.innerHTML = '<button type="button" class="kx-cal-n" data-n="-12">«</button><button type="button" class="kx-cal-n" data-n="-1">' + ich('chevron-left') + '</button><b>' + TM[vm] + ' ' + (vy + 543) + '</b><button type="button" class="kx-cal-n" data-n="1">' + ich('chevron-right') + '</button><button type="button" class="kx-cal-n" data-n="12">»</button>';
-            var first = new Date(vy, vm, 1).getDay(), days = new Date(vy, vm + 1, 0).getDate(), h = '';
-            for (var i = 0; i < first; i++) h += '<button type="button" class="kx-cal-d e"></button>';
-            for (var d = 1; d <= days; d++) { var iso = isoOf(vy, vm, d); h += '<button type="button" class="kx-cal-d' + (iso === inp.value ? ' s' : (iso === today ? ' t' : '')) + (ok(iso) ? '' : ' x') + '" data-d="' + iso + '">' + d + '</button>'; }
-            grid.innerHTML = h; convTree(head);
-        }
-        function pick(iso) { closeOv(o); if (iso !== inp.value) { inp.value = iso; if (needsLoader(inp)) KX.loading(true); fire(inp); label(); } }
-        head.addEventListener('click', function (e) { var b = e.target.closest('[data-n]'); if (!b) return; var t = vy * 12 + vm + (+b.getAttribute('data-n')); vy = Math.floor(t / 12); vm = t % 12; draw(); });
-        grid.addEventListener('click', function (e) { var b = e.target.closest('[data-d]'); if (b) pick(b.getAttribute('data-d')); });
-        foot.innerHTML = '<button type="button" class="kx-b light" data-a="today">วันนี้</button>' + (inp.required ? '' : '<button type="button" class="kx-b light" data-a="clear">ล้างค่า</button>') + '<button type="button" class="kx-b blue" data-a="close">ปิด</button>';
-        foot.addEventListener('click', function (e) { var b = e.target.closest('[data-a]'); if (!b) return; var a = b.getAttribute('data-a'); if (a === 'today' && ok(today)) pick(today); else if (a === 'clear') pick(''); else if (a === 'close') closeOv(o); });
-        draw();
-    });
-}
-
-function enhanceAll(root) {
-    if (!root.querySelectorAll) return;
-    Array.prototype.forEach.call(root.querySelectorAll('input[type=date]'), enhanceDate);
-    Array.prototype.forEach.call(root.querySelectorAll('select'), enhanceSelect);
-}
-
-function init() {
-    grabIcon(); convTree(document.body); enhanceAll(document);
-    var queue = [], busy = false;
-    new MutationObserver(function (recs) {
-        recs.forEach(function (r) {
-            if (r.type === 'characterData') queue.push(r.target);
-            else Array.prototype.forEach.call(r.addedNodes, function (n) { if (!(n.nodeType === 1 && (n.classList.contains('kx-i') || n.classList.contains('kx-sel')))) queue.push(n); });
-        });
-        if (busy || !queue.length) return; busy = true;
-        requestAnimationFrame(function () { var q = queue; queue = []; busy = false; q.forEach(function (n) { if (n.isConnected) { convTree(n); enhanceAll(n.nodeType === 1 ? n : document); } }); });
-    }).observe(document.body, { childList: true, subtree: true, characterData: true });
-}
-if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
-})();
-"""
-
-KX_JS_BUILT = (KX_JS.replace("__ICONS__", _kxjson.dumps(KX_ICONS, ensure_ascii=False))
-               .replace("__EMOJI__", _kxjson.dumps({k: [v[0], v[1]] for k, v in KX_EMOJI.items()}, ensure_ascii=False)))
-KX_VERSION = _kxhash.md5(KX_JS_BUILT.encode("utf-8")).hexdigest()[:8]
-KX_HEAD = KX_CSS + f'\n<script src="/kx.js?v={KX_VERSION}" defer></script>\n'
-
-
-@app.get("/kx.js")
-async def kx_js_route():
-    """สคริปต์กลาง (ไอคอน/ยืนยัน/ปฏิทิน/ตัวเลือก/หน้าโหลดทันที) — แคชไว้ในเครื่องผู้ใช้"""
-    return Response(content=KX_JS_BUILT.encode("utf-8"), media_type="application/javascript; charset=utf-8",
-                    headers={"Cache-Control": "public, max-age=86400"})
-
-
-
-# ==========================================
 # 🎨 PREMIUM UI STYLE WITH LIVE WEBSOCKET SCRIPT
 # ==========================================
 STYLE_HEADER = """
@@ -1143,57 +539,8 @@ STYLE_HEADER = """
         ::-webkit-scrollbar-track { background: var(--surface-muted); }
         ::-webkit-scrollbar-thumb { background: #c7d0dd; border-radius: 10px; }
         ::-webkit-scrollbar-thumb:hover { background: #aab4c4; }
-
-        /* ============================================================
-           🎨 DASHBOARD SKIN — ปรับหน้าเดิมทั้งระบบให้เป็นสไตล์แดชบอร์ดเดียวกัน
-           (override ชุดสีเก่า; หน้าที่ใช้ dk-/ah- มีสไตล์ของตัวเองอยู่แล้ว)
-        ============================================================ */
-        body { background: #f0f4f8; font-family: 'Sarabun', 'Inter', sans-serif; }
-
-        .navbar {
-            background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 60%, #1d4ed8 100%);
-            border-bottom: none; padding: calc(env(safe-area-inset-top, 0px) + 13px) 18px 13px;
-            box-shadow: 0 6px 20px -8px rgba(15,23,42,0.45);
-        }
-        .navbar h1 { font-size: 17px; font-weight: 800; }
-        .navbar .btn-secondary, .navbar .btn {
-            background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.25);
-            box-shadow: none; color: #fff; border-radius: 10px; padding: 8px 13px; font-size: 12.5px;
-        }
-        .main-container { max-width: 900px; padding: 18px 14px 44px; }
-
-        .card {
-            border-radius: 18px; border: 1px solid var(--border); padding: 18px;
-            box-shadow: 0 1px 3px rgba(15,23,42,0.05); margin-bottom: 16px;
-        }
-        .card h2 {
-            font-size: 15px; font-weight: 800; border-bottom: none; padding-bottom: 0; margin-bottom: 14px;
-        }
-        .card h2::before { content: ""; width: 4px; height: 16px; border-radius: 4px; background: linear-gradient(180deg, #60a5fa, #1d4ed8); display: inline-block; }
-
-        table { border-radius: 14px; border: 1px solid var(--border); box-shadow: none; margin-top: 6px; }
-        th { background: #f8fafc; color: #475569; font-size: 12px; font-weight: 800; padding: 11px 10px; }
-        td { font-size: 13.5px; }
-        tbody tr:nth-child(even) { background: #fff; }
-        @media (hover: hover) { tbody tr:hover td { background: #f5f8ff; } }
-
-        .btn { border-radius: 11px; box-shadow: none; }
-        .btn-submit { background: linear-gradient(135deg, #1d4ed8, #1e3a8a); border-bottom: none; border-radius: 12px; box-shadow: 0 8px 18px -8px rgba(30,58,138,0.55); }
-        .btn-danger { background: #fee2e2; color: #b91c1c; }
-        .btn-warning { background: #fef3c7; color: #b45309; }
-        .btn-secondary { background: #e2e8f0; color: #334155; }
-
-        input[type="text"], input[type="password"], input[type="date"], input[type="number"], input[type="tel"],
-        input[type="email"], input[type="time"], input[type="search"], input[type="url"], textarea, select {
-            border-radius: 12px; border: 1.5px solid #dbe2ec; padding: 11.5px 13px; font-family: 'Sarabun', 'Inter', sans-serif;
-        }
-        textarea { width: 100%; box-sizing: border-box; margin-bottom: 14px; font-size: 14px; }
-        input:focus, textarea:focus, select:focus { outline: none; border-color: #1d4ed8; box-shadow: 0 0 0 4px rgba(29,78,216,0.12); }
-
-        .badge { background: #eef2ff; color: #3730a3; border: none; padding: 3px 10px; }
-        .menu-btn { border-radius: 16px; border-bottom: 1px solid var(--border); }
     </style>
-
+    
     <script>
         // 🎨 CUSTOM ALERT SYSTEM BY KK STUDIO
         function smartAlert(options) {
@@ -1417,7 +764,6 @@ STYLE_HEADER = """
     </script>
 </head>
 """
-STYLE_HEADER = STYLE_HEADER.replace("</head>", KX_HEAD + "</head>", 1)
 
 # ==========================================
 # 🛠️ HELPER FUNCTIONS
@@ -1532,7 +878,7 @@ def find_student_uid(name: str, no: str, classroom: str) -> Optional[str]:
 # 🔔 ใช้แทน "<script>alert(...); redirect</script>" ทั้งหมด — แสดงเป็นหน้าแจ้งเตือนสไตล์แอปของเราเอง
 # (ไม่พึ่ง STYLE_HEADER เพื่อให้โหลดเร็วและใช้ได้แม้ตอบกลับ POST request แบบเดี่ยวๆ)
 def alert_redirect(message: str, type: str = "info", url: Optional[str] = None, title: Optional[str] = None):
-    icon = ic({"success": "check", "error": "x", "warning": "alert-triangle", "info": "info"}.get(type, "info"), 32, "currentColor")
+    icon = {"success": "✅", "error": "❌", "warning": "⚠️", "info": "ℹ️"}.get(type, "ℹ️")
     bg, fg = {
         "success": ("#f0fdf4", "#10b981"),
         "error": ("#fef2f2", "#ef4444"),
@@ -1561,7 +907,7 @@ def alert_redirect(message: str, type: str = "info", url: Optional[str] = None, 
     }}
     @keyframes arPop {{ from {{ transform: scale(0.9); opacity: 0; }} to {{ transform: scale(1); opacity: 1; }} }}
     .ar-icon {{
-        width: 64px; height: 64px; border-radius: 20px;
+        width: 62px; height: 62px; border-radius: 50%;
         background: {bg}; color: {fg}; font-size: 30px;
         display: flex; align-items: center; justify-content: center; margin: 0 auto 18px;
     }}
@@ -1731,10 +1077,6 @@ TEACHER_ROLES = {
     "teacher":    {"label": "👩‍🏫 ครูผู้สอน",        "desc": "ดูแลเฉพาะคลาสเรียนของตนเอง"},
     "level_head": {"label": "🎓 หัวหน้าระดับ",       "desc": "อนุมัติคำร้องลา/บันทึกความประพฤติ เฉพาะระดับชั้นที่รับผิดชอบ"},
     "affairs":    {"label": "🛡️ ฝ่ายกิจการนักเรียน", "desc": "อนุมัติคำร้องลา/บันทึกความประพฤติ ได้ทุกระดับชั้นทั้งสถาบัน"},
-    "subject_head": {"label": "📚 หัวหน้าวิชา",     "desc": "เช็กชื่อ/จัดการได้ทุกวิชาที่รับผิดชอบ และมอบวิชาให้ครูย่อยได้"},
-    "trainee":    {"label": "🧑‍🎓 ครูฝึกสอน",        "desc": "เช็กชื่อได้อย่างเดียว เฉพาะวิชาที่ผู้ดูแลกำหนดให้"},
-    "registrar":  {"label": "🗂️ ฝ่ายทะเบียน",        "desc": "จัดการทะเบียนนักเรียน (เพิ่ม/แก้ไข/ลบ/บัญชีเข้าสู่ระบบ)"},
-    "finance":    {"label": "💳 ฝ่ายการเงิน",        "desc": "จัดการรายการเรียกเก็บและการชำระเงินของนักเรียน"},
 }
 
 def get_access(user_session: Optional[str]) -> dict:
@@ -1777,20 +1119,11 @@ def get_access(user_session: Optional[str]) -> dict:
 PERMISSIONS = {
     "manage_discipline":        {"label": "จัดการคำร้องลา / คะแนนความประพฤติ", "default_roles": ("admin", "affairs", "level_head")},
     "manage_teacher_accounts":  {"label": "จัดการบัญชีครู",                    "default_roles": ("admin", "affairs", "level_head")},
-    "manage_student_profiles":  {"label": "จัดการโปรไฟล์นักเรียน",             "default_roles": ("admin", "affairs", "level_head", "registrar")},
+    "manage_student_profiles":  {"label": "จัดการโปรไฟล์นักเรียน",             "default_roles": ("admin", "affairs", "level_head")},
     "view_analytics":           {"label": "ดูแดชบอร์ดสถิติขั้นสูง",            "default_roles": ("admin", "affairs", "level_head")},
-    "manage_inspection":        {"label": "ตรวจระเบียบนักเรียน (ติ๊กผ่าน/ไม่ผ่าน)", "default_roles": ("admin", "affairs", "level_head", "teacher")},
-    "view_inspection_report":   {"label": "ดูรายงานผลตรวจระเบียบ",             "default_roles": ("admin", "affairs", "level_head")},
-    "manage_inspection_criteria": {"label": "จัดการตัวชี้วัดตรวจระเบียบ (เพิ่ม/ลบ)", "default_roles": ("admin", "affairs")},
-    "manage_student_registry":  {"label": "จัดการทะเบียนนักเรียน (เพิ่ม/แก้ไข/ลบ)", "default_roles": ("admin", "registrar")},
-    "manage_payments":          {"label": "จัดการการเงิน / รายการเรียกเก็บ",   "default_roles": ("admin", "finance")},
-    "manage_subject_scope":     {"label": "จัดการวิชาที่รับผิดชอบ / มอบวิชาให้ครูย่อย", "default_roles": ("admin", "subject_head")},
-    "face_scan":                {"label": "สแกนหน้าเช็กชื่อ (ทดลอง)",        "default_roles": ("admin", "teacher", "subject_head", "level_head", "affairs")},
-    "manage_face_data":         {"label": "ลงทะเบียน/ลบข้อมูลใบหน้านักเรียน (ทดลอง)", "default_roles": ("admin", "affairs", "registrar")},
-    "face_gate":                {"label": "สแกนหน้าเข้า-ออกโรงเรียน (ทดลอง)",   "default_roles": ("admin", "affairs", "level_head")},
 }
 # บทบาทที่ปรับสิทธิ์ผ่านตารางได้ (admin มีสิทธิ์ทุกอย่างเสมอ ไม่ต้องตั้งค่า)
-CONFIGURABLE_ROLES = ("teacher", "trainee", "subject_head", "level_head", "affairs", "registrar", "finance")
+CONFIGURABLE_ROLES = ("teacher", "level_head", "affairs")
 
 def _load_permission_overrides() -> dict:
     """อ่านค่าที่แอดมิน override ไว้ทั้งหมดจาก DB -> {(role, perm_key): 0/1}"""
@@ -1846,123 +1179,6 @@ def can_manage_student_profiles(access: dict) -> bool:
 def can_view_analytics(access: dict) -> bool:
     """สิทธิ์ดูแดชบอร์ดสถิติขั้นสูง (ปรับได้ที่ /admin/permissions)"""
     return access.get("role") == "admin" or has_permission(access, "view_analytics")
-
-def can_manage_inspection(access: dict) -> bool:
-    """สิทธิ์ตรวจระเบียบนักเรียน — ติ๊กผ่าน/ไม่ผ่าน (ปรับได้ที่ /admin/permissions)"""
-    return has_permission(access, "manage_inspection")
-
-def can_view_inspection_report(access: dict) -> bool:
-    """สิทธิ์ดูรายงานผลตรวจระเบียบ (ปรับได้ที่ /admin/permissions)"""
-    return has_permission(access, "view_inspection_report")
-
-def can_manage_inspection_criteria(access: dict) -> bool:
-    """สิทธิ์เพิ่ม/ลบ/เปิด-ปิด ตัวชี้วัดการตรวจระเบียบ (ปรับได้ที่ /admin/permissions)"""
-    return has_permission(access, "manage_inspection_criteria")
-
-def can_manage_payments(access: dict) -> bool:
-    return has_permission(access, "manage_payments")
-
-def can_manage_student_registry(access: dict) -> bool:
-    return has_permission(access, "manage_student_registry")
-
-def can_manage_subject_scope(access: dict) -> bool:
-    return has_permission(access, "manage_subject_scope")
-
-def staff_home_url(access: dict) -> str:
-    """หน้าแรกของผู้ใช้ฝั่งบุคลากร: แอดมิน → หน้าควบคุม, ครู/ฝ่ายต่าง ๆ → แดชบอร์ดครู"""
-    if access.get("role") == "admin":
-        return "/admin/dashboard"
-    return f"/app/dashboard?user={urllib.parse.quote(access.get('username') or '')}"
-
-def gate_perm(user_session: Optional[str], checker) -> Optional[dict]:
-    """คืน access ถ้าเป็นแอดมินหรือบทบาทที่ผ่านเงื่อนไข ไม่งั้นคืน None"""
-    access = get_access(user_session)
-    if access["authenticated"] and access["role"] != "student" and (access["role"] == "admin" or checker(access)):
-        return access
-    return None
-
-# ── หัวหน้าวิชา: วิชาที่รับผิดชอบ ──
-def head_scope_group_ids(username: str) -> set:
-    """group_id ทั้งหมดที่หัวหน้าวิชาคนนี้รับผิดชอบ (ว่างถ้าไม่ใช่หัวหน้าวิชา)"""
-    conn = sqlite3.connect('attendance_pro.db')
-    try:
-        rows = conn.execute("""SELECT h.group_id FROM subject_head_groups h JOIN teachers t ON t.username = h.head_username
-                               WHERE h.head_username = ? AND t.role = 'subject_head'""", (username,)).fetchall()
-    finally:
-        conn.close()
-    return {r[0] for r in rows}
-
-def _user_role(username: str) -> str:
-    conn = sqlite3.connect('attendance_pro.db')
-    try:
-        r = conn.execute("SELECT role FROM teachers WHERE username=?", (username,)).fetchone()
-    finally:
-        conn.close()
-    return (r[0] if r and r[0] else "teacher")
-
-def co_group_ids(username: str) -> set:
-    """group_id ที่ผู้ดูแลกำหนดให้ครูคนนี้ 'เช็กชื่อร่วม' ได้ (ครูร่วม/ครูฝึกสอน)"""
-    conn = sqlite3.connect('attendance_pro.db')
-    try:
-        rows = conn.execute("SELECT group_id FROM group_teachers WHERE teacher_username=?", (username,)).fetchall()
-    finally:
-        conn.close()
-    return {r[0] for r in rows}
-
-def can_access_group(user: str, group_id: int, owner: Optional[str] = None) -> bool:
-    """สิทธิ์จัดการเต็มรูปแบบ: เจ้าของวิชา หรือหัวหน้าวิชาที่วิชานี้อยู่ในความรับผิดชอบ (ครูฝึกสอนไม่มีสิทธิ์นี้)"""
-    if _user_role(user) == "trainee":
-        return False
-    if owner is not None and owner == user:
-        return True
-    return group_id in head_scope_group_ids(user)
-
-def can_rollcall_group(user: str, group_id: int) -> bool:
-    """เช็กชื่อได้: จัดการเต็มได้ หรือถูกกำหนดเป็นผู้เช็กชื่อร่วม"""
-    conn = sqlite3.connect('attendance_pro.db')
-    try:
-        r = conn.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (group_id,)).fetchone()
-    finally:
-        conn.close()
-    if not r:
-        return False
-    return r[0] == user or can_access_group(user, group_id, r[0]) or group_id in co_group_ids(user)
-
-def rollcall_groups_for_user(cursor, user: str) -> list:
-    """วิชาที่เช็กชื่อได้ทั้งหมด = วิชาที่จัดการได้ + วิชาที่ร่วมเช็ก -> [(group_id, group_name)]"""
-    if _user_role(user) == "trainee":
-        cursor.execute("SELECT group_id, group_name FROM course_groups WHERE teacher_username = ?", (user,))
-        rows = list(cursor.fetchall())
-    else:
-        rows = list(groups_for_user(cursor, user))
-    seen = {r[0] for r in rows}
-    cursor.execute("""SELECT g.group_id, g.group_name FROM course_groups g
-                      JOIN group_teachers x ON x.group_id = g.group_id WHERE x.teacher_username = ?
-                      ORDER BY g.group_name""", (user,))
-    for r in cursor.fetchall():
-        if r[0] not in seen:
-            rows.append(r); seen.add(r[0])
-    return rows
-
-def groups_for_user(cursor, user: str) -> list:
-    """วิชาที่ผู้ใช้เห็น/จัดการได้ = วิชาของตัวเอง + วิชาในความรับผิดชอบ (ถ้าเป็นหัวหน้าวิชา) -> [(group_id, group_name)]"""
-    cursor.execute("SELECT group_id, group_name FROM course_groups WHERE teacher_username = ?", (user,))
-    rows = list(cursor.fetchall())
-    seen = {r[0] for r in rows}
-    cursor.execute("""SELECT g.group_id, g.group_name FROM course_groups g
-                      JOIN subject_head_groups h ON h.group_id = g.group_id
-                      JOIN teachers t ON t.username = h.head_username
-                      WHERE h.head_username = ? AND t.role = 'subject_head'""", (user,))
-    for r in cursor.fetchall():
-        if r[0] not in seen:
-            rows.append(r); seen.add(r[0])
-    return rows
-
-def in_inspection_scope(access: dict, classroom: str) -> bool:
-    """ขอบเขตห้องที่ตรวจได้: หัวหน้าระดับเฉพาะระดับตัวเอง, บทบาทอื่นที่มีสิทธิ์ตรวจได้ทุกห้อง"""
-    if access.get("role") == "level_head":
-        return get_grade_level(classroom) == access.get("level_scope", "")
-    return True
 
 
 def verify_manager_password(access: dict, password: str) -> bool:
@@ -2604,59 +1820,32 @@ async def why_us_page():
 # 📱 หน้าล็อกอินสไตล์แอปมือถือ (hero ด้านบน + bottom sheet) — ดีไซน์แยกจาก STYLE_HEADER
 # หมายเหตุ: เป็น string ธรรมดา (ไม่ใช่ f-string) เพื่อไม่ให้ { } ของ CSS/JS ชนกับการ interpolate ของ Python
 LOGIN_STYLE = """
-<link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
     html { -webkit-text-size-adjust: 100%; }
     body.lv-body {
         margin: 0; padding: 0;
         min-height: 100vh; min-height: 100dvh;
         display: block;
-        background: #eef3fb;
+        background: #ececef;
         font-family: 'Prompt', 'Sarabun', 'Inter', sans-serif;
-        color: #0f172a;
+        color: #111827;
         overflow-x: hidden; overflow-y: auto;
         -webkit-tap-highlight-color: transparent;
         -webkit-font-smoothing: antialiased;
         text-rendering: optimizeLegibility;
-        position: relative;
     }
 
-    /* ─── BACKGROUND: ฟ้าอ่อน-ขาว นุ่มๆ + บลอบไล่สีฟ้า/คราม + กริดบางๆ ─── */
+    /* ─── BACKGROUND: เทาอ่อน + ลายเส้นเฉียง + สามเหลี่ยมสีน้ำเงิน ─── */
     .lv-bg {
-        position: fixed; inset: 0; z-index: -3;
+        position: fixed; inset: 0; z-index: -2;
         background:
-            radial-gradient(760px 560px at 10% 0%, rgba(56,189,248,0.30), transparent 62%),
-            radial-gradient(720px 620px at 96% 8%, rgba(99,102,241,0.22), transparent 62%),
-            radial-gradient(920px 760px at 50% 118%, rgba(37,99,235,0.16), transparent 62%),
-            linear-gradient(180deg, #f6f9ff 0%, #eef4fc 55%, #e9f1fb 100%);
-        animation: lvDrift 18s ease-in-out infinite alternate;
+            repeating-linear-gradient(118deg, rgba(255,255,255,0) 0 22px, rgba(255,255,255,0.75) 22px 24px),
+            linear-gradient(180deg, #e9e9ec 0%, #f4f4f6 55%, #eeeef1 100%);
+        -webkit-mask-image: none;
     }
-    .lv-bg::before {
-        content: ""; position: absolute; inset: 0;
-        background-image:
-            linear-gradient(rgba(37,99,235,0.05) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(37,99,235,0.05) 1px, transparent 1px);
-        background-size: 42px 42px;
-        -webkit-mask-image: radial-gradient(circle at 50% 15%, #000 0%, transparent 70%);
-        mask-image: radial-gradient(circle at 50% 15%, #000 0%, transparent 70%);
-        opacity: 0.7;
-    }
-    @keyframes lvDrift {
-        0%   { filter: saturate(1) brightness(1); }
-        50%  { filter: saturate(1.12) brightness(1.02); }
-        100% { filter: saturate(0.96) brightness(0.99); }
-    }
-
-    .lv-tri-bl {
-        position: fixed; left: -16vw; bottom: -14vh; width: min(82vw, 400px); z-index: -2; pointer-events: none;
-        animation: lvFloatA 11s ease-in-out infinite;
-    }
-    .lv-tri-tr {
-        position: fixed; right: -10vw; top: -8vh; width: min(55vw, 240px); z-index: -2; pointer-events: none;
-        animation: lvFloatB 13s ease-in-out infinite;
-    }
-    @keyframes lvFloatA { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(6px,-14px) scale(1.04); } }
-    @keyframes lvFloatB { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(-8px,12px) scale(0.96); } }
+    .lv-tri-bl { position: fixed; left: 0; bottom: 0; width: min(78vw, 340px); z-index: -1; pointer-events: none; }
+    .lv-tri-tr { position: fixed; right: 0; top: 0; width: min(46vw, 190px); z-index: -1; pointer-events: none; }
 
     .lv-shell {
         position: relative;
@@ -2671,72 +1860,47 @@ LOGIN_STYLE = """
         height: calc(env(safe-area-inset-top, 0px) + 74px);
     }
     .lv-back {
-        width: 42px; height: 42px; border: 1px solid #dbe6f7; border-radius: 50%; background: rgba(255,255,255,0.85); padding: 0;
-        display: flex; align-items: center; justify-content: center; cursor: pointer; color: #475569;
-        box-shadow: 0 2px 10px rgba(15,23,42,0.06);
+        width: 40px; height: 40px; border: 0; background: transparent; padding: 0;
+        display: flex; align-items: center; justify-content: center; cursor: pointer; color: #6b7280;
     }
-    .lv-back svg { width: 22px; height: 22px; }
+    .lv-back svg { width: 26px; height: 26px; }
     .lv-lang {
-        width: 46px; height: 46px; border-radius: 50%; border: 1px solid #dbe6f7;
-        background: rgba(255,255,255,0.9); color: #1e3a8a;
-        font-family: 'Space Grotesk', inherit; font-size: 14px; font-weight: 700; cursor: pointer;
-        box-shadow: 0 4px 14px rgba(15,23,42,0.08);
+        width: 46px; height: 46px; border-radius: 50%; border: 0;
+        background: rgba(255,255,255,0.85); color: #374151;
+        font-family: inherit; font-size: 15px; font-weight: 600; cursor: pointer;
+        box-shadow: 0 2px 10px rgba(15,23,42,0.08);
     }
 
     /* ─── LOGO ─── */
-    .lv-logo-block { position: relative; display: flex; flex-direction: column; align-items: center; margin: 2px 0 20px; }
-    .lv-logo-block::before {
-        content: ""; position: absolute; top: -14px; width: 170px; height: 170px; border-radius: 50%;
-        background: radial-gradient(circle, rgba(56,189,248,0.35), rgba(99,102,241,0.16) 50%, transparent 72%);
-        filter: blur(10px); z-index: -1;
-    }
-    .lv-logo { height: 106px; width: auto; object-fit: contain; filter: drop-shadow(0 6px 18px rgba(37,99,235,0.25)); }
-    .lv-logo-name {
-        margin-top: 8px; font-size: 13px; font-weight: 600; letter-spacing: .2px;
-        background: linear-gradient(90deg, #1d4ed8, #0ea5e9);
-        -webkit-background-clip: text; background-clip: text; color: transparent;
-    }
+    .lv-logo-block { display: flex; flex-direction: column; align-items: center; margin: 2px 0 20px; }
+    .lv-logo { height: 108px; width: auto; object-fit: contain; }
+    .lv-logo-name { margin-top: 6px; font-size: 12.5px; font-weight: 500; color: #1f6b3a; }
 
     /* ─── CARD ─── */
     .lv-card {
-        position: relative;
-        background: rgba(255,255,255,0.92);
-        border: 1px solid #e7effa;
+        background: rgba(255,255,255,0.97);
         border-radius: 28px;
-        padding: 28px 20px 22px;
-        backdrop-filter: blur(14px) saturate(140%);
-        -webkit-backdrop-filter: blur(14px) saturate(140%);
-        box-shadow: 0 30px 60px -26px rgba(37,99,235,0.28), 0 10px 26px -18px rgba(15,23,42,0.10), inset 0 1px 0 rgba(255,255,255,0.8);
+        padding: 26px 20px 22px;
+        box-shadow: 0 18px 40px -22px rgba(15,23,42,0.28);
     }
-    .lv-title {
-        margin: 0 0 20px; text-align: center; font-size: 22px; font-weight: 700;
-        font-family: 'Space Grotesk', 'Prompt', sans-serif;
-        background: linear-gradient(90deg, #1e3a8a, #2563eb 55%, #0ea5e9);
-        -webkit-background-clip: text; background-clip: text; color: transparent;
-    }
+    .lv-title { margin: 0 0 18px; text-align: center; font-size: 21px; font-weight: 700; color: #0b0f19; }
 
     /* ─── TABS ─── */
-    .lv-tabs { display: flex; background: #eef3fc; border: 1px solid #e3eafa; border-radius: 100px; margin-bottom: 18px; padding: 4px; }
+    .lv-tabs { display: flex; background: #e4e4e8; border-radius: 100px; margin-bottom: 18px; }
     .lv-tab {
-        flex: 1; height: 42px; border: 0; background: transparent; border-radius: 100px;
-        font-family: inherit; font-size: 14.5px; font-weight: 600; color: #64748b; cursor: pointer;
-        transition: background .25s, color .25s, box-shadow .25s;
+        flex: 1; height: 46px; border: 0; background: transparent; border-radius: 100px;
+        font-family: inherit; font-size: 15px; font-weight: 600; color: #1f2937; cursor: pointer;
+        transition: background .2s, color .2s;
     }
-    .lv-tab.active { background: linear-gradient(135deg, #2563eb, #38bdf8); color: #fff; box-shadow: 0 8px 20px -8px rgba(37,99,235,0.55); }
+    .lv-tab.active { background: #0a7cff; color: #fff; }
 
-    /* ─── FIELDS ─── */
+    /* ─── FIELDS (กรอบนอกคงที่ — ช่อง input ข้างในล่องหน ไม่มีกรอบ/โฟกัสริง/เงา) ─── */
     .lv-field {
         display: flex; align-items: center; gap: 12px;
         height: 54px; padding: 0 16px; margin: 0 0 14px;
-        background: #fbfdff; border: 1.5px solid #dbe3f0; border-radius: 16px;
-        transition: border-color .2s, box-shadow .2s, background .2s;
+        background: #fff; border: 1.5px solid #d3d6dc; border-radius: 16px;
     }
-    .lv-field:focus-within {
-        border-color: #7dd3fc;
-        box-shadow: 0 0 0 3px rgba(56,189,248,0.18);
-        background: #ffffff;
-    }
-    .lv-ico { flex-shrink: 0; width: 21px; height: 21px; color: #2563eb; display: block; }
+    .lv-ico { flex-shrink: 0; width: 22px; height: 22px; color: #0b0f19; display: block; }
 
     .lv-field input.lv-input,
     .lv-field input.lv-input:hover,
@@ -2749,30 +1913,29 @@ LOGIN_STYLE = """
         outline: none !important; box-shadow: none !important;
         background: transparent !important;
         -webkit-appearance: none; appearance: none;
-        font-family: inherit; font-size: 16px; font-weight: 400; color: #0f172a;
-        caret-color: #2563eb; letter-spacing: 0;
+        font-family: inherit; font-size: 16px; font-weight: 400; color: #111827;
+        caret-color: #0a7cff; letter-spacing: 0;
     }
-    .lv-field input.lv-input::placeholder { color: #94a3b8; font-weight: 400; }
+    .lv-field input.lv-input::placeholder { color: #9ca3af; font-weight: 400; }
 
-    /* กันกล่อง autofill ของ Chrome */
+    /* กันกล่อง autofill ของ Chrome (สีเหลือง/ฟ้า) ที่ทำให้เห็นเป็นกรอบ */
     .lv-field input.lv-input:-webkit-autofill,
     .lv-field input.lv-input:-webkit-autofill:hover,
     .lv-field input.lv-input:-webkit-autofill:focus,
     .lv-field input.lv-input:-webkit-autofill:active {
         -webkit-box-shadow: 0 0 0 1000px #ffffff inset !important;
         box-shadow: 0 0 0 1000px #ffffff inset !important;
-        -webkit-text-fill-color: #0f172a !important;
-        caret-color: #2563eb;
+        -webkit-text-fill-color: #111827 !important;
+        caret-color: #0a7cff;
         transition: background-color 99999s ease-out 0s;
     }
 
     .lv-eye {
         flex-shrink: 0; height: 26px; border: 0; background: transparent; cursor: pointer;
-        padding: 0 0 0 12px; margin-left: 2px; border-left: 1.5px solid #cbd5e1;
-        display: flex; align-items: center; color: #64748b;
-        -webkit-appearance: none; appearance: none;
+        padding: 0 0 0 12px; margin-left: 2px; border-left: 1.5px solid #6b7280;
+        display: flex; align-items: center; color: #0b0f19;
     }
-    .lv-eye svg { width: 23px; height: 23px; }
+    .lv-eye svg { width: 24px; height: 24px; }
 
     /* ─── SELECT สถาบัน ─── */
     .lv-field select.lv-select,
@@ -2783,48 +1946,41 @@ LOGIN_STYLE = """
         border: 0 !important; outline: none !important; box-shadow: none !important;
         background: transparent !important;
         -webkit-appearance: none; appearance: none;
-        font-family: inherit; font-size: 16px; font-weight: 400; color: #0f172a;
+        font-family: inherit; font-size: 16px; font-weight: 400; color: #111827;
     }
-    .lv-chev { flex-shrink: 0; width: 21px; height: 21px; color: #2563eb; display: block; pointer-events: none; }
+    .lv-chev { flex-shrink: 0; width: 22px; height: 22px; color: #6b7280; display: block; pointer-events: none; }
 
     /* ─── CHECKBOX ─── */
-    .lv-check { display: flex; align-items: center; gap: 10px; margin: 6px 0 18px; padding: 0 4px; font-size: 12.5px; color: #64748b; line-height: 1.5; cursor: pointer; }
+    .lv-check { display: flex; align-items: center; gap: 10px; margin: 4px 0 16px; padding: 0 4px; font-size: 12.5px; color: #1998b8; line-height: 1.5; cursor: pointer; }
     .lv-check input[type="checkbox"] {
         -webkit-appearance: none; appearance: none;
-        flex-shrink: 0; width: 23px; height: 23px; margin: 0;
-        border: 2px solid #cbd5e1; border-radius: 7px; background: #fff; cursor: pointer;
+        flex-shrink: 0; width: 24px; height: 24px; margin: 0;
+        border: 2px solid #6b7280; border-radius: 6px; background: #fff; cursor: pointer;
         outline: none; transition: background .15s, border-color .15s;
     }
     .lv-check input[type="checkbox"]:checked {
-        background-color: #2563eb; border-color: #2563eb;
+        background-color: #0a7cff; border-color: #0a7cff;
         background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='5 12.5 10 17.5 19 7'/%3E%3C/svg%3E");
-        background-size: 78% 78%; background-position: center; background-repeat: no-repeat;
+        background-size: 82% 82%; background-position: center; background-repeat: no-repeat;
     }
-    .lv-check a { color: #2563eb; font-weight: 700; text-decoration: none; }
+    .lv-check a { color: #1998b8; font-weight: 700; text-decoration: none; }
 
     /* ─── SUBMIT ─── */
     .lv-submit {
-        display: block; margin: 8px auto 0; min-width: 62%; height: 52px; padding: 0 36px;
+        display: block; margin: 6px auto 0; min-width: 62%; height: 52px; padding: 0 36px;
         border: 0; border-radius: 100px;
-        font-family: 'Space Grotesk', inherit; font-size: 16.5px; font-weight: 700; letter-spacing: .2px; color: #fff;
-        background: linear-gradient(135deg, #2563eb, #38bdf8);
-        box-shadow: 0 16px 32px -12px rgba(37,99,235,0.55);
-        cursor: pointer; transition: transform .12s, box-shadow .2s, filter .2s;
-        -webkit-appearance: none; appearance: none;
+        font-family: inherit; font-size: 17px; font-weight: 700; color: #fff;
+        background: #0a7cff; box-shadow: 0 10px 22px -10px rgba(10,124,255,0.65);
+        cursor: pointer; transition: transform .12s, background .2s;
     }
-    .lv-submit:disabled { background: #e2e8f0; color: #94a3b8; box-shadow: none; }
+    .lv-submit:disabled { background: #a9a9ae; box-shadow: none; cursor: not-allowed; }
     .lv-submit:active:not(:disabled) { transform: scale(0.97); }
-    .lv-submit:not(:disabled):hover { filter: brightness(1.05); }
 
     /* ─── LINKS ─── */
-    .lv-link {
-        display: block; text-align: center; margin-top: 14px; font-size: 14.5px; font-weight: 700; color: #2563eb; text-decoration: none; cursor: pointer;
-        background: none; border: 0; width: 100%; font-family: inherit; padding: 0;
-        -webkit-appearance: none; appearance: none;
-    }
-    .lv-link.soft { font-weight: 500; margin-top: 10px; color: #64748b; }
-    .lv-why { display: block; text-align: center; margin-top: 20px; font-size: 12.5px; font-weight: 600; color: #64748b; text-decoration: none; }
-    .lv-footer { text-align: center; margin-top: 18px; font-size: 10px; letter-spacing: 2px; color: #94a3b8; font-weight: 700; }
+    .lv-link { display: block; text-align: center; margin-top: 14px; font-size: 15px; font-weight: 700; color: #1998b8; text-decoration: none; cursor: pointer; background: none; border: 0; width: 100%; font-family: inherit; padding: 0; }
+    .lv-link.soft { font-weight: 500; margin-top: 10px; }
+    .lv-why { display: block; text-align: center; margin-top: 18px; font-size: 12.5px; font-weight: 600; color: #6b7280; text-decoration: none; }
+    .lv-footer { text-align: center; margin-top: 18px; font-size: 10px; letter-spacing: 1px; color: #9ca3af; font-weight: 600; }
 
     @media (max-height: 700px) {
         .lv-logo { height: 84px; }
@@ -2835,48 +1991,33 @@ LOGIN_STYLE = """
 
 # 🔷 พื้นหลังสามเหลี่ยมสีน้ำเงิน (SVG วาดเอง ไม่ใช้รูป/อีโมจิ)
 LOGIN_BG_SVG = """
-<svg class="lv-tri-bl" viewBox="0 0 420 420" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+<svg class="lv-tri-bl" viewBox="0 0 300 380" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
     <defs>
-        <radialGradient id="lvg1" cx="35%" cy="35%" r="65%">
-            <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.55"/>
-            <stop offset="100%" stop-color="#38bdf8" stop-opacity="0"/>
-        </radialGradient>
-        <radialGradient id="lvg2" cx="50%" cy="50%" r="60%">
-            <stop offset="0%" stop-color="#6366f1" stop-opacity="0.38"/>
-            <stop offset="100%" stop-color="#6366f1" stop-opacity="0"/>
-        </radialGradient>
-        <linearGradient id="lvgLine" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stop-color="#60a5fa" stop-opacity="0.35"/>
-            <stop offset="1" stop-color="#38bdf8" stop-opacity="0"/>
-        </linearGradient>
+        <linearGradient id="lvg1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3aa0ff"/><stop offset="1" stop-color="#0a55d6"/></linearGradient>
+        <linearGradient id="lvg2" x1="1" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8fd0ff"/><stop offset="1" stop-color="#1b7cf0"/></linearGradient>
+        <linearGradient id="lvg3" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#0b3fb8"/><stop offset="1" stop-color="#2d8cff"/></linearGradient>
     </defs>
-    <circle cx="140" cy="260" r="190" fill="url(#lvg1)"/>
-    <circle cx="90" cy="360" r="120" fill="url(#lvg2)"/>
-    <g fill="none" stroke="url(#lvgLine)" stroke-width="1.2">
-        <circle cx="140" cy="260" r="150" opacity="0.5"/>
-        <circle cx="140" cy="260" r="110" opacity="0.35"/>
-    </g>
+    <polygon points="0,110 96,160 18,250" fill="url(#lvg2)" opacity="0.85"/>
+    <polygon points="18,250 96,160 128,226" fill="url(#lvg1)" opacity="0.95"/>
+    <polygon points="0,250 18,250 0,300" fill="url(#lvg3)"/>
+    <polygon points="18,250 128,226 112,320" fill="url(#lvg3)" opacity="0.92"/>
+    <polygon points="0,300 112,320 0,380" fill="url(#lvg1)"/>
+    <polygon points="112,320 210,350 150,380 60,380" fill="url(#lvg2)" opacity="0.8"/>
+    <polygon points="128,226 196,290 112,320" fill="url(#lvg2)" opacity="0.7"/>
+    <polygon points="196,290 270,330 210,350" fill="url(#lvg1)" opacity="0.75"/>
+    <polygon points="60,140 90,110 100,160" fill="#9fd8ff" opacity="0.55"/>
+    <polygon points="150,260 176,240 186,272" fill="#bfe6ff" opacity="0.5"/>
 </svg>
-<svg class="lv-tri-tr" viewBox="0 0 260 260" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+<svg class="lv-tri-tr" viewBox="0 0 160 150" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
     <defs>
-        <radialGradient id="lvg3" cx="65%" cy="30%" r="65%">
-            <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.5"/>
-            <stop offset="100%" stop-color="#38bdf8" stop-opacity="0"/>
-        </radialGradient>
-        <radialGradient id="lvg4" cx="50%" cy="50%" r="60%">
-            <stop offset="0%" stop-color="#818cf8" stop-opacity="0.32"/>
-            <stop offset="100%" stop-color="#818cf8" stop-opacity="0"/>
-        </radialGradient>
-        <linearGradient id="lvgLine2" x1="1" y1="0" x2="0" y2="1">
-            <stop offset="0" stop-color="#7dd3fc" stop-opacity="0.4"/>
-            <stop offset="1" stop-color="#6366f1" stop-opacity="0"/>
-        </linearGradient>
+        <linearGradient id="lvg4" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4aa8ff"/><stop offset="1" stop-color="#0a5bdc"/></linearGradient>
+        <linearGradient id="lvg5" x1="1" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#9ad6ff"/><stop offset="1" stop-color="#2a86f2"/></linearGradient>
     </defs>
-    <circle cx="170" cy="80" r="130" fill="url(#lvg3)"/>
-    <circle cx="210" cy="150" r="70" fill="url(#lvg4)"/>
-    <g fill="none" stroke="url(#lvgLine2)" stroke-width="1.2">
-        <circle cx="170" cy="80" r="100" opacity="0.5"/>
-    </g>
+    <polygon points="160,0 160,70 104,38" fill="url(#lvg4)" opacity="0.9"/>
+    <polygon points="160,0 104,38 126,0" fill="url(#lvg5)" opacity="0.85"/>
+    <polygon points="104,38 160,70 118,92" fill="url(#lvg5)" opacity="0.7"/>
+    <polygon points="126,0 150,0 138,14" fill="#bfe6ff" opacity="0.8"/>
+    <polygon points="96,66 112,52 118,76" fill="#7cc4ff" opacity="0.6"/>
 </svg>
 """
 
@@ -3001,7 +2142,7 @@ PAGE_LOADER = """
     var ktechStart=Date.now();
     window.addEventListener('load', function(){
         var elapsed=Date.now()-ktechStart;
-        var wait=Math.max(0, 200-elapsed);
+        var wait=Math.max(0, 450-elapsed);
         setTimeout(ktechHide, wait);
     });
     setTimeout(ktechHide, 4000);
@@ -3361,9 +2502,6 @@ async def student_dashboard(user_session: Optional[str] = Cookie(None)):
                 </a>
                 <a href="/student/care" class="ah-cell">
                     {icon_care}<span class="ah-cell-label">ดูแลนักเรียน</span>
-                </a>
-                <a href="/student/inspection" class="ah-cell">
-                    <div class="ah-cell-icon-wrap" style="background:#ecfdf5;color:#047857;"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div><span class="ah-cell-label">ตรวจระเบียบ</span>
                 </a>
                 <a href="/student/payments" class="ah-cell">
                     {icon_payment}<span class="ah-cell-label">ชำระเงิน</span>
@@ -4081,14 +3219,8 @@ async def admin_dashboard(user_session: Optional[str] = Cookie(None)):
                 {adm_cell("/admin/conduct", '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>', "#fff1f2", "#be123c", "คะแนนประพฤติ")}
                 {adm_cell("/admin/history", '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/>', "#fff7ed", "#c2410c", "ประวัติเช็กชื่อ")}
                 {adm_cell("/admin/payments", '<rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/>', "#eef2ff", "#4338ca", "ชำระเงิน")}
-                {adm_cell("/app/facegate", '<path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><path d="M9 9h.01M15 9h.01"/>', "#f0fdf4", "#15803d", "สแกนหน้าเข้า-ออก (ทดลอง)")}
-                {adm_cell("/admin/face_enroll", '<circle cx="12" cy="12" r="9"/><path d="M9 10h.01M15 10h.01M8.5 15a4.5 4.5 0 0 0 7 0"/>', "#ecfeff", "#0891b2", "ลงทะเบียนใบหน้า (ทดลอง)")}
                 {adm_cell("/admin/grades_visibility", '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>', "#ecfeff", "#0e7490", "การมองเห็นคะแนน")}
             </div>
-
-            <!-- ── ตรวจระเบียบนักเรียน ── -->
-            <div class="ah-section-label">ตรวจระเบียบนักเรียน</div>
-            <div class="ah-grid3">{inspection_menu_cells({"role": "admin"})}</div>
 
             <!-- ── เมนูอื่นๆ ── -->
             <div class="ah-section-label">เครื่องมือ</div>
@@ -4123,8 +3255,7 @@ async def admin_dashboard(user_session: Optional[str] = Cookie(None)):
 
 @app.get("/admin/students", response_class=HTMLResponse)
 async def admin_students_page(class_filter: Optional[str] = None, user_session: Optional[str] = Cookie(None)):
-    access = gate_perm(user_session, can_manage_student_registry)
-    if not access:
+    if user_session != "admin":
         return RedirectResponse(url="/login", status_code=303)
 
     master_students = get_sorted_master_students()
@@ -4136,46 +3267,61 @@ async def admin_students_page(class_filter: Optional[str] = None, user_session: 
     if class_filter:
         master_students = [s for s in master_students if s['class'] == class_filter]
     all_risk_tags = get_all_students_risk_tags()
-    cards = ""
+    student_table_rows = ""
     for s in master_students:
         tags = all_risk_tags.get(s['name'], [])
         tag_html = "".join([
             f'<span style="background:{t[1]};color:{t[2]};border:1px solid {t[3]};padding:2px 7px;border-radius:20px;font-size:11px;font-weight:700;white-space:nowrap;">{t[0]}</span>'
             for t in tags
         ])
-        q_uid = urllib.parse.quote(s['uid'])
-        initial = _he(s['name'][:1]) if s['name'] else "?"
-        cards += f"""
-        <div class="dk-stu sd-card" data-search="{_he((s['name'] + ' ' + s['no'] + ' ' + s['class'] + ' ' + s['branch']).lower(), quote=True)}" style="margin:0;">
-            <div class="dk-stu-head" style="margin-bottom:8px;">
-                <div class="dk-avatar">{initial}</div>
-                <div class="nm"><b>{_he(s['name'])}</b><span>เลขที่ {_he(s['no'])} · {_he(s['branch'])}</span></div>
-                <span class="dk-pill mute">{_he(s['class'])}</span>
+        student_table_rows += f"""
+        <tr>
+            <td><span class="badge">{s['class']}</span></td>
+            <td><b>{s['no']}</b></td>
+            <td style="text-align:left;">
+                <div style="font-weight:600; color:#0f172a;">{s['name']}</div>
+                {f'<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;">{tag_html}</div>' if tag_html else ''}
+            </td>
+            <td><span style="color:#475569; font-size:12.5px;">{s['branch']}</span></td>
+            <td>
+                <div style="display:flex; gap:6px; justify-content:center;">
+                    <a href="/admin/edit_student?uid={s['uid']}" class="btn btn-warning" style="padding:5px 10px; font-size:11.5px;">📝 แก้ไข</a>
+                    <a href="/api/admin/delete_student?uid={s['uid']}" class="btn btn-danger" style="padding:5px 10px; font-size:11.5px;" onclick="return confirm('ยืนยันที่จะลบข้อมูลนักเรียนคนนี้ออกจากทะเบียนหลัก?')">🛑 ลบ</a>
+                </div>
+            </td>
+        </tr>
+        """
+    return f"""
+    <html>{STYLE_HEADER}
+    <body>
+        <div class="navbar">
+            <h1><img src="{LOGO_URL}" class="nav-logo"> จัดการนักเรียน</h1>
+            <a href="/admin/dashboard" class="btn btn-secondary">⬅ กลับหน้าควบคุม</a>
+        </div>
+        <div class="main-container">
+            <a href="/admin/add_student" class="btn btn-warning" style="width:100%; padding:14px; margin-bottom:12px; box-sizing:border-box; font-weight:700; border-radius:10px; background: linear-gradient(135deg, #10b981, #047857); border:none; text-align:center; color:white;">📥 เพิ่มรายชื่อนักเรียนใหม่</a>
+            <a href="/admin/student_accounts" class="btn btn-warning" style="width:100%; padding:14px; margin-bottom:16px; box-sizing:border-box; font-weight:700; border-radius:10px; background: linear-gradient(135deg, #7c3aed, #5b21b6); border:none; text-align:center; color:white;">🔑 ตั้งค่ารหัสประจำตัว/เบอร์โทร สำหรับเข้าสู่ระบบนักเรียน</a>
+            <div class="card">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; flex-wrap:wrap; gap:10px;">
+                    <h2 style="margin:0;">📁 ฐานข้อมูลทะเบียนนักเรียนส่วนกลาง</h2>
+                    <div style="display:flex; align-items:center; gap:8px; background:#f1f5f9; padding:8px 12px; border-radius:10px; border:1px solid #e2e8f0;">
+                        <span style="font-size:13px; font-weight:700; color:#475569;">🔍 กรองตามห้อง:</span>
+                        <select onchange="location.href='/admin/students?class_filter='+this.value;" style="padding:5px; border-radius:6px; border:1px solid #cbd5e1; font-family:'Sarabun'; font-size:13px; font-weight:600;">
+                            {class_options}
+                        </select>
+                    </div>
+                </div>
+                <div style="overflow-x:auto; border-radius:8px; border:1px solid #e2e8f0;">
+                    <table>
+                        <thead><tr><th>ชั้นเรียน</th><th>เลขที่</th><th>ชื่อ-นามสกุล</th><th>สาขาวิชาเอก</th><th>การจัดการระบบ</th></tr></thead>
+                        <tbody>{student_table_rows if student_table_rows else "<tr><td colspan='5'>ไม่พบข้อมูล</td></tr>"}</tbody>
+                    </table>
+                </div>
             </div>
-            {f'<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px;">{tag_html}</div>' if tag_html else ''}
-            <div style="display:flex; gap:8px;">
-                <a href="/admin/edit_student?uid={q_uid}" class="dk-btn light sm" style="flex:1;">📝 แก้ไข</a>
-                <a href="/api/admin/delete_student?uid={q_uid}" class="dk-btn danger sm" style="flex:1;" data-confirm="ยืนยันที่จะลบข้อมูลนักเรียนคนนี้ออกจากทะเบียนหลัก?">🛑 ลบ</a>
-            </div>
-        </div>"""
-
-    all_students_count = len(get_sorted_master_students())
-    stats = (dk_stat("นักเรียนทั้งหมด", all_students_count, "🎒", "blue") + dk_stat("ห้องเรียน", len(all_classes), "🏫", "violet")
-             + dk_stat("กำลังแสดง", len(master_students), "👁️", "green") + dk_stat("มีป้ายเฝ้าระวัง", sum(1 for s in master_students if all_risk_tags.get(s['name'])), "⚠️", "amber"))
-    quick = """<div class="dk-grid c2" style="margin-bottom:14px;">
-        <a href="/admin/add_student" class="dk-btn green block" style="padding:14px;">📥 เพิ่มรายชื่อนักเรียนใหม่</a>
-        <a href="/admin/import_students" class="dk-btn light block" style="padding:14px;margin-top:8px;">📊 นำเข้าจากไฟล์ Excel</a>
-        <a href="/admin/student_accounts" class="dk-btn block" style="padding:14px;background:linear-gradient(135deg,#7c3aed,#5b21b6);">🔑 ตั้งค่ารหัส/เบอร์โทร เข้าสู่ระบบนักเรียน</a></div>"""
-    flt = f"""<div class="dk-card"><div class="dk-card-title">📁 ทะเบียนนักเรียนส่วนกลาง<small>{len(master_students)} รายการ</small></div>
-        <div class="dk-filter" style="grid-template-columns:1fr 1fr;">
-            <div><label class="dk-label">🔍 ค้นหา</label><input id="sdSearch" class="dk-input" placeholder="ชื่อ / เลขที่ / สาขา"></div>
-            <div><label class="dk-label">ห้องเรียน</label><select class="dk-select" onchange="location.href='/admin/students?class_filter='+encodeURIComponent(this.value);">{class_options}</select></div>
-        </div></div>"""
-    grid = f'<div class="dk-grid c3" id="sdGrid">{cards}</div>' if cards else f'<div class="dk-card">{dk_empty("🗂️", "ไม่พบข้อมูลนักเรียน")}</div>'
-    js = """<script>(function(){var i=document.getElementById('sdSearch');if(!i)return;i.addEventListener('input',function(){var q=this.value.trim().toLowerCase();
-        document.querySelectorAll('.sd-card').forEach(function(c){c.style.display=(!q||c.getAttribute('data-search').indexOf(q)!==-1)?'':'none';});});})();</script>"""
-    return dk_page("จัดการนักเรียน", "ทะเบียนนักเรียนส่วนกลาง เพิ่ม แก้ไข ลบ และค้นหา", f'<div class="dk-stats">{stats}</div>{quick}{flt}{grid}',
-                   staff_home_url(access), extra=js, icon="🎒 ")
+            <div style="text-align:center; color:#94a3b8; font-size:12px; font-weight:600; margin-top:20px;">KK STUDIO GROUP APPLICATION MANAGEMENT</div>
+        </div>
+    </body></html>
+    """
 
 @app.get("/admin/student_accounts", response_class=HTMLResponse)
 async def admin_student_accounts_page(class_filter: Optional[str] = None, user_session: Optional[str] = Cookie(None)):
@@ -4538,24 +3684,6 @@ async def admin_system_status(user_session: Optional[str] = Cookie(None)):
 # ==========================================
 # 👤 [INSTRUCTOR VIEW WITH MAINTENANCE BLOCK]
 # ==========================================
-TEACHER_ANN_JS = """<script>
-(async function () {
-    try {
-        const resp = await fetch('/api/announcements'); const data = await resp.json();
-        if (!data || !data.length) return;
-        document.getElementById('announcement-section').style.display = 'block';
-        const list = document.getElementById('announcement-list');
-        const cfg = { normal: { cls: 'normal', ic: '📣', tc: '#1e40af' }, important: { cls: 'important', ic: '⚠️', tc: '#92400e' }, urgent: { cls: 'urgent', ic: '🚨', tc: '#991b1b' } };
-        data.forEach(a => {
-            const c = cfg[a.level] || cfg.normal, div = document.createElement('div');
-            div.className = 'ah-announce ' + c.cls;
-            div.innerHTML = '<div class="ah-announce-title" style="color:' + c.tc + '">' + c.ic + ' ' + a.title + '</div><div class="ah-announce-body">' + a.body + '</div>';
-            list.appendChild(div);
-        });
-    } catch (e) {}
-})();
-</script>"""
-
 @app.get("/app/dashboard", response_class=HTMLResponse)
 async def app_dashboard(user: str, user_session: Optional[str] = Cookie(None)):
     if not user_session or user_session != f"teacher_{urllib.parse.quote(user)}":
@@ -4571,7 +3699,8 @@ async def app_dashboard(user: str, user_session: Optional[str] = Cookie(None)):
     cursor.execute("SELECT fullname FROM teachers WHERE username = ?", (user,))
     t_info = cursor.fetchone()
     display_name = t_info[0] if t_info else user
-    my_groups = rollcall_groups_for_user(cursor, user)
+    cursor.execute("SELECT group_id, group_name FROM course_groups WHERE teacher_username = ?", (user,))
+    my_groups = cursor.fetchall()
     cursor.execute("SELECT COUNT(*) FROM announcements WHERE is_active=1")
     active_announcements = cursor.fetchone()[0]
     pending_leave = 0
@@ -4584,87 +3713,163 @@ async def app_dashboard(user: str, user_session: Optional[str] = Cookie(None)):
             pending_leave = cursor.fetchone()[0]
     conn.close()
 
-    # ───────── ข้อมูลของแดชบอร์ดครู ─────────
-    conn2 = sqlite3.connect('attendance_pro.db')
-    c2 = conn2.cursor()
-    today_th = datetime.now().strftime("%d/%m/%Y")
-    c2.execute("SELECT username, fullname FROM teachers")
-    name_map = dict(c2.fetchall())
-    subjects, total_students, done_today = [], 0, 0
-    for gid, gname in my_groups:
-        c2.execute("SELECT COUNT(*) FROM group_assignments WHERE group_id=?", (gid,))
-        n_stu = c2.fetchone()[0]
-        c2.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (gid,))
-        owner = (c2.fetchone() or [""])[0]
-        try:
-            c2.execute("SELECT COUNT(*) FROM attendance_logs WHERE group_name=? AND date=?", (gname, today_th))
-            checked_today = c2.fetchone()[0] > 0
-        except sqlite3.Error:
-            checked_today = False
-        total_students += n_stu
-        done_today += 1 if checked_today else 0
-        subjects.append((gid, gname, n_stu, owner, checked_today))
-    conn2.close()
+    def badge(n):
+        return f'<span class="ah-badge">{n}</span>' if n > 0 else ""
+    def count_badge(n):
+        return f'<span class="ah-badge-count">{n}</span>' if n > 0 else ""
 
-    uq = urllib.parse.quote(user)
-    subj_cards = ""
-    for gid, gname, n_stu, owner, checked in subjects:
-        mine = owner == user
-        full = can_access_group(user, gid, owner)
-        owner_txt = "วิชาของคุณ" if mine else (f"ครูผู้สอนหลัก: {_he(name_map.get(owner, owner or '-'))}" + ("" if full else " · เช็กชื่อร่วม"))
-        subj_cards += f"""<div class="dk-subj">
-            <div class="dk-subj-top"><div class="dk-ico-box" style="background:#ccfbf1;color:#0f766e;">{ic('book-open', 22)}</div>
-                <div class="grow"><b>{_he(gname)}</b><span class="sub">{owner_txt}</span></div></div>
-            <div class="dk-subj-meta"><span class="dk-pill mute">{ic('users', 13)} {n_stu} คน</span>
-                <span class="dk-pill {'ok' if checked else 'warn'}">{ic('check' if checked else 'clock', 13)} {'เช็กชื่อวันนี้แล้ว' if checked else 'ยังไม่ได้เช็กวันนี้'}</span></div>
-            <div class="dk-subj-act"><a href="/app/rollcall/{gid}?user={uq}" class="dk-btn sm">{ic('clipboard-check', 15)} เช็กชื่อ</a>
-                {f'<a href="/app/classroom/{gid}?user={uq}" class="dk-btn light sm">{ic("school", 15)} ห้องเรียน</a>' if full else ''}</div></div>"""
-    if not subj_cards:
-        subj_cards = f'<div class="dk-card" style="grid-column:1/-1;">{dk_empty("📚", "ยังไม่มีวิชาที่ได้รับมอบหมาย — ติดต่อผู้ดูแลระบบหรือหัวหน้าวิชา")}</div>'
+    # 🎓📍 แผ่นเช็กชื่อคลาสวิชาภายใต้การกำกับดูแล (SVG icons)
+    room_cells = ""
+    for g in my_groups:
+        target_url = f"/app/classroom/{g[0]}?user={user}"
+        room_cells += f"""
+        <a href="{target_url}" class="ah-cell">
+            <div class="ah-cell-icon-wrap" style="background:#dbeafe;color:#1d4ed8;">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            </div>
+            <span class="ah-cell-label">{g[1]}</span>
+        </a>"""
 
-    tools = "" if access["role"] == "trainee" else dk_tool(f"/app/history?user={uq}", "file-text", "ประวัติเช็กชื่อ", "blue")
-    if can_manage_subject_scope(access) and access["role"] == "subject_head":
-        tools += dk_tool("/subject-head", "layers", "จัดการวิชา", "violet")
-    if can_manage_inspection(access):
-        tools += dk_tool("/inspection", "clipboard-check", "ตรวจระเบียบ", "green")
-    if can_view_inspection_report(access):
-        tools += dk_tool("/inspection/report", "bar-chart", "รายงานระเบียบ", "blue")
-    if can_manage_inspection_criteria(access):
-        tools += dk_tool("/inspection/criteria", "sliders", "ตัวชี้วัดระเบียบ", "amber")
+    # 🔐 เมนูสิทธิ์พิเศษ: หัวหน้าระดับ / ฝ่ายกิจการ (SVG icons)
+    discipline_cells = ""
     if can_manage_discipline(access):
-        tools += dk_tool("/admin/leave_requests", "file-text", "อนุมัติคำร้องลา", "violet", pending_leave)
-        tools += dk_tool("/admin/conduct", "shield", "คะแนนประพฤติ", "red")
+        discipline_cells += f"""
+        <a href="/admin/leave_requests" class="ah-cell" style="position:relative;">
+            {count_badge(pending_leave)}
+            <div class="ah-cell-icon-wrap" style="background:#eef2ff;color:#4338ca;">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+            </div>
+            <span class="ah-cell-label">อนุมัติคำร้องลา</span>
+        </a>
+        <a href="/admin/conduct" class="ah-cell">
+            <div class="ah-cell-icon-wrap" style="background:#fff1f2;color:#be123c;">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            </div>
+            <span class="ah-cell-label">คะแนนประพฤติ</span>
+        </a>"""
     if can_view_analytics(access):
-        tools += dk_tool("/admin/analytics", "bar-chart", "แดชบอร์ดสถิติ", "blue")
+        discipline_cells += f"""
+        <a href="/admin/analytics" class="ah-cell">
+            <div class="ah-cell-icon-wrap" style="background:#eef2ff;color:#4338ca;">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+            </div>
+            <span class="ah-cell-label">แดชบอร์ดสถิติ</span>
+        </a>"""
     if can_manage_teacher_accounts(access):
-        tools += dk_tool("/admin/teachers", "users", "จัดการบัญชีครู", "green")
-    if can_manage_student_registry(access):
-        tools += dk_tool("/admin/students", "backpack", "ทะเบียนนักเรียน", "blue")
-        tools += dk_tool("/admin/add_student", "user-plus", "เพิ่มนักเรียน", "green")
+        discipline_cells += f"""
+        <a href="/admin/teachers" class="ah-cell">
+            <div class="ah-cell-icon-wrap" style="background:#f0fdf4;color:#15803d;">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            </div>
+            <span class="ah-cell-label">จัดการบัญชีครู</span>
+        </a>"""
     if can_manage_student_profiles(access):
-        tools += dk_tool("/admin/student_accounts", "lock", "โปรไฟล์นักเรียน", "violet")
-    if can_manage_payments(access):
-        tools += dk_tool("/admin/payments", "credit-card", "การเงิน", "amber")
-    if can_face_gate(access):
-        tools += dk_tool("/app/facegate", "scan-face", "สแกนหน้าเข้า-ออก (ทดลอง)", "green")
-    if can_manage_face_data(access):
-        tools += dk_tool("/admin/face_enroll", "camera", "ลงทะเบียนใบหน้า (ทดลอง)", "violet")
+        discipline_cells += f"""
+        <a href="/admin/student_accounts" class="ah-cell">
+            <div class="ah-cell-icon-wrap" style="background:#f5f3ff;color:#6d28d9;">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            </div>
+            <span class="ah-cell-label">โปรไฟล์นักเรียน</span>
+        </a>"""
+    discipline_section = ""
+    if discipline_cells:
+        scope_tag = f" ({access['level_scope']})" if access["role"] == "level_head" and access["level_scope"] else ""
+        discipline_section = f"""
+        <div class="ah-section-label">{access['role_label']}{scope_tag} · สิทธิ์พิเศษ</div>
+        <div class="ah-grid3">{discipline_cells}</div>
+        """
 
-    stats = (dk_stat("วิชาที่ดูแล", len(subjects), "📚", "green") + dk_stat("นักเรียนในวิชา", total_students, "🎒", "blue")
-             + dk_stat("เช็กชื่อวันนี้", f"{done_today}/{len(subjects)}", "✅", "violet")
-             + (dk_stat("คำร้องรออนุมัติ", pending_leave, "📝", "amber") if can_manage_discipline(access) else dk_stat("ประกาศใหม่", active_announcements, "📣", "amber")))
-    scope_tag = f" · {_he(access['level_scope'])}" if access["role"] == "level_head" and access["level_scope"] else ""
-    hero_actions = (f'<a href="/app/notifications" class="dk-btn hero">{ic("bell", 15)} ประกาศ</a>'
-                    f'<a href="/logout" class="dk-btn hero">{ic("log-out", 15)}</a>')
-    body = (f'<div id="announcement-section" style="margin-bottom:14px;display:none;"><div id="announcement-list"></div></div>'
-            f'<div class="dk-stats">{stats}</div>'
-            f'{('<div class="dk-section">เมนูของคุณ · ' + _he(TEACHER_ROLES.get(access["role"], TEACHER_ROLES["teacher"])["label"].split(" ", 1)[-1]) + scope_tag + '</div><div class="dk-tools">' + tools + '</div>') if tools else ''}'
-            f'<div class="dk-section">วิชาที่ดูแล ({len(subjects)})</div><div class="dk-grid c2">{subj_cards}</div>'
-            f'<div class="ah-footer" style="margin-top:20px;">powered by <span>K-Techinteractive</span></div>')
-    role_text = _he(access["role_label"].split(" ", 1)[-1]) if access["role_label"] else "ครู"
-    subtitle = f'{today_th[:6]}{int(today_th[-4:]) + 543} · วิทยาลัยนาฏศิลป<br><span class="dk-role">{ic("award", 13)} {role_text}{scope_tag}</span>'
-    return dk_page(f"สวัสดี, {_he(display_name)}", subtitle, body, None, hero_actions,
-                   extra=TEACHER_ANN_JS + render_bottom_nav("home", "teacher", user), theme="dk-teal", head_extra=ADMIN_HOME_STYLE)
+    return f"""
+    <html>{STYLE_HEADER}
+    {ADMIN_HOME_STYLE}
+    <body class="ah-body">
+        {PAGE_LOADER}
+        <!-- ── Teacher Profile Hero ── -->
+        <div class="ah-profile">
+            <div class="ah-top-row">
+                <div class="ah-brand">K-School</div>
+                <div class="ah-top-icons">
+                    <a href="/app/notifications" class="ah-icon-btn" aria-label="ประกาศ">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+                        {badge(active_announcements)}
+                    </a>
+                    <a href="/logout" class="ah-icon-btn" aria-label="ออกจากระบบ">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16,17 21,12 16,7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                    </a>
+                </div>
+            </div>
+            <div class="ah-who">
+                <div class="ah-avatar" style="background:linear-gradient(135deg,#0f766e,#0d9488); overflow:hidden; padding:0; border-radius:50%;">
+                    <img src="{TEACHER_DEFAULT_AVATAR}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" alt="{display_name}">
+                </div>
+                <div>
+                    <h1>สวัสดี, {display_name}</h1>
+                    <p>{access['role_label']} · K-School</p>
+                </div>
+            </div>
+            <div class="ah-inst">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9,22 9,12 15,12 15,22"/></svg>
+                วิทยาลัยนาฏศิลป
+            </div>
+        </div>
+
+        <div class="ah-wrap">
+            <!-- ── ประกาศ ── -->
+            <div id="announcement-section" style="margin-bottom:16px; display:none;">
+                <div id="announcement-list"></div>
+            </div>
+            <script>
+                async function loadAnnouncements() {{
+                    try {{
+                        const resp = await fetch('/api/announcements');
+                        const data = await resp.json();
+                        if (data && data.length > 0) {{
+                            document.getElementById('announcement-section').style.display = 'block';
+                            const list = document.getElementById('announcement-list');
+                            const cfg = {{normal:{{cls:'normal',ic:'📣',tc:'#1e40af'}}, important:{{cls:'important',ic:'⚠️',tc:'#92400e'}}, urgent:{{cls:'urgent',ic:'🚨',tc:'#991b1b'}}}};
+                            data.forEach(a => {{
+                                const c = cfg[a.level] || cfg.normal;
+                                const div = document.createElement('div');
+                                div.className = `ah-announce ${{c.cls}}`;
+                                div.innerHTML = `<div class="ah-announce-title" style="color:${{c.tc}}">${{c.ic}} ${{a.title}}</div><div class="ah-announce-body">${{a.body}}</div>`;
+                                list.appendChild(div);
+                            }});
+                        }}
+                    }} catch (e) {{}}
+                }}
+                loadAnnouncements();
+            </script>
+
+            <!-- ── Big Tiles: ประวัติ + คำร้อง ── -->
+            <div class="ah-row2">
+                <a href="/app/history?user={user}" class="ah-tile-big" style="background:linear-gradient(135deg,#0f766e,#0d9488);">
+                    <div class="ah-tile-bg-icon">
+                        <svg viewBox="0 0 24 24" width="52" height="52" fill="none" stroke="rgba(255,255,255,0.9)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10,9 9,9 8,9"/></svg>
+                    </div>
+                    <div class="ah-tile-pill">ดูประวัติทั้งหมด</div>
+                    <span class="ah-tile-label">คลังประวัติ<br>ใบเช็กชื่อ</span>
+                </a>
+                <a href="/leave" class="ah-tile">
+                    <div class="ah-tile-icon-wrap" style="background:#dbeafe;">
+                        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="#1d4ed8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                    </div>
+                    <span class="ah-tile-label">ยื่นคำร้องลา <span style="font-size:10px;color:#94a3b8;display:block;font-weight:500;">(สำหรับนักเรียน)</span></span>
+                </a>
+            </div>
+
+            {discipline_section}
+
+            <div class="ah-section-title">คลาสวิชาภายใต้การกำกับดูแล</div>
+            <div class="ah-grid3">
+                {room_cells if room_cells else '<div style="grid-column:1/-1;padding:20px;text-align:center;background:#fff;border-radius:16px;border:1px solid #fecaca;color:#b91c1c;font-weight:700;font-size:13px;">⚠️ ยังไม่มีกลุ่มวิชาที่ได้รับมอบหมาย</div>'}
+            </div>
+
+            <div class="ah-footer">powered by <span>K-Techinteractive</span></div>
+        </div>
+
+        {render_bottom_nav("home", "teacher", user)}
+    </body></html>
+    """
 
 @app.get("/teacher/profile", response_class=HTMLResponse)
 async def teacher_profile_page(user: str, user_session: Optional[str] = Cookie(None)):
@@ -4678,7 +3883,8 @@ async def teacher_profile_page(user: str, user_session: Optional[str] = Cookie(N
     cursor.execute("SELECT fullname FROM teachers WHERE username = ?", (user,))
     t_info = cursor.fetchone()
     display_name = t_info[0] if t_info else user
-    group_count = len(groups_for_user(cursor, user))
+    cursor.execute("SELECT COUNT(*) FROM course_groups WHERE teacher_username = ?", (user,))
+    group_count = cursor.fetchone()[0]
     conn.close()
     uq = urllib.parse.quote(user)
 
@@ -4762,37 +3968,47 @@ async def admin_history_page(group_id: Optional[str] = None, user_session: Optio
     except Exception as e: print(f"❌ Admin Fetch History Error: {e}")
     finally: conn.close()
 
-    try:
-        sel_gid = int(group_id) if group_id else None
-    except ValueError:
-        sel_gid = None
-    group_cards = ""
+    group_options = "<option value=''>-- เลือกวิชาที่ต้องการตรวจสอบ --</option>"
     for g in all_groups:
-        on = sel_gid == g[0]
-        group_cards += f"""<a href="/admin/history?group_id={g[0]}" class="dk-row" style="text-decoration:none;color:inherit;margin:0;{'border-color:#1d4ed8;background:#eff6ff;' if on else ''}">
-            <div class="dk-ico-box">📚</div><div class="grow"><b>{_he(g[1])}</b><span>{'กำลังดูอยู่' if on else 'แตะเพื่อดูรอบที่บันทึก'}</span></div>
-            <span style="color:#1d4ed8;font-weight:800;">›</span></a>"""
+        is_sel = "selected" if group_id and int(group_id) == g[0] else ""
+        group_options += f"<option value='{g[0]}' {is_sel}>{g[1]}</option>"
 
     date_list_items = ""
-    q_group = urllib.parse.quote(selected_group_name)
     for d in distinct_dates:
+        target_detail_url = f"/admin/history/detail?group_name={selected_group_name}&date={d}"
         date_list_items += f"""
-        <a href="/admin/history/detail?group_name={q_group}&date={urllib.parse.quote(str(d))}" class="dk-row" style="text-decoration:none;color:inherit;">
-            <div class="dk-ico-box" style="background:#fff7ed;">📅</div>
-            <div class="grow"><b>รอบวันที่ {_he(str(d))}</b><span>เปิดตรวจสอบ / ลบประวัติซ้ำ</span></div>
-            <span style="color:#1d4ed8;font-weight:800;">➔</span></a>"""
+        <a href="{target_detail_url}" style="text-decoration:none; display:flex; justify-content:space-between; align-items:center; padding:14px; border:1px solid #cbd5e1; margin-bottom:10px; border-radius:8px; background:white; color:#0f172a;">
+            <span style="font-weight:600; font-size:14.5px;">📅 รอบวันที่: {d}</span>
+            <span style="color:#1e3a8a; font-size:13px; font-weight:700;">เปิดตรวจสอบ/ลบประวัติซ้ำ ➔</span>
+        </a>
+        """
 
-    stats = (dk_stat("วิชาในระบบ", len(all_groups), "📚", "blue")
-             + dk_stat("รอบที่บันทึก (วิชานี้)", len(distinct_dates) if selected_group_name else "-", "📅", "violet"))
-    stats = f'<div class="dk-stats" style="grid-template-columns:repeat(2,1fr);">{stats}</div>'
-    list_card = ""
-    if selected_group_name:
-        list_card = f"""<div class="dk-card"><div class="dk-card-title">📅 รอบที่บันทึก: {_he(selected_group_name)}<small>{len(distinct_dates)} รอบ</small></div>
-            {date_list_items if date_list_items else dk_empty("📭", "ยังไม่เคยมีประวัติบันทึกในวิชานี้")}</div>"""
-    body = (stats + f'<div class="dk-section">เลือกวิชาที่ต้องการตรวจสอบ</div>'
-            + (f'<div class="dk-grid c2" style="margin-bottom:14px;">{group_cards}</div>' if group_cards else f'<div class="dk-card">{dk_empty("📚", "ยังไม่มีวิชาในระบบ")}</div>')
-            + list_card)
-    return dk_page("คลังใบเช็คชื่อส่วนกลาง", "ตรวจสอบและบริหารประวัติการเช็คชื่อของทุกวิชา", body, "/admin/dashboard", icon="📊 ")
+    return f"""
+    <html>{STYLE_HEADER}
+    <body>
+        <div class="navbar">
+            <h1><img src="{LOGO_URL}" class="nav-logo"> 📊 คลังใบเช็คชื่อส่วนกลาง</h1>
+            <a href="/admin/dashboard" class="btn btn-secondary">⬅ กลับหน้าหลัก</a>
+        </div>
+        <div class="main-container">
+            <div class="card">
+                <h2>🔍 คัดกรองเลือกวิชาเรียนคลาส</h2>
+                <label style="font-size:12.5px; color:#475569; font-weight:700;">วิชาเรียนในระบบทั้งหมด:</label>
+                <select onchange="location.href='/admin/history?group_id='+this.value;">
+                    {group_options}
+                </select>
+            </div>
+            {f'''
+            <div class="card">
+                <h2>📅 รายการวันที่บันทึกระบบของวิชา: {selected_group_name}</h2>
+                <div style="margin-top:10px;">
+                    {date_list_items if date_list_items else "<p style='color:gray; text-align:center; padding:10px;'>ยังไม่เคยมีประวัติบันทึกในวิชานี้</p>"}
+                </div>
+            </div>
+            ''' if group_id else ""}
+        </div>
+    </body></html>
+    """
 
 @app.get("/admin/history/detail", response_class=HTMLResponse)
 async def admin_history_detail_page(group_name: str, date: str, user_session: Optional[str] = Cookie(None)):
@@ -4813,29 +4029,57 @@ async def admin_history_detail_page(group_name: str, date: str, user_session: Op
     except Exception as e: print(f"❌ Admin Detail Error: {e}")
     finally: conn.close()
 
-    pill = {"มา": "ok", "สาย": "warn", "ลา": "mute", "ขาด": "bad"}
     table_rows = ""
     for row in logs:
         s_name, s_no, s_class, s_status, _ = row
+        status_color = "#10b981" if s_status == "มา" else "#f59e0b" if s_status == "สาย" else "#3b82f6" if s_status == "ลา" else "#ef4444"
         table_rows += f"""
-        <tr><td><span class="dk-pill mute">{_he(str(s_class))}</span></td><td><b>{_he(str(s_no))}</b></td>
-            <td style="font-weight:700;">{_he(str(s_name))}</td>
-            <td><span class="dk-pill {pill.get(s_status, 'mute')}">{_he(str(s_status))}</span></td></tr>"""
+        <tr>
+            <td><span class="badge">{s_class}</span></td>
+            <td><b>{s_no}</b></td>
+            <td><div style="text-align:left; font-weight:600; color:#0f172a;">{s_name}</div></td>
+            <td><span style="background-color:{status_color}; color:white; padding:4px 10px; border-radius:6px; font-size:12px; font-weight:700;">{s_status}</span></td>
+        </tr>
+        """
 
-    total = len(logs)
-    present_rate = round((stats['มา'] + stats['สาย']) * 100 / total) if total else 0
-    stat_html = (dk_stat("มา", stats['มา'], "✅", "green") + dk_stat("สาย", stats['สาย'], "⏰", "amber")
-                 + dk_stat("ลา", stats['ลา'], "📝", "blue") + dk_stat("ขาด", stats['ขาด'], "❌", "red"))
-    info = f"""<div class="dk-card"><div class="dk-card-title">📘 รายละเอียดรอบแผ่นตรวจ<small>เข้าเรียน {present_rate}%</small></div>
-        <div class="dk-track" style="margin-bottom:12px;"><i style="width:{present_rate}%"></i></div>
-        <div style="font-size:13.5px;line-height:1.9;"><b>วิชาเรียน:</b> {_he(group_name)}<br><b>ประจำรอบวันที่:</b> {_he(date)}<br><b>ผู้กดบันทึก:</b> {_he(str(checked_by_name))}</div>
-        <a href="/api/admin/delete_attendance_log?group_name={urllib.parse.quote(group_name)}&date={urllib.parse.quote(date)}" class="dk-btn danger block" style="margin-top:14px;padding:12px;"
-           data-confirm="ยืนยันการลบข้อมูลใบเช็คชื่อในรอบวันนี้?">🛑 ลบข้อมูลประวัติบันทึกซ้ำของรอบคลาสนี้</a></div>"""
-    table = f"""<div class="dk-card"><div class="dk-card-title">👥 สถานะรายบุคคล<small>{total} คน</small></div>
-        <div class="dk-tablewrap"><table class="dk-table"><thead><tr><th>ชั้นเรียน</th><th>เลขที่</th><th>ชื่อ-นามสกุล</th><th>สถานะ</th></tr></thead>
-        <tbody>{table_rows if table_rows else "<tr><td colspan='4' style='text-align:center;color:#94a3b8;'>ไม่พบข้อมูลนักเรียน</td></tr>"}</tbody></table></div></div>"""
-    return dk_page("ตรวจสอบใบเช็คชื่อ", f"{_he(group_name)} · {_he(date)}", f'<div class="dk-stats">{stat_html}</div>{info}{table}',
-                   "javascript:history.back();", icon="📋 ")
+    return f"""
+    <html>{STYLE_HEADER}
+    <body>
+        <div class="navbar">
+            <h1><img src="{LOGO_URL}" class="nav-logo"> 📋 ตรวจสอบ & บริหารข้อมูลใบเช็คชื่อ</h1>
+            <a href="javascript:history.back();" class="btn btn-secondary">⬅ ย้อนกลับ</a>
+        </div>
+        <div class="main-container">
+            <div class="card" style="background: linear-gradient(135deg, #1e293b, #0f172a); color: white;">
+                <h2 style="color: #fff; border-bottom: 2px solid #d4af37;">📘 รายละเอียดประวัติรอบแผ่นตรวจ</h2>
+                <p style="margin: 6px 0; font-size: 14px;"><b>วิชาเรียน:</b> {group_name}</p>
+                <p style="margin: 6px 0; font-size: 14px;"><b>ประจำรอบวันที่:</b> {date}</p>
+                <p style="margin: 6px 0; font-size: 14px; color:#cbd5e1;"><b>ผู้กดบันทึก:</b> {checked_by_name}</p>
+                
+                <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:8px; margin-top:15px; text-align:center;">
+                    <div style="background:#10b981; padding:8px; border-radius:6px;">มา<br><b>{stats['มา']}</b></div>
+                    <div style="background:#f59e0b; padding:8px; border-radius:6px;">สาย<br><b>{stats['สาย']}</b></div>
+                    <div style="background:#3b82f6; padding:8px; border-radius:6px;">ลา<br><b>{stats['ลา']}</b></div>
+                    <div style="background:#ef4444; padding:8px; border-radius:6px;">ขาด<br><b>{stats['ขาด']}</b></div>
+                </div>
+                
+                <div style="margin-top:20px;">
+                    <a href="/api/admin/delete_attendance_log?group_name={group_name}&date={date}" class="btn btn-danger" style="width:100%; padding:12px; font-size:14px; border-radius:8px; border-bottom:3px solid #b91c1c;" onclick="return confirm('⚠️ ยืนยันการลบข้อมูลใบเช็คชื่อในรอบวันนี้?')">🛑 ลบข้อมูลประวัติบันทึกซ้ำของรอบคลาสนี้</a>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>👥 ตารางสถานะรายชื่อเด็กรายบุคคล</h2>
+                <div style="overflow-x:auto; border-radius:8px; border:1px solid #e2e8f0;">
+                    <table>
+                        <thead><tr><th>ชั้นเรียน</th><th>เลขที่</th><th>ชื่อ-นามสกุล</th><th>สถานะ</th></tr></thead>
+                        <tbody>{table_rows if table_rows else "<tr><td colspan='4'>ไม่พบข้อมูลนักเรียน</td></tr>"}</tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </body></html>
+    """
 
 @app.get("/api/admin/delete_attendance_log")
 async def api_delete_attendance_log(group_name: str, date: str, user_session: Optional[str] = Cookie(None)):
@@ -4854,7 +4098,7 @@ async def api_delete_attendance_log(group_name: str, date: str, user_session: Op
 # ==========================================
 @app.get("/admin/edit_student", response_class=HTMLResponse)
 async def admin_edit_student_page(uid: str, user_session: Optional[str] = Cookie(None)):
-    if not gate_perm(user_session, can_manage_student_registry): return RedirectResponse(url="/login", status_code=303)
+    if user_session != "admin": return RedirectResponse(url="/login", status_code=303)
     master_students = get_sorted_master_students()
     target = None
     for s in master_students:
@@ -4883,7 +4127,7 @@ async def admin_edit_student_page(uid: str, user_session: Optional[str] = Cookie
 
 @app.post("/api/admin/edit_student")
 async def api_edit_student(old_uid: str = Form(...), student_name: str = Form(...), student_no: str = Form(...), classroom: str = Form(...), branch: str = Form(...), user_session: Optional[str] = Cookie(None)):
-    if not gate_perm(user_session, can_manage_student_registry): return HTMLResponse("Unauthorized", status_code=401)
+    if user_session != "admin": return HTMLResponse("Unauthorized", status_code=401)
     lines_to_keep = []
     if os.path.exists(TXT_DATABASE_PATH):
         with open(TXT_DATABASE_PATH, "r", encoding="utf-8") as f:
@@ -4899,7 +4143,7 @@ async def api_edit_student(old_uid: str = Form(...), student_name: str = Form(..
 
 @app.get("/api/admin/delete_student")
 async def api_delete_student(uid: str, user_session: Optional[str] = Cookie(None)):
-    if not gate_perm(user_session, can_manage_student_registry): return RedirectResponse(url="/login", status_code=303)
+    if user_session != "admin": return RedirectResponse(url="/login", status_code=303)
     lines_to_keep = []
     if os.path.exists(TXT_DATABASE_PATH):
         with open(TXT_DATABASE_PATH, "r", encoding="utf-8") as f:
@@ -5151,7 +4395,8 @@ async def app_history_page(user: str, group_id: Optional[str] = None, user_sessi
     selected_group_name = ""
     
     try:
-        my_groups = rollcall_groups_for_user(cursor, user)
+        cursor.execute("SELECT group_id, group_name FROM course_groups WHERE teacher_username = ?", (user,))
+        my_groups = cursor.fetchall()
         if group_id:
             cursor.execute("SELECT group_name FROM course_groups WHERE group_id = ?", (group_id,))
             g_res = cursor.fetchone()
@@ -5274,8 +4519,6 @@ async def app_history_detail_page(user: str, group_name: str, date: str, user_se
 @app.get("/app/rollcall/{group_id}", response_class=HTMLResponse)
 async def app_rollcall_sheet(group_id: int, user: str, user_session: Optional[str] = Cookie(None)):
     if not user_session or user_session != f"teacher_{urllib.parse.quote(user)}": return RedirectResponse(url="/login", status_code=303)
-    if not can_rollcall_group(user, group_id):
-        return alert_redirect("คุณไม่มีสิทธิ์เช็กชื่อวิชานี้", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
     m_cfg = get_maintenance_status()
     if m_cfg["is_active"] == 1: return generate_maintenance_html(m_cfg["mode_type"])
 
@@ -5295,12 +4538,6 @@ async def app_rollcall_sheet(group_id: int, user: str, user_session: Optional[st
     students_in_class = [s for s in master_students if s['uid'] in assigned_uids]
     today_val = datetime.now().strftime("%d/%m/%Y")
     default_today_input = datetime.now().strftime("%Y-%m-%d")
-    face_btn = face_script = ""
-    if can_face_scan(get_access(user_session)):
-        face_btn = (f'<button type="button" class="btn-otp-trigger" style="background:linear-gradient(135deg,#06b6d4,#0e7490);border-bottom-color:#155e75;box-shadow:0 6px 16px rgba(6,182,212,.25);" '
-                    f'onclick="FaceScan.open({{groupId:{group_id}}})"><span style="display:inline-flex;align-items:center;gap:8px;">{ic("scan-face", 20)} สแกนหน้าเช็กชื่ออัตโนมัติ</span>'
-                    f'<span style="background:#f59e0b;color:#1c1917;border-radius:20px;padding:2px 9px;font-size:11px;font-weight:800;">ทดลอง</span></button>')
-        face_script = '<script src="/facescan.js"></script>'
 
     conn = sqlite3.connect('attendance_pro.db')
     cursor = conn.cursor()
@@ -5661,7 +4898,6 @@ async def app_rollcall_sheet(group_id: int, user: str, user_session: Optional[st
     {admin_notif}
     
     <!-- ปุ่มเปิดระบบสแกนเช็กชื่ออัตโนมัติ -->
-    {face_btn}
     <button class="btn-otp-trigger" onclick="openOTPModal()">
         <span>⚡ เปิดลงทะเบียนเช็กชื่อด่วน (OTP / QR Code)</span>
     </button>
@@ -5714,8 +4950,7 @@ async def app_rollcall_sheet(group_id: int, user: str, user_session: Optional[st
 
 <!-- เสียงบี๊บแจ้งเตือนเมื่อนักเรียนเช็กอิน -->
 <audio id="beepSound" src="https://assets.mixkit.co/active_storage/sfx/2869/2869-84.wav" preload="auto"></audio>
-<script>window.RC_GROUP_ID={group_id};</script><script src="/facelive.js"></script>
-{face_script}
+
 <script>
 const activeGroupId = {group_id};
 let timerInterval = null;
@@ -5860,7 +5095,7 @@ function startCountdown(seconds) {{
         if (timeLeft <= 0) {{
             clearInterval(timerInterval);
             timerDisplay.textContent = "⏱️ หมดเวลาเปิดลงทะเบียนแล้ว";
-            smartAlert({{ title: 'หมดเวลา', message: 'หมดเวลาลงทะเบียนเช็กชื่อด่วนเรียบร้อยครับ', type: 'warning' }});
+            alert("⏰ หมดเวลาลงทะเบียนเช็กชื่อด่วนเรียบร้อยครับ");
             closeOTPModal();
             return;
         }}
@@ -5925,9 +5160,6 @@ async def app_api_submit(
     user_session: Optional[str] = Cookie(None)
 ):
     if not user_session or user_session != f"teacher_{teacher_user}": return HTMLResponse("Unauthorized", status_code=401)
-    _gc = sqlite3.connect('attendance_pro.db')
-    _gr = _gc.execute("SELECT group_id FROM course_groups WHERE group_name = ?", (group_name,)).fetchone(); _gc.close()
-    if not _gr or not can_rollcall_group(teacher_user, _gr[0]): return HTMLResponse("Forbidden", status_code=403)
     form_data = await request.form()
 
     try:
@@ -6128,791 +5360,15 @@ async def api_student_checkin(
 
 @app.get("/admin/add_student", response_class=HTMLResponse)
 async def admin_add_student_page(user_session: Optional[str] = Cookie(None)):
-    if not gate_perm(user_session, can_manage_student_registry): return RedirectResponse(url="/login", status_code=303)
-    return f"""<html>{STYLE_HEADER}<body><div class="navbar"><h1>➕ เพิ่มรายชื่อทะเบียนนักเรียนใหม่</h1><a href="/admin/students" class="btn btn-secondary">⬅ กลับหน้าหลัก</a></div><div class="main-container"><div class="card"><form action="/api/admin/add_student" method="post"><input type="text" name="student_name" placeholder="ชื่อ-นามสกุลนักเรียน" required><input type="text" name="student_no" placeholder="เลขที่ประจำตัว" required><input type="text" name="classroom" placeholder="ระดับชั้นเรียน" required><input type="text" name="branch" placeholder="สาขาวิชาเอก" required><button type="submit" class="btn-submit">💾 ยืนยันบันทึกข้อมูลหลัก</button></form><a href="/admin/import_students" class="btn btn-secondary" style="display:block;text-align:center;margin-top:12px;">📥 นำเข้าจากไฟล์ Excel</a></div></div></body></html>"""
+    if user_session != "admin": return RedirectResponse(url="/login", status_code=303)
+    return f"""<html>{STYLE_HEADER}<body><div class="navbar"><h1>➕ เพิ่มรายชื่อทะเบียนนักเรียนใหม่</h1><a href="/admin/students" class="btn btn-secondary">⬅ กลับหน้าหลัก</a></div><div class="main-container"><div class="card"><form action="/api/admin/add_student" method="post"><input type="text" name="student_name" placeholder="ชื่อ-นามสกุลนักเรียน" required><input type="text" name="student_no" placeholder="เลขที่ประจำตัว" required><input type="text" name="classroom" placeholder="ระดับชั้นเรียน" required><input type="text" name="branch" placeholder="สาขาวิชาเอก" required><button type="submit" class="btn-submit">💾 ยืนยันบันทึกข้อมูลหลัก</button></form></div></div></body></html>"""
 
 @app.post("/api/admin/add_student")
 async def api_add_student(student_name: str = Form(...), student_no: str = Form(...), classroom: str = Form(...), branch: str = Form(...), user_session: Optional[str] = Cookie(None)):
-    if not gate_perm(user_session, can_manage_student_registry): return HTMLResponse("Unauthorized", status_code=401)
+    if user_session != "admin": return HTMLResponse("Unauthorized", status_code=401)
     new_line = f"{student_name.strip()}, {student_no.strip()}, {classroom.strip()}, {branch.strip()}\n"
     with open(TXT_DATABASE_PATH, "a", encoding="utf-8") as f: f.write(new_line)
     return HTMLResponse(f"""<html>{STYLE_HEADER}<body><script>smartAlert({{title: 'ดำเนินการเสร็จสิ้น!', message: 'บันทึกเพิ่มรายชื่อเรียบร้อย!', type: 'success', callback: () => {{ window.location.href='/admin/add_student'; }} }});</script></body></html>""")
-
-# ==========================================
-# 📥 นำเข้านักเรียนจากไฟล์ Excel (.xlsx)
-# ==========================================
-_IMPORT_HEADERS = {"no": ("เลขที่",), "first": ("ชื่อ",), "last": ("สกุล", "นามสกุล"), "cls": ("ชั้น", "ห้อง"), "branch": ("สาขา",)}
-
-def parse_students_xlsx(data: bytes) -> dict:
-    """อ่านไฟล์ Excel -> {'rows': [(name,no,class,branch)], 'sheet': ชื่อชีต, 'skipped': [เหตุผล]}"""
-    import io
-    from openpyxl import load_workbook
-    wb = load_workbook(io.BytesIO(data), data_only=True, read_only=True)
-    clean = lambda v: " ".join(str(v).replace(",", " ").split()) if v is not None else ""
-    for ws in wb.worksheets:
-        rows_iter = ws.iter_rows(values_only=True)
-        col = None
-        for i, r in enumerate(rows_iter):
-            if i > 15: break
-            heads = [clean(c) for c in r]
-            m = {}
-            for key, names in _IMPORT_HEADERS.items():
-                for n in names:
-                    if n in heads: m[key] = heads.index(n); break
-            if len(m) == 5:
-                col = m; break
-        if not col:
-            continue
-        out, skipped = [], []
-        for r in rows_iter:
-            if not r or not any(c is not None and str(c).strip() for c in r): continue
-            g = lambda k: clean(r[col[k]]) if col[k] < len(r) else ""
-            no, first, last, cls, branch = g("no"), g("first"), g("last"), g("cls"), g("branch")
-            try: no = str(int(float(no)))
-            except ValueError: pass
-            name = f"{first} {last}".strip()
-            if not (name and no and cls and branch):
-                skipped.append(f"แถวไม่ครบ: {name or '(ไม่มีชื่อ)'}"); continue
-            out.append((name, no, cls, branch))
-        wb.close()
-        return {"rows": out, "sheet": ws.title, "skipped": skipped}
-    # ไม่ใช่รูปแบบตารางเดี่ยว -> ลองรูปแบบ "ทะเบียนรายห้อง" (ห้องละชีต ชั้นอยู่ในหัวเรื่อง) อ่านให้ครบทุกชีต
-    roster = _parse_roster_sheets(wb, clean)
-    wb.close()
-    if roster["rows"]:
-        return roster
-    return {"rows": [], "sheet": "", "skipped": [], "error": "ไม่พบหัวตารางที่ต้องการ (เลขที่ / ชื่อ / สกุล / ชั้น / สาขา) หรือรูปแบบรายชื่อรายห้อง (ห้องละชีต)"}
-
-def _parse_roster_sheets(wb, clean) -> dict:
-    """รูปแบบไฟล์ทะเบียนรายห้อง: หนึ่งชีต = หนึ่งห้อง
-    แถว 1 = 'รายชื่อนักเรียน ... ชั้น ปวช.1/1 จำนวน 36 คน ...', หัวตาราง เลขที่ / เลขประจำตัว / สาขา / สาขาย่อย / เพศ / ชื่อ - สกุล
-    อ่านถึงบรรทัด 'ข้อมูล ณ วันที่ ...' เท่านั้น (ข้างล่างเป็นรายชื่อผู้ออก/พักการเรียน) และข้ามแถวที่มีหมายเหตุ เช่น ลาออก/จำหน่าย
-    -> {'rows','sheet','skipped','left','notes'}"""
-    import re
-    out, skipped, left, notes, used = [], [], [], [], []
-    for ws in wb.worksheets:
-        rows = list(ws.iter_rows(values_only=True))
-        title = ""
-        for r in rows[:3]:
-            for c in r:
-                t = clean(c)
-                if "ชั้น" in t and "รายชื่อ" in t: title = t; break
-            if title: break
-        m = re.search(r"ชั้น\s*(\S+)", title)
-        if not m: continue
-        cls = m.group(1)
-        claimed = re.search(r"จำนวน\s*(\d+)\s*คน", title)
-        hdr = None
-        for i, r in enumerate(rows[:8]):
-            heads = [clean(c) for c in r]
-            if "เลขที่" in heads and "สาขา" in heads and any(h.startswith("ชื่อ") for h in heads):
-                hdr = (i, heads.index("เลขที่"), heads.index("สาขา"), next(j for j, h in enumerate(heads) if h.startswith("ชื่อ")))
-                break
-        if not hdr: continue
-        hi, c_no, c_br, c_first = hdr
-        c_last = c_first + 1
-        got = 0
-        for r in rows[hi + 1:]:
-            cell = lambda k: clean(r[k]) if k < len(r) else ""
-            if cell(c_no).startswith("ข้อมูล ณ"): break
-            try: no = str(int(float(cell(c_no))))
-            except ValueError: continue
-            name = f"{cell(c_first)} {cell(c_last)}".strip()
-            note = " ".join(x for x in (clean(c) for c in r[c_last + 2:]) if x)
-            if note:
-                left.append(f"{cls} เลขที่ {no} {name} ({note})"); continue
-            branch = cell(c_br)
-            if not (name and branch):
-                skipped.append(f"แถวไม่ครบ: {cls} เลขที่ {no} {name or '(ไม่มีชื่อ)'}"); continue
-            out.append((name, no, cls, branch)); got += 1
-        used.append(ws.title)
-        if claimed and int(claimed.group(1)) != got:
-            notes.append(f"{cls}: หัวไฟล์ระบุ {claimed.group(1)} คน แต่อ่านได้ {got} คน")
-    return {"rows": out, "sheet": ", ".join(used), "skipped": skipped, "left": left, "notes": notes}
-
-def _import_plan(rows: list) -> tuple:
-    """แยกเป็น (ใหม่, ซ้ำ/ชนกับของเดิม)"""
-    existing = get_sorted_master_students()
-    uids = {e["uid"] for e in existing}
-    slots = {(e["class"], e["no"]) for e in existing}
-    new, dup, seen = [], [], set()
-    for name, no, cls, branch in rows:
-        uid = f"{name}_{no}"
-        if uid in uids or (cls, no) in slots or uid in seen or (cls, no) in seen:
-            dup.append((name, no, cls, branch)); continue
-        seen.add(uid); seen.add((cls, no)); new.append((name, no, cls, branch))
-    return new, dup
-
-@app.get("/admin/import_students", response_class=HTMLResponse)
-async def admin_import_students_page(user_session: Optional[str] = Cookie(None)):
-    if not gate_perm(user_session, can_manage_student_registry): return RedirectResponse(url="/login", status_code=303)
-    body = f"""<div class="dk-note">📄 ไฟล์ .xlsx ใช้ได้ 2 แบบ: (1) หัวตาราง <b>เลขที่ · ชื่อ · สกุล · ชั้น · สาขา</b> (ระบบหาชีตให้เอง) หรือ (2) <b>ทะเบียนรายห้อง ห้องละชีต</b> (ระบบอ่านทุกชีต ข้ามคนลาออก/พักการเรียน/จำหน่ายให้)<br>ก่อนบันทึกจะมีหน้าตรวจรายชื่อให้ดูก่อน และข้ามคนที่มีอยู่แล้วให้อัตโนมัติ</div>
-    <div class="dk-card"><form method="post" action="/api/admin/import_students/preview" enctype="multipart/form-data">
-        <label class="dk-label">เลือกไฟล์ Excel</label>
-        <input class="dk-input" type="file" name="file" accept=".xlsx" required style="padding:14px;margin-bottom:14px;">
-        <button type="button" id="impSubmitBtn" class="dk-btn block" style="padding:14px;" disabled>{ic('upload', 16)} อ่านไฟล์และตรวจรายชื่อ</button></form></div>"""
-
-    js = """<script>(function(){
-      try{
-      var form=document.querySelector('form[action="/api/admin/import_students/preview"]');
-      if(!form){console.error('import_students: form not found');return;}
-      var inp=form.querySelector('input[type=file]'),btn=document.getElementById('impSubmitBtn'),buf=null,name='';
-      if(!inp||!btn){console.error('import_students: input/button not found');return;}
-      var note=document.createElement('div');note.className='dk-note';note.style.cssText='display:none;margin:0 0 14px;';form.insertBefore(note,form.firstChild);
-      function say(t,bad){note.style.display='block';note.style.background=bad?'#fef2f2':'#ecfdf5';note.style.borderColor=bad?'#fecaca':'#a7f3d0';note.style.color=bad?'#991b1b':'#065f46';note.textContent=t;}
-      // อ่านไฟล์เข้าหน่วยความจำทันทีที่เลือก (ก่อนปุ่มจะกดได้ด้วยซ้ำ) — กัน ERR_UPLOAD_FILE_CHANGED บนมือถือ
-      // (ไฟล์ที่แชร์มาจาก LINE/Drive/แอปอื่นๆ อาจถูกเบราว์เซอร์มองว่า "เปลี่ยนไป" ตอนกดส่งจริง ถ้าไม่รีบอ่านเก็บไว้ก่อน)
-      inp.addEventListener('change',function(){
-        buf=null;btn.disabled=true;var f=inp.files&&inp.files[0];if(!f){note.style.display='none';return;}
-        name=f.name;say('กำลังอ่านไฟล์...');
-        f.arrayBuffer().then(function(b){buf=b;btn.disabled=false;say('✅ อ่านไฟล์แล้ว: '+name+' ('+Math.round(b.byteLength/1024)+' KB)');})
-        .catch(function(){say('อ่านไฟล์ไม่สำเร็จ — โปรดบันทึกไฟล์ไว้ในเครื่อง (คลังไฟล์) ก่อน แล้วค่อยเลือกใหม่ แทนการเลือกตรงจาก LINE/แอปแชร์ไฟล์',true);});
-      });
-      function doUpload(){
-        if(!buf){say('ยังไม่ได้เลือกไฟล์ หรือไฟล์ยังอ่านไม่เสร็จ กรุณารอสักครู่แล้วลองใหม่',true);return;}
-        btn.disabled=true;
-        var fd=new FormData();fd.append('file',new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}),name||'students.xlsx');
-        if(window.KX&&KX.loading)KX.loading(true);
-        fetch(form.action,{method:'POST',body:fd,credentials:'same-origin'})
-          .then(function(r){if(!r.ok)throw 0;if(r.redirected&&/review/.test(r.url)){location.href=r.url;return;}return r.text().then(function(h){document.open();document.write(h);document.close();});})
-          .catch(function(){if(window.KX&&KX.loading)KX.loading(false);btn.disabled=false;say('ส่งไฟล์ไม่สำเร็จ ลองใหม่อีกครั้ง',true);});
-      }
-      btn.addEventListener('click',doUpload);
-      form.addEventListener('submit',function(e){e.preventDefault();doUpload();});
-      }catch(err){console.error('import_students init error',err);}
-    })();</script>"""
-    return dk_page("นำเข้านักเรียนจาก Excel", "เพิ่มนักเรียนหลายคนพร้อมกัน", body, "/admin/add_student", extra=js, icon="📥 ", theme="dk-teal")
-
-_IMPORT_CACHE: dict = {}
-
-@app.post("/api/admin/import_students/preview")
-async def api_import_students_preview(file: UploadFile = File(...), user_session: Optional[str] = Cookie(None)):
-    if not gate_perm(user_session, can_manage_student_registry): return HTMLResponse("Unauthorized", status_code=401)
-    data = await file.read()
-    if len(data) > 8 * 1024 * 1024 or not (file.filename or "").lower().endswith(".xlsx"):
-        return alert_redirect("รองรับเฉพาะไฟล์ .xlsx ขนาดไม่เกิน 8 MB", type="error", url="/admin/import_students")
-    try:
-        res = parse_students_xlsx(data)
-    except Exception as e:
-        print(f"❌ import parse error: {e}")
-        return alert_redirect("อ่านไฟล์ไม่สำเร็จ — โปรดตรวจว่าเป็นไฟล์ .xlsx ที่ถูกต้อง", type="error", url="/admin/import_students")
-    if res.get("error") or not res["rows"]:
-        return alert_redirect(res.get("error") or "ไม่พบรายชื่อนักเรียนในไฟล์", type="error", url="/admin/import_students")
-    import secrets, time as _t
-    now = _t.time()
-    for k in [k for k, v in _IMPORT_CACHE.items() if now - v["t"] > 900]: _IMPORT_CACHE.pop(k, None)
-    while len(_IMPORT_CACHE) >= 20: _IMPORT_CACHE.pop(next(iter(_IMPORT_CACHE)), None)
-    token = secrets.token_urlsafe(12)
-    _IMPORT_CACHE[token] = {"t": now, "res": res}
-    return RedirectResponse(url=f"/admin/import_students/review?t={token}", status_code=303)
-
-@app.get("/admin/import_students/review", response_class=HTMLResponse)
-async def admin_import_students_review(t: str, user_session: Optional[str] = Cookie(None)):
-    if not gate_perm(user_session, can_manage_student_registry): return RedirectResponse(url="/login", status_code=303)
-    entry = _IMPORT_CACHE.get(t)
-    if not entry:
-        return alert_redirect("หมดเวลาตรวจรายชื่อ โปรดอัปโหลดไฟล์ใหม่", type="warning", url="/admin/import_students")
-    res = entry["res"]
-    new, dup = _import_plan(res["rows"])
-    by_class = {}
-    for r in new: by_class[r[2]] = by_class.get(r[2], 0) + 1
-    chips = "".join(f'<span class="dk-pill mute">{_he(c)} · {n}</span> ' for c, n in sorted(by_class.items()))
-    sample = "".join(f'<div class="dk-row" style="margin:0 0 8px;"><div class="grow"><b>{_he(r[0])}</b><span>{_he(r[2])} · เลขที่ {_he(r[1])} · {_he(r[3])}</span></div></div>' for r in new[:8])
-    payload = _he("\n".join(",".join(r) for r in new), quote=True)
-    stats = (dk_stat("พบในไฟล์", len(res["rows"]), "📄", "blue") + dk_stat("จะเพิ่มใหม่", len(new), "✅", "green")
-             + dk_stat("ซ้ำ/ข้าม", len(dup), "⏭️", "amber") + dk_stat("แถวไม่ครบ", len(res["skipped"]), "⚠️", "red"))
-    extra_notes = ""
-    if res.get("left"):
-        extra_notes += f'<div class="dk-note">⏭️ ข้ามนักเรียนที่ลาออก/พักการเรียน/จำหน่าย {len(res["left"])} คน<br>' + "<br>".join(_he(x) for x in res["left"][:10]) + '</div>'
-    if res.get("notes"):
-        extra_notes += '<div class="dk-note" style="background:#fffbeb;border-color:#fde68a;color:#92400e;">⚠️ ' + "<br>".join(_he(x) for x in res["notes"]) + '</div>'
-    btn = (f'<form method="post" action="/api/admin/import_students/commit"><input type="hidden" name="payload" value="{payload}">'
-           f'<button class="dk-btn green block" style="padding:14px;" data-confirm="ยืนยันเพิ่มนักเรียน {len(new)} คนเข้าทะเบียน?">{ic("check", 16)} ยืนยันเพิ่ม {len(new)} คน</button></form>') if new else dk_empty("ℹ️", "ไม่มีนักเรียนใหม่ — ทุกคนมีในทะเบียนแล้ว")
-    body = (f'<div class="dk-stats">{stats}</div>{extra_notes}<div class="dk-card"><div class="dk-card-title">แยกตามห้อง<small>ชีต: {_he(res["sheet"])}</small></div>{chips or "-"}</div>'
-            f'<div class="dk-section">ตัวอย่างรายชื่อ</div><div class="dk-card">{sample or dk_empty("📄", "ไม่มี")}</div>{btn}')
-    return dk_page("ตรวจรายชื่อก่อนบันทึก", "ยังไม่มีการบันทึกจนกว่าจะกดยืนยัน", body, "/admin/import_students", icon="📥 ", theme="dk-teal")
-
-@app.post("/api/admin/import_students/commit")
-async def api_import_students_commit(payload: str = Form(...), user_session: Optional[str] = Cookie(None)):
-    access = gate_perm(user_session, can_manage_student_registry)
-    if not access: return HTMLResponse("Unauthorized", status_code=401)
-    rows = []
-    for line in payload.splitlines():
-        parts = [x.strip() for x in line.split(",")]
-        if len(parts) == 4 and all(parts): rows.append(tuple(parts))
-    new, _ = _import_plan(rows)
-    if not new:
-        return alert_redirect("ไม่มีรายชื่อใหม่ให้เพิ่ม", type="info", url="/admin/students")
-    if os.path.exists(TXT_DATABASE_PATH):
-        import shutil
-        shutil.copyfile(TXT_DATABASE_PATH, TXT_DATABASE_PATH + ".bak")
-    needs_nl = os.path.exists(TXT_DATABASE_PATH) and os.path.getsize(TXT_DATABASE_PATH) > 0 and not open(TXT_DATABASE_PATH, "rb").read()[-1:] == b"\n"
-    with open(TXT_DATABASE_PATH, "a", encoding="utf-8") as f:
-        if needs_nl: f.write("\n")
-        for r in new: f.write(", ".join(r) + "\n")
-    add_log(f"{access['fullname']} นำเข้านักเรียนจาก Excel {len(new)} คน")
-    return alert_redirect(f"เพิ่มนักเรียน {len(new)} คนเรียบร้อยแล้ว", type="success", url="/admin/students")
-
-# ==========================================
-# 📷 สแกนหน้าเช็กชื่ออัตโนมัติ (BETA / ช่วงทดสอบ)
-# ==========================================
-# - ประมวลผลใบหน้าบนเบราว์เซอร์ของครู (face-api.js) ไม่ส่งภาพวิดีโอขึ้นเซิร์ฟเวอร์
-# - เซิร์ฟเวอร์เก็บเฉพาะ "เวกเตอร์ใบหน้า 128 ค่า" ของนักเรียน (ตาราง face_descriptors) ไม่เก็บรูปเพิ่ม
-# - สิทธิ์ปรับได้ที่ /admin/permissions: face_scan (ใช้สแกน) / manage_face_data (ลงทะเบียน-ลบใบหน้า)
-FACE_LIB_URL = os.environ.get("FACE_LIB_URL", "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.12/dist/face-api.js")
-FACE_MODEL_URL = os.environ.get("FACE_MODEL_URL", "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.12/model/")
-
-def can_face_scan(access: dict) -> bool:
-    return has_permission(access, "face_scan")
-
-def can_face_gate(access: dict) -> bool:
-    return has_permission(access, "face_gate")
-
-def can_manage_face_data(access: dict) -> bool:
-    return has_permission(access, "manage_face_data")
-
-def _fi(name: str, size: int = 16) -> str:
-    return f'<span style="display:inline-flex;vertical-align:-3px;margin-right:4px;">{ic(name, size)}</span>'
-
-def _face_cfg_js() -> str:
-    icons = {k: _fi(v) for k, v in {"scan": "scan-face", "camera": "camera", "flip": "refresh", "image": "image", "trash": "trash", "check": "check", "flask": "flask"}.items()}
-    return "window.FACE_CFG=" + _kxjson.dumps({"lib": FACE_LIB_URL, "models": FACE_MODEL_URL}) + ";window.FI=" + _kxjson.dumps(icons) + ";"
-
-FACE_SCAN_JS = r"""
-(function(){
-var C=window.FACE_CFG||{}, FI=window.FI||{}, TH=0.50, TH_FAST=0.40, GAP=0.035, MINFACE=14;
-var S={};
-function load(src){return new Promise(function(res,rej){if(window.faceapi){return res();}var s=document.createElement('script');s.src=src;s.onload=res;s.onerror=function(){rej(new Error('โหลดไลบรารีใบหน้าไม่สำเร็จ'));};document.head.appendChild(s);});}
-var libP=null;
-function lib(){ if(!libP) libP=load(C.lib).catch(function(e){libP=null;throw e;}); return libP; }
-var netP={};
-function loadNets(kind){ kind=kind||'enroll'; if(netP[kind]) return netP[kind];
-  netP[kind]=lib().then(function(){var f=faceapi.nets,a=[f.faceLandmark68Net.loadFromUri(C.models),f.faceRecognitionNet.loadFromUri(C.models)];
-    if(kind==='scan') a.push(f.tinyFaceDetector.loadFromUri(C.models)); else a.push(f.ssdMobilenetv1.loadFromUri(C.models));
-    return Promise.all(a);}).catch(function(e){netP[kind]=null;throw e;});
-  return netP[kind]; }
-window.FaceNets={load:loadNets};
-function el(t,css,html){var e=document.createElement(t);if(css)e.style.cssText=css;if(html!=null)e.innerHTML=html;return e;}
-function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
-function radios(uid){return Array.prototype.filter.call(document.getElementsByName('status_'+uid),function(r){return r.type==='radio';});}
-function setStatus(uid,val){var r=radios(uid).filter(function(x){return x.value===val;})[0];if(r){r.checked=true;return true;}return false;}
-function curStatus(uid){var r=radios(uid).filter(function(x){return x.checked;})[0];return r?r.value:null;}
-var actx=null;
-function beep(ok){try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();var o=actx.createOscillator(),g=actx.createGain();o.connect(g);g.connect(actx.destination);o.frequency.value=ok===false?330:880;g.gain.value=0.05;o.start();setTimeout(function(){o.stop();},ok===false?160:90);}catch(e){}}
-
-function FaceScan(){}
-FaceScan.open=function(opts){
-  if(S.open) return; opts=opts||{}; S={open:true,opts:opts,gate:!!opts.gate,dir:'in',found:{},cool:{},facing:'environment',tracks:[],tid:0,running:true,n:0,far:true,it:0,tile:0};
-  var gate=S.gate;
-  var ov=el('div','position:fixed;inset:0;z-index:2000;background:#020617;color:#f8fafc;display:flex;flex-direction:column;font-family:Sarabun,sans-serif;');
-  var tog=gate?'<span id="fsDir" style="display:inline-flex;background:#1e293b;border-radius:10px;padding:3px;margin-right:6px;"><button data-d="in" style="border:0;border-radius:8px;padding:7px 12px;font-weight:800;font-family:inherit;">เข้า</button><button data-d="out" style="border:0;border-radius:8px;padding:7px 12px;font-weight:800;font-family:inherit;">ออก</button></span>':'';
-  ov.innerHTML='<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:wrap;padding:10px 14px;background:#0f172a;border-bottom:2px solid #d4af37;">'
-   +'<div style="font-weight:800;font-size:15px;">'+FI.scan+(gate?'สแกนหน้าเข้า-ออก':'สแกนหน้าเช็กชื่อ')+' <span style="background:#f59e0b;color:#1c1917;border-radius:20px;padding:2px 9px;font-size:11px;font-weight:800;margin-left:6px;">ทดลอง</span></div>'
-   +'<div>'+tog+'<button id="fsFar" style="border:1px solid #334155;border-radius:9px;padding:7px 11px;font-weight:700;font-family:inherit;margin-right:6px;">ระยะไกล</button><button id="fsFlip" style="background:#1e293b;color:#cbd5e1;border:1px solid #334155;border-radius:9px;padding:7px 11px;font-weight:700;font-family:inherit;margin-right:6px;">'+FI.flip+'สลับกล้อง</button><button id="fsDone" style="background:#10b981;color:#fff;border:0;border-radius:9px;padding:8px 14px;font-weight:800;font-family:inherit;">'+(gate?'ปิด':'เสร็จสิ้น')+'</button></div></div>'
-   +'<div id="fsStage" style="position:relative;flex:1;min-height:0;background:#000;display:flex;align-items:center;justify-content:center;overflow:hidden;"><video id="fsVid" playsinline muted autoplay style="max-width:100%;max-height:100%;"></video><canvas id="fsOv" style="position:absolute;pointer-events:none;"></canvas>'
-   +'<div id="fsMsg" style="position:absolute;left:0;right:0;top:12px;text-align:center;"><span style="background:rgba(2,6,23,.8);padding:7px 14px;border-radius:20px;font-size:13px;font-weight:700;">กำลังเตรียมระบบ...</span></div>'
-   +'<input id="fsZoom" type="range" style="display:none;position:absolute;left:14px;right:14px;bottom:80px;width:calc(100% - 28px);accent-color:#34d399;" aria-label="ซูม">'
-   +'<div id="fsBanner" style="position:absolute;left:12px;right:12px;bottom:14px;display:none;border-radius:16px;padding:14px 16px;font-weight:800;font-size:17px;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,.5);"></div></div>'
-   +'<div style="background:#0f172a;padding:10px 14px;max-height:30vh;overflow:auto;border-top:1px solid #1e293b;"><div style="font-weight:800;font-size:14px;margin-bottom:6px;">'+(gate?'สแกนแล้วรอบนี้ <span id="fsCnt" style="color:#34d399;">0</span> คน':'พบแล้ว <span id="fsCnt" style="color:#34d399;">0</span> / <span id="fsTot">0</span> คน')+' <span id="fsNoEnr" style="color:#fbbf24;font-size:12px;font-weight:600;"></span></div><div id="fsList" style="display:flex;flex-wrap:wrap;gap:6px;"></div></div>';
-  document.body.appendChild(ov); S.ov=ov; document.body.style.overflow='hidden';
-  S.vid=ov.querySelector('#fsVid'); S.cv=ov.querySelector('#fsOv'); S.msg=ov.querySelector('#fsMsg span'); S.banner=ov.querySelector('#fsBanner');
-  ov.querySelector('#fsDone').onclick=function(){finish();};
-  var farBtn=ov.querySelector('#fsFar');
-  var paintFar=function(){farBtn.style.background=S.far?'#0e7490':'#1e293b';farBtn.style.color=S.far?'#fff':'#94a3b8';farBtn.textContent=S.far?'ระยะไกล: เปิด':'ระยะไกล: ปิด';};paintFar();
-  farBtn.onclick=function(){S.far=!S.far;paintFar();startCam();};
-  ov.querySelector('#fsFlip').onclick=function(){S.facing=S.facing==='environment'?'user':'environment';startCam();};
-  if(gate){var paint=function(){ov.querySelectorAll('#fsDir button').forEach(function(b){var on=b.dataset.d===S.dir;b.style.background=on?(S.dir==='in'?'#10b981':'#f59e0b'):'transparent';b.style.color=on?'#fff':'#94a3b8';});};paint();
-    ov.querySelectorAll('#fsDir button').forEach(function(b){b.onclick=function(){S.dir=b.dataset.d;paint();};});}
-  S.facing=gate?'user':'environment';
-  var url=gate?'/api/face/descriptors_all':'/api/face/descriptors/'+opts.groupId;
-  Promise.all([loadNets('scan'),fetch(url,{credentials:'same-origin'}).then(function(r){if(!r.ok)throw new Error('ไม่มีสิทธิ์/โหลดข้อมูลใบหน้าไม่สำเร็จ');return r.json();})])
-   .then(function(a){S.studs=a[1].students.filter(function(s){return s.descs&&s.descs.length;});S.noEnroll=a[1].students.filter(function(s){return !(s.descs&&s.descs.length);});
-     S.studs.forEach(function(s){s.arr=s.descs.map(function(d){return new Float32Array(d);});});
-     if(!gate){ov.querySelector('#fsTot').textContent=a[1].students.length;
-       if(S.noEnroll.length) ov.querySelector('#fsNoEnr').textContent='(ยังไม่ลงทะเบียนใบหน้า '+S.noEnroll.length+' คน — ต้องเช็กเอง)';}
-     else ov.querySelector('#fsNoEnr').textContent='(ลงทะเบียนใบหน้าแล้ว '+S.studs.length+' คน)';
-     if(!S.studs.length){say('ยังไม่มีนักเรียนที่ลงทะเบียนใบหน้า — ให้ผู้ดูแลลงทะเบียนที่เมนู "ลงทะเบียนใบหน้า" ก่อน',true);return;}
-     return startCam().then(function(){say(gate?'ให้นักเรียนมองกล้อง ระบบจะบันทึกให้ทันที':'เล็งกล้องให้เห็นนักเรียน ระบบจะเช็กให้เองทันที');loop();raf();});})
-   .catch(function(e){say(e.message||'เกิดข้อผิดพลาด',true);});
-};
-function say(t,bad){if(!S.msg)return;S.msg.textContent=t;S.msg.style.background=bad?'rgba(153,27,27,.92)':'rgba(2,6,23,.8)';}
-function startCam(){
-  if(S.stream){S.stream.getTracks().forEach(function(t){t.stop();});S.stream=null;}
-  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){say('เบราว์เซอร์นี้ใช้กล้องไม่ได้ (ต้องเปิดผ่าน HTTPS)',true);return Promise.reject(new Error('no camera'));}
-  return navigator.mediaDevices.getUserMedia({video:{facingMode:S.facing,width:{ideal:S.far?1920:1280},height:{ideal:S.far?1080:720},frameRate:{ideal:30}},audio:false}).then(function(st){
-    S.stream=st;setupZoom(st);S.vid.srcObject=st;S.vid.style.transform=S.facing==='user'?'scaleX(-1)':'none';S.tracks=[];
-    return new Promise(function(r){S.vid.onloadedmetadata=function(){S.vid.play();r();};});
-  }).catch(function(e){say('เปิดกล้องไม่ได้: โปรดอนุญาตการใช้กล้อง',true);throw e;});
-}
-function setupZoom(st){
-  var z=S.ov&&S.ov.querySelector('#fsZoom'); if(!z)return; z.style.display='none';
-  try{var tr=st.getVideoTracks()[0],cap=tr.getCapabilities&&tr.getCapabilities();
-    if(cap&&cap.zoom&&cap.zoom.max>cap.zoom.min){z.min=cap.zoom.min;z.max=cap.zoom.max;z.step=cap.zoom.step||0.1;z.value=(tr.getSettings&&tr.getSettings().zoom)||cap.zoom.min;z.style.display='block';
-      z.oninput=function(){tr.applyConstraints({advanced:[{zoom:parseFloat(z.value)}]}).catch(function(){});};}}catch(e){}
-}
-function dist(a,b){var s=0;for(var i=0;i<128;i++){var d=a[i]-b[i];s+=d*d;}return Math.sqrt(s);}
-function matchOne(desc){
-  var best=null,b1=9,b2=9;
-  for(var i=0;i<S.studs.length;i++){var st=S.studs[i],d=9;for(var k=0;k<st.arr.length;k++){var x=dist(desc,st.arr[k]);if(x<d)d=x;}
-    if(d<b1){b2=b1;b1=d;best=st;}else if(d<b2){b2=d;}}
-  if(!best||b1>TH) return {st:null,d:b1};
-  if(S.studs.length>1 && (b2-b1)<GAP && b1>TH_FAST) return {st:null,d:b1,amb:true};
-  return {st:best,d:b1};
-}
-function iou(a,b){var x1=Math.max(a.x,b.x),y1=Math.max(a.y,b.y),x2=Math.min(a.x+a.w,b.x+b.w),y2=Math.min(a.y+a.h,b.y+b.h);var i=Math.max(0,x2-x1)*Math.max(0,y2-y1);return i/(a.w*a.h+b.w*b.h-i||1);}
-function recog(v,t){
-  var W=v.videoWidth,H=v.videoHeight,m=0.4;
-  var x=Math.max(0,t.x-t.w*m),y=Math.max(0,t.y-t.h*m),w=Math.min(W-x,t.w*(1+2*m)),h=Math.min(H-y,t.h*(1+2*m));
-  var k=Math.min(5,Math.max(0.4,224/Math.max(w,h))),cc=S.crop||(S.crop=document.createElement('canvas'));cc.width=Math.max(32,Math.round(w*k));cc.height=Math.max(32,Math.round(h*k));
-  cc.getContext('2d').drawImage(v,x,y,w,h,0,0,cc.width,cc.height);
-  return faceapi.detectSingleFace(cc,new faceapi.TinyFaceDetectorOptions({inputSize:224,scoreThreshold:0.3})).withFaceLandmarks().withFaceDescriptor();
-}
-function detect(canvas,size,thr){return faceapi.detectAllFaces(canvas,new faceapi.TinyFaceDetectorOptions({inputSize:size,scoreThreshold:thr}));}
-function tileRect(W,H,i){var tw=Math.round(W*0.46),th=Math.round(H*0.62),xs=[0,Math.round((W-tw)/2),W-tw],ys=[0,H-th];return {x:xs[i%3],y:ys[Math.floor(i/3)%2],w:tw,h:th};}
-function loop(){
-  if(!S.running) return;
-  var v=S.vid; if(!v||!v.videoWidth||v.readyState<2){setTimeout(loop,100);return;}
-  var W=v.videoWidth,H=v.videoHeight,sc=Math.min(1,960/W),c=S.work||(S.work=document.createElement('canvas'));
-  c.width=Math.round(W*sc);c.height=Math.round(H*sc);c.getContext('2d').drawImage(v,0,0,c.width,c.height);
-  var boxes=[];
-  var allFound=!S.gate&&S.studs&&Object.keys(S.found).length>=S.studs.length;
-  detect(c,512,0.5).then(function(d1){
-    d1.forEach(function(d){boxes.push({x:d.box.x/sc,y:d.box.y/sc,w:d.box.width/sc,h:d.box.height/sc});});
-    if(!S.far||allFound||W<1000) return [];
-    var r=tileRect(W,H,S.tile++%6),tc=S.tcv||(S.tcv=document.createElement('canvas'));tc.width=r.w;tc.height=r.h;
-    tc.getContext('2d').drawImage(v,r.x,r.y,r.w,r.h,0,0,r.w,r.h);
-    return detect(tc,416,0.4).then(function(d2){return d2.map(function(d){return {x:d.box.x+r.x,y:d.box.y+r.y,w:d.box.width,h:d.box.height};});});
-  }).then(function(extra){
-    extra.forEach(function(b){boxes.push(b);});
-    var now=Date.now(),used={};
-    boxes.sort(function(a,b){return b.w*b.h-a.w*a.h;});
-    boxes.forEach(function(b){
-      if(b.w<MINFACE) return;
-      var best=null,bi=0.25,dupOf=false;
-      S.tracks.forEach(function(t){var o=iou(t,b);if(used[t.id]){if(o>0.3)dupOf=true;return;}if(o>bi){bi=o;best=t;}});
-      if(dupOf&&!best) return;
-      if(best){used[best.id]=1;best.x=b.x;best.y=b.y;best.w=b.w;best.h=b.h;best.seen=now;}
-      else{S.tid++;var t={id:S.tid,x:b.x,y:b.y,w:b.w,h:b.h,dx:b.x,dy:b.y,dw:b.w,dh:b.h,seen:now,lastTry:0,hits:[],uid:null,label:null,cand:null};used[t.id]=1;S.tracks.push(t);}
-    });
-    S.tracks=S.tracks.filter(function(t){return now-t.seen<(t.uid?1200:2500);});
-    var todo=S.tracks.filter(function(t){return !t.uid&&t.seen===now&&now-t.lastTry>250;}).sort(function(a,b){return b.w*b.h-a.w*a.h;}).slice(0,2);
-    return todo.reduce(function(p,t){return p.then(function(){t.lastTry=Date.now();return recog(v,t).then(function(r){
-      if(!r) return; var m=matchOne(r.descriptor);
-      var small=t.w<60;
-      if(!m.st||(small&&m.d>0.45)){t.cand=null;return;}
-      var u=m.st.uid,n=Date.now();t.hits.push({u:u,t:n});t.hits=t.hits.filter(function(h){return n-h.t<5000;});
-      var same=t.hits.filter(function(h){return h.u===u;}).length;
-      if((!small&&m.d<=TH_FAST)||same>=(small?3:2)) lock(t,m.st); else t.cand=m.st.name;
-    }).catch(function(){});});},Promise.resolve());
-  }).catch(function(){}).then(function(){ if(S.running) setTimeout(loop,0); });
-}
-function lock(t,st){
-  t.uid=st.uid;t.label=st.name;
-  if(S.gate){ if(Date.now()-(S.cool[st.uid]||0)>8000){S.cool[st.uid]=Date.now();gateSend(st);} }
-  else if(!S.found[st.uid]){S.found[st.uid]=true;onFound(st);}
-}
-function raf(){ if(!S.running)return; draw(); requestAnimationFrame(raf); }
-function draw(){
-  var v=S.vid,cv=S.cv; if(!v||!v.videoWidth)return; var dw=v.clientWidth,dh=v.clientHeight;
-  if(cv.width!==dw||cv.height!==dh){cv.width=dw;cv.height=dh;} cv.style.left=v.offsetLeft+'px';cv.style.top=v.offsetTop+'px';
-  var g=cv.getContext('2d');g.clearRect(0,0,dw,dh);var sx=dw/v.videoWidth,sy=dh/v.videoHeight,mir=S.facing==='user',now=Date.now();
-  g.lineWidth=3;g.font='bold 15px Sarabun,sans-serif';
-  S.tracks.forEach(function(t){
-    if(now-t.seen>(t.uid?900:1500))return;
-    t.dx+=(t.x-t.dx)*0.45;t.dy+=(t.y-t.dy)*0.45;t.dw+=(t.w-t.dw)*0.45;t.dh+=(t.h-t.dh)*0.45;
-    var x=t.dx*sx,y=t.dy*sy,w=t.dw*sx,h=t.dh*sy; if(mir)x=dw-x-w;
-    var col=t.uid?'#34d399':(t.cand?'#fbbf24':'rgba(255,255,255,.4)');
-    g.strokeStyle=col;g.strokeRect(x,y,w,h);
-    var txt=t.uid?t.label:(t.cand||''); if(txt){var tw=g.measureText(txt).width+12,ty=Math.max(22,y-4);g.fillStyle='rgba(2,6,23,.75)';g.fillRect(x,ty-18,tw,22);g.fillStyle=col;g.fillText(txt,x+6,ty-2);}
-  });
-}
-function onFound(st){
-  setStatus(st.uid,'มา'); beep(); showBanner(st.name+' มาแล้ว','ok');
-  var row=document.getElementById('row_'+st.no); if(row){row.style.background='rgba(16,185,129,.12)';setTimeout(function(){row.style.background='transparent';},2000);}
-  S.ov.querySelector('#fsCnt').textContent=Object.keys(S.found).length;
-  var chip=el('span','background:#064e3b;color:#a7f3d0;border:1px solid #10b981;border-radius:20px;padding:4px 10px;font-size:12.5px;font-weight:700;',FI.check+esc(st.no)+' '+esc(st.name));
-  S.ov.querySelector('#fsList').insertBefore(chip,S.ov.querySelector('#fsList').firstChild);
-}
-function showBanner(txt,tone){var b=S.banner;if(!b)return;b.style.display='block';b.style.background=tone==='ok'?'#047857':(tone==='warn'?'#b45309':'#991b1b');b.style.color='#fff';b.textContent=txt;clearTimeout(S.bt);S.bt=setTimeout(function(){b.style.display='none';},4500);}
-function gateSend(st){
-  var dir=S.dir;
-  fetch('/api/face/gate',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:st.uid,direction:dir})})
-   .then(function(r){return r.json();}).then(function(r){
-     if(!r.ok){showBanner(r.msg||'บันทึกไม่สำเร็จ','bad');beep(false);return;}
-     var w=dir==='in'?'เข้า':'ออก',tone,txt;
-     if(r.status==='dup'){tone='warn';txt=r.name+' สแกน'+w+'ไปแล้วเมื่อ '+r.time+' น.';beep(false);}
-     else{tone='ok';txt=r.name+' '+w+' เวลา '+r.time+' น.'+(dir==='out'&&r.in_time?' (เข้า '+r.in_time+' น.)':'');beep();
-       S.n++;S.ov.querySelector('#fsCnt').textContent=S.n;
-       var chip=el('span','background:'+(dir==='in'?'#064e3b':'#78350f')+';color:#fff;border-radius:20px;padding:4px 10px;font-size:12.5px;font-weight:700;',w+' '+esc(r.time)+' '+esc(st.name));
-       var L=S.ov.querySelector('#fsList');L.insertBefore(chip,L.firstChild);}
-     showBanner(txt,tone);
-   }).catch(function(){showBanner('เชื่อมต่อเซิร์ฟเวอร์ไม่ได้','bad');});
-}
-function finish(){
-  S.running=false; clearTimeout(S.bt); if(S.stream){S.stream.getTracks().forEach(function(t){t.stop();});S.stream=null;}
-  var gate=S.gate;
-  var missing=(!gate&&S.studs)?S.studs.filter(function(s){return !S.found[s.uid]&&curStatus(s.uid)==='มา';}):[];
-  if(missing.length && confirm('ยังไม่พบ '+missing.length+' คน (ที่ลงทะเบียนใบหน้าแล้ว)\nตั้งเป็น "ขาด" ให้เลยหรือไม่?\n(กด ยกเลิก = ปล่อยเป็น "มา" แล้วแก้เองทีละคน)')){
-    missing.forEach(function(s){setStatus(s.uid,'ขาด');});
-  }
-  if(S.ov){S.ov.remove();} document.body.style.overflow=''; var n=S.n; S={open:false};
-  if(gate){ if(n) location.reload(); return; }
-  alert('สแกนเสร็จแล้ว — ตรวจรายชื่อด้านล่าง แล้วกด "บันทึก" เพื่อยืนยัน\n(ฟีเจอร์สแกนหน้าอยู่ในช่วงทดสอบ ควรตรวจทานผลทุกครั้ง)');
-}
-window.FaceScan=FaceScan;
-})();
-"""
-
-FACE_LIVE_JS = r"""
-(function(){
-if(window.__faceLive)return; window.__faceLive=1;
-var box=null,retry=1500,ws=null;
-function ensure(){ if(box)return box; box=document.createElement('div'); box.style.cssText='position:fixed;top:10px;right:10px;left:10px;max-width:380px;margin-left:auto;z-index:3000;display:flex;flex-direction:column;gap:8px;pointer-events:none;font-family:Sarabun,sans-serif;'; document.body.appendChild(box); return box; }
-var actx=null;
-function ding(){try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();var o=actx.createOscillator(),g=actx.createGain();o.connect(g);g.connect(actx.destination);o.frequency.value=988;g.gain.value=0.04;o.start();setTimeout(function(){o.stop();},110);}catch(e){}}
-function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
-var CHK='<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
-function toast(d){
-  var inn=d.direction==='in',b=ensure(),t=document.createElement('div');
-  t.style.cssText='pointer-events:auto;background:#0f172a;color:#f8fafc;border-left:5px solid '+(inn?'#10b981':'#f59e0b')+';border-radius:14px;padding:11px 14px;box-shadow:0 12px 30px rgba(0,0,0,.35);display:flex;gap:10px;align-items:center;transition:all .3s;transform:translateX(30px);opacity:0;';
-  t.innerHTML='<span style="color:'+(inn?'#34d399':'#fbbf24')+';display:inline-flex;">'+CHK+'</span><div style="flex:1;min-width:0;"><div style="font-weight:800;font-size:14px;">'+esc(d.name)+' '+(inn?'มาแล้ว':'ออกจากโรงเรียน')+'</div><div style="font-size:12px;color:#94a3b8;">'+esc(d.cls)+' · '+(inn?'สแกนเข้า ':'สแกนออก ')+esc(d.time)+' น.</div></div>';
-  b.insertBefore(t,b.firstChild); requestAnimationFrame(function(){t.style.transform='none';t.style.opacity='1';});
-  while(b.children.length>4)b.removeChild(b.lastChild);
-  setTimeout(function(){t.style.opacity='0';t.style.transform='translateX(30px)';setTimeout(function(){t.remove();},350);},6000);
-  ding();
-}
-function mark(d){
-  if(!window.RC_GROUP_ID||!d.gids||d.gids.indexOf(window.RC_GROUP_ID)<0||d.direction!=='in')return;
-  document.querySelectorAll('.status-group').forEach(function(g){
-    if(g.getAttribute('data-student-name')===d.name&&g.getAttribute('data-student-no')===String(d.no)){
-      var row=g.closest('.student-row-card')||g.parentNode; var old=row.querySelector('.gate-badge'); if(old)old.remove();
-      var s=document.createElement('span'); s.className='gate-badge'; s.style.cssText='display:inline-flex;align-items:center;gap:4px;margin:0 0 8px;background:#064e3b;color:#a7f3d0;border:1px solid #10b981;border-radius:20px;padding:3px 10px;font-size:12px;font-weight:700;';
-      s.innerHTML=CHK.replace(/20/g,'13')+'มาแล้ว (สแกนเข้า '+esc(d.time)+' น.)'; row.insertBefore(s,g);
-      row.style.background='rgba(16,185,129,.12)'; setTimeout(function(){row.style.background='transparent';},2500);
-    }
-  });
-}
-function connect(){
-  var p=location.protocol==='https:'?'wss://':'ws://'; ws=new WebSocket(p+location.host+'/ws/staff');
-  ws.onopen=function(){retry=1500;};
-  ws.onmessage=function(e){var d;try{d=JSON.parse(e.data);}catch(x){return;} if(d.type!=='gate')return; mark(d); if(!window.FACE_NO_LIVE)toast(d);};
-  ws.onclose=function(e){ if(e.code===4401)return; setTimeout(connect,retry); retry=Math.min(retry*1.7,15000); };
-}
-if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',connect);else connect();
-})();
-"""
-
-FACE_ENROLL_JS = r"""
-(function(){
-var $=function(i){return document.getElementById(i);};
-var list=[],busy=false,cam=null,camUid=null;
-function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
-function status(t,bad){var n=$('feMsg');n.style.display='block';n.style.background=bad?'#fef2f2':'#ecfdf5';n.style.borderColor=bad?'#fecaca':'#a7f3d0';n.style.color=bad?'#991b1b':'#065f46';n.textContent=t;}
-function api(url,body){return fetch(url,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(function(r){return r.json();});}
-function render(){
-  var q=($('feQ').value||'').trim().toLowerCase(),c=$('feCls').value,h='',n=0,done=0;
-  list.forEach(function(s){ if(c&&s.class!==c)return; if(q&&(s.name+' '+s.no+' '+s.class).toLowerCase().indexOf(q)<0)return; n++; if(s.count)done++;
-    h+='<div class="dk-row" style="margin:0 0 8px;gap:10px;align-items:center;">'
-     +(s.photo?'<img src="'+esc(s.photo)+'" style="width:44px;height:44px;border-radius:50%;object-fit:cover;border:2px solid #e2e8f0;flex:none;">':'<div style="width:44px;height:44px;border-radius:50%;background:#f1f5f9;flex:none;"></div>')
-     +'<div class="grow"><b>'+esc(s.name)+'</b><span>'+esc(s.class)+' · เลขที่ '+esc(s.no)+'</span></div>'
-     +(s.count?'<span class="dk-pill ok">ลงทะเบียนแล้ว</span>':'<span class="dk-pill mute">ยังไม่มี</span>')
-     +'<button class="dk-btn light sm" data-up="'+esc(s.uid)+'">'+FI.image+'</button><button class="dk-btn light sm" data-cam="'+esc(s.uid)+'">'+FI.camera+'</button>'
-     +(s.count?'<button class="dk-btn light sm" data-del="'+esc(s.uid)+'">'+FI.trash+'</button>':'')+'</div>'; });
-  $('feList').innerHTML=h||'<div class="dk-empty">ไม่พบนักเรียน</div>'; $('feStat').textContent='ลงทะเบียนแล้ว '+done+' / '+n+' คน (ที่แสดง)';
-}
-function reload(){return fetch('/api/face/enroll_list',{credentials:'same-origin'}).then(function(r){return r.json();}).then(function(d){list=d.students;var cs={};list.forEach(function(s){cs[s.class]=1;});$('feCls').innerHTML='<option value="">ทุกห้อง</option>'+Object.keys(cs).sort().map(function(c){return '<option>'+esc(c)+'</option>';}).join('');render();});}
-function loadImg(src){return new Promise(function(res,rej){var i=new Image();i.onload=function(){res(i);};i.onerror=rej;i.src=src;});}
-function one(input){return faceapi.detectAllFaces(input,new faceapi.SsdMobilenetv1Options({minConfidence:0.5})).withFaceLandmarks().withFaceDescriptors().then(function(r){
-  if(r.length!==1) return null; if(r[0].detection.box.width<60) return null; return Array.prototype.slice.call(r[0].descriptor).map(function(x){return Math.round(x*10000)/10000;});});}
-function batch(){
-  if(busy)return; var todo=list.filter(function(s){return !s.count&&s.photo;}); if(!todo.length){status('ไม่มีนักเรียนที่มีรูปโปรไฟล์และยังไม่ลงทะเบียน');return;}
-  if(!confirm('สร้างข้อมูลใบหน้าจากรูปโปรไฟล์ '+todo.length+' คน?'))return; busy=true; var ok=0,fail=[];
-  status('กำลังโหลดโมเดล...'); FaceNets.load().then(function(){
-    var i=0; (function next(){ if(i>=todo.length){busy=false;status('เสร็จ: สำเร็จ '+ok+' คน, ไม่สำเร็จ '+fail.length+' คน'+(fail.length?' (รูปไม่ชัด/มีหลายหน้า/ไม่เจอหน้า — ให้กดปุ่มกล้องถ่ายใหม่): '+fail.slice(0,8).join(', '):''),fail.length>0);reload();return;}
-      var s=todo[i++]; status('กำลังประมวลผล '+i+'/'+todo.length+' : '+s.name);
-      loadImg(s.photo).then(one).then(function(d){ if(!d){fail.push(s.name);return;} return api('/api/face/enroll',{uid:s.uid,descriptors:[d],mode:'replace',source:'photo'}).then(function(r){if(r.ok)ok++;else fail.push(s.name);}); }).catch(function(){fail.push(s.name);}).then(next); })();
-  }).catch(function(e){busy=false;status(e.message||'โหลดโมเดลไม่สำเร็จ',true);});
-}
-function fileDesc(f){var u=URL.createObjectURL(f);return loadImg(u).then(one).then(function(d){URL.revokeObjectURL(u);return d;}).catch(function(){URL.revokeObjectURL(u);return null;});}
-var upUid=null;
-function uploadFor(uid,files){
-  if(busy||!files.length)return; busy=true; var s=list.filter(function(x){return x.uid===uid;})[0],got=[],i=0;
-  status('กำลังโหลดโมเดล...'); FaceNets.load().then(function(){(function next(){
-    if(i>=files.length){busy=false; if(!got.length){status('ไม่พบใบหน้าที่ใช้ได้ในรูป (ต้องมีคนเดียว หน้าชัด)',true);return;}
-      api('/api/face/enroll',{uid:uid,descriptors:got.slice(0,6),mode:'replace',source:'upload'}).then(function(r){status(r.ok?'บันทึกใบหน้า '+s.name+' แล้ว ('+got.length+'/'+files.length+' รูปใช้ได้)':(r.msg||'บันทึกไม่สำเร็จ'),!r.ok);reload();}); return;}
-    status('กำลังประมวลผล '+(i+1)+'/'+files.length); fileDesc(files[i++]).then(function(d){if(d)got.push(d);next();}); })();
-  }).catch(function(e){busy=false;status(e.message||'โหลดโมเดลไม่สำเร็จ',true);});
-}
-function norm(t){return String(t||'').toLowerCase().replace(/\.[a-z0-9]+$/,'').replace(/[\s_\-.,]+/g,'');}
-function stripN(t){return String(t||'').toLowerCase().replace(/\.[a-z0-9]+$/,'').replace(/([^\d\s_\-])[\s_\-]*\d{1,2}$/,'$1').replace(/[\s_\-.,]+/g,'');}
-function bulkUpload(files){
-  if(busy||!files.length)return; var idx={};
-  list.forEach(function(s){ [s.name,s.name+s.no,s.sid].forEach(function(k){if(k)idx[norm(k)]=s;}); });
-  var groups={},unmatched=[];
-  Array.prototype.forEach.call(files,function(f){ var raw=f.name.replace(/\.[a-z0-9]+$/i,''); var s=idx[norm(raw)]||idx[stripN(raw)]; if(!s){unmatched.push(f.name);return;} (groups[s.uid]=groups[s.uid]||[]).push(f); });
-  var uids=Object.keys(groups); if(!uids.length){status('ชื่อไฟล์ไม่ตรงกับนักเรียนคนใดเลย — ใช้ "ชื่อ สกุล" หรือรหัสนักเรียน',true);return;}
-  busy=true; var ok=0,fail=[],i=0;
-  status('กำลังโหลดโมเดล...'); FaceNets.load().then(function(){(function next(){
-    if(i>=uids.length){busy=false;status('เสร็จ: สำเร็จ '+ok+' คน, ไม่สำเร็จ '+fail.length+(fail.length?' ('+fail.slice(0,6).join(', ')+')':'')+(unmatched.length?' · ชื่อไฟล์ไม่ตรง '+unmatched.length+' ไฟล์: '+unmatched.slice(0,4).join(', '):''),fail.length>0||unmatched.length>0);reload();return;}
-    var uid=uids[i++],s=list.filter(function(x){return x.uid===uid;})[0]; status('กำลังประมวลผล '+i+'/'+uids.length+' : '+s.name);
-    var got=[],j=0; (function nf(){ if(j>=groups[uid].length){ if(!got.length){fail.push(s.name);next();return;} api('/api/face/enroll',{uid:uid,descriptors:got.slice(0,6),mode:'replace',source:'upload'}).then(function(r){if(r.ok)ok++;else fail.push(s.name);}).then(next); return;} fileDesc(groups[uid][j++]).then(function(d){if(d)got.push(d);nf();}); })();
-  })();}).catch(function(e){busy=false;status(e.message||'โหลดโมเดลไม่สำเร็จ',true);});
-}
-function openCam(uid){
-  var s=list.filter(function(x){return x.uid===uid;})[0]; camUid=uid; $('camBox').style.display='block'; $('camName').textContent=s.name+' ('+s.class+')'; status('กำลังเตรียมกล้อง...');
-  FaceNets.load().then(function(){return navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:1280},height:{ideal:720}},audio:false});}).then(function(st){cam=st;$('camVid').srcObject=st;$('camVid').play();status('ให้นักเรียนมองตรงกล้อง แล้วกด "ถ่าย 3 ภาพ"');}).catch(function(e){status('เปิดกล้องไม่ได้ (ต้องใช้ HTTPS และอนุญาตกล้อง)',true);});
-}
-function closeCam(){ if(cam){cam.getTracks().forEach(function(t){t.stop();});cam=null;} $('camBox').style.display='none'; camUid=null; }
-function shoot(){
-  if(!cam||busy)return; busy=true; var got=[],tries=0,v=$('camVid');
-  (function snap(){ if(got.length>=3||tries>=10){busy=false; if(got.length<2){status('จับใบหน้าได้ไม่พอ ลองใหม่ (หน้าตรง แสงพอ มีแค่ 1 คนในภาพ)',true);return;}
-      api('/api/face/enroll',{uid:camUid,descriptors:got,mode:'replace',source:'camera'}).then(function(r){ if(r.ok){status('บันทึกใบหน้าแล้ว ('+got.length+' ภาพ)');closeCam();reload();} else status(r.msg||'บันทึกไม่สำเร็จ',true);}); return; }
-    tries++; var c=document.createElement('canvas'); c.width=v.videoWidth; c.height=v.videoHeight; c.getContext('2d').drawImage(v,0,0);
-    one(c).then(function(d){ if(d)got.push(d); setTimeout(snap,350); }).catch(function(){setTimeout(snap,350);}); })();
-}
-document.addEventListener('click',function(e){
-  var b=e.target.closest&&e.target.closest('button'); if(!b)return;
-  if(b.dataset.cam) openCam(b.dataset.cam);
-  else if(b.dataset.up){ upUid=b.dataset.up; $('feFile').value=''; $('feFile').click(); }
-  else if(b.dataset.del){ if(confirm('ลบข้อมูลใบหน้าของนักเรียนคนนี้?')) api('/api/face/delete',{uid:b.dataset.del}).then(function(r){status(r.ok?'ลบแล้ว':'ลบไม่สำเร็จ',!r.ok);reload();}); }
-});
-$('feBulkBtn').onclick=function(){$('feBulk').value='';$('feBulk').click();};
-$('feFile').onchange=function(){uploadFor(upUid,Array.prototype.slice.call(this.files));};
-$('feBulk').onchange=function(){bulkUpload(Array.prototype.slice.call(this.files));};
-$('feBatch').onclick=batch; $('camShoot').onclick=shoot; $('camClose').onclick=closeCam; $('feQ').oninput=render; $('feCls').onchange=render;
-reload();
-})();
-"""
-
-@app.get("/facescan.js")
-async def face_scan_js():
-    return Response(content=_face_cfg_js() + FACE_SCAN_JS, media_type="application/javascript", headers={"Cache-Control": "no-cache"})
-
-@app.get("/facelive.js")
-async def face_live_js():
-    return Response(content=FACE_LIVE_JS, media_type="application/javascript", headers={"Cache-Control": "no-cache"})
-
-# ── ช่องแจ้งเตือนเรียลไทม์เฉพาะครู/บุคลากร (กรองฝั่งเซิร์ฟเวอร์ ไม่ส่งชื่อนักเรียนให้ผู้ที่ไม่เกี่ยวข้อง) ──
-STAFF_CONNS: dict = {}
-
-@app.websocket("/ws/staff")
-async def websocket_staff(websocket: WebSocket):
-    await websocket.accept()
-    access = get_access(websocket.cookies.get("user_session"))
-    if not access["authenticated"] or access["role"] == "student":
-        await websocket.close(code=4401); return
-    STAFF_CONNS[websocket] = access
-    try:
-        while True:
-            await websocket.receive_text()
-    except Exception:
-        pass
-    finally:
-        STAFF_CONNS.pop(websocket, None)
-
-def _student_teacher_scope(uid: str) -> tuple:
-    """(ชุด username ครูที่เกี่ยวข้องกับนักเรียนคนนี้, [group_id])"""
-    gids, users = [], set()
-    conn = sqlite3.connect('attendance_pro.db')
-    try:
-        gids = [r[0] for r in conn.execute("SELECT group_id FROM group_assignments WHERE student_uid=?", (uid,)).fetchall()]
-        for g in gids:
-            r = conn.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (g,)).fetchone()
-            if r and r[0]: users.add(r[0])
-            users.update(x[0] for x in conn.execute("SELECT teacher_username FROM group_teachers WHERE group_id=?", (g,)).fetchall())
-            users.update(x[0] for x in conn.execute("SELECT head_username FROM subject_head_groups WHERE group_id=?", (g,)).fetchall())
-    except sqlite3.Error:
-        pass
-    finally:
-        conn.close()
-    return users, gids
-
-async def staff_push_gate(st: dict, direction: str, hhmm: str):
-    users, gids = _student_teacher_scope(st["uid"])
-    msg = _kxjson.dumps({"type": "gate", "name": st["name"], "no": st["no"], "cls": st["class"], "direction": direction, "time": hhmm, "gids": gids})
-    for ws, acc in list(STAFF_CONNS.items()):
-        if acc["role"] == "admin" or acc["username"] in users:
-            try: await ws.send_text(msg)
-            except Exception: STAFF_CONNS.pop(ws, None)
-
-@app.get("/faceenroll.js")
-async def face_enroll_js():
-    return Response(content=FACE_ENROLL_JS, media_type="application/javascript", headers={"Cache-Control": "no-cache"})
-
-def _face_load_map(uids=None) -> dict:
-    conn = sqlite3.connect('attendance_pro.db')
-    try:
-        rows = conn.execute("SELECT uid, descriptors FROM face_descriptors").fetchall()
-    finally:
-        conn.close()
-    out = {}
-    for uid, d in rows:
-        if uids is not None and uid not in uids: continue
-        try: out[uid] = _kxjson.loads(d)
-        except Exception: pass
-    return out
-
-@app.get("/api/face/descriptors/{group_id}")
-async def api_face_descriptors(group_id: int, user_session: Optional[str] = Cookie(None)):
-    access = get_access(user_session)
-    if not access["authenticated"] or access["role"] == "student" or not can_face_scan(access):
-        return JSONResponse({"error": "forbidden"}, status_code=403)
-    if access["role"] != "admin" and not can_rollcall_group(access["username"], group_id):
-        return JSONResponse({"error": "forbidden"}, status_code=403)
-    conn = sqlite3.connect('attendance_pro.db')
-    try:
-        uids = {r[0] for r in conn.execute("SELECT student_uid FROM group_assignments WHERE group_id=?", (group_id,)).fetchall()}
-    finally:
-        conn.close()
-    fmap = _face_load_map(uids)
-    studs = [{"uid": s["uid"], "name": s["name"], "no": s["no"], "class": s["class"], "descs": fmap.get(s["uid"], [])}
-             for s in get_sorted_master_students() if s["uid"] in uids]
-    return JSONResponse({"students": studs}, headers={"Cache-Control": "no-store"})
-
-@app.get("/api/face/enroll_list")
-async def api_face_enroll_list(user_session: Optional[str] = Cookie(None)):
-    access = gate_perm(user_session, can_manage_face_data)
-    if not access: return JSONResponse({"error": "forbidden"}, status_code=403)
-    conn = sqlite3.connect('attendance_pro.db')
-    try:
-        photos = dict(conn.execute("SELECT uid, photo_url FROM student_accounts").fetchall())
-        sids = dict(conn.execute("SELECT uid, student_id FROM student_accounts").fetchall())
-        counts = {r[0]: len(_kxjson.loads(r[1] or "[]")) for r in conn.execute("SELECT uid, descriptors FROM face_descriptors").fetchall()}
-    finally:
-        conn.close()
-    studs = [{"uid": s["uid"], "name": s["name"], "no": s["no"], "class": s["class"], "photo": photos.get(s["uid"]) or "", "sid": sids.get(s["uid"]) or "", "count": counts.get(s["uid"], 0)}
-             for s in get_sorted_master_students() if in_discipline_scope(access, s["class"]) or access["role"] not in ("level_head",)]
-    return JSONResponse({"students": studs}, headers={"Cache-Control": "no-store"})
-
-@app.post("/api/face/enroll")
-async def api_face_enroll(request: Request, user_session: Optional[str] = Cookie(None)):
-    access = gate_perm(user_session, can_manage_face_data)
-    if not access: return JSONResponse({"ok": False, "msg": "forbidden"}, status_code=403)
-    try: data = await request.json()
-    except Exception: return JSONResponse({"ok": False, "msg": "bad json"}, status_code=400)
-    uid = str(data.get("uid", ""))
-    descs = data.get("descriptors")
-    if not isinstance(descs, list) or not (1 <= len(descs) <= 6): return JSONResponse({"ok": False, "msg": "ข้อมูลไม่ถูกต้อง"})
-    clean = []
-    for d in descs:
-        if not isinstance(d, list) or len(d) != 128: return JSONResponse({"ok": False, "msg": "ข้อมูลไม่ถูกต้อง"})
-        try: clean.append([round(float(x), 4) for x in d])
-        except (TypeError, ValueError): return JSONResponse({"ok": False, "msg": "ข้อมูลไม่ถูกต้อง"})
-    target = next((s for s in get_sorted_master_students() if s["uid"] == uid), None)
-    if not target: return JSONResponse({"ok": False, "msg": "ไม่พบนักเรียน"})
-    if access["role"] == "level_head" and not in_discipline_scope(access, target["class"]):
-        return JSONResponse({"ok": False, "msg": "นอกระดับชั้นที่รับผิดชอบ"}, status_code=403)
-    conn = sqlite3.connect('attendance_pro.db')
-    if data.get("mode") == "append":
-        old = conn.execute("SELECT descriptors FROM face_descriptors WHERE uid=?", (uid,)).fetchone()
-        try: prev = _kxjson.loads(old[0]) if old and old[0] else []
-        except Exception: prev = []
-        clean = (prev + clean)[-6:]
-    conn.execute("""INSERT INTO face_descriptors (uid, descriptors, source, updated_by, updated_at) VALUES (?,?,?,?,?)
-        ON CONFLICT(uid) DO UPDATE SET descriptors=excluded.descriptors, source=excluded.source, updated_by=excluded.updated_by, updated_at=excluded.updated_at""",
-        (uid, _kxjson.dumps(clean), str(data.get("source", ""))[:20], access["username"], datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-    conn.commit(); conn.close()
-    add_log(f"{access['fullname']} ลงทะเบียนใบหน้า {target['name']} ({data.get('source', '')})")
-    return JSONResponse({"ok": True})
-
-@app.post("/api/face/delete")
-async def api_face_delete(request: Request, user_session: Optional[str] = Cookie(None)):
-    access = gate_perm(user_session, can_manage_face_data)
-    if not access: return JSONResponse({"ok": False}, status_code=403)
-    try: uid = str((await request.json()).get("uid", ""))
-    except Exception: return JSONResponse({"ok": False}, status_code=400)
-    target = next((s for s in get_sorted_master_students() if s["uid"] == uid), None)
-    if access["role"] == "level_head" and (not target or not in_discipline_scope(access, target["class"])):
-        return JSONResponse({"ok": False}, status_code=403)
-    conn = sqlite3.connect('attendance_pro.db'); conn.execute("DELETE FROM face_descriptors WHERE uid=?", (uid,)); conn.commit(); conn.close()
-    add_log(f"{access['fullname']} ลบข้อมูลใบหน้า {uid}")
-    return JSONResponse({"ok": True})
-
-@app.get("/admin/face_enroll", response_class=HTMLResponse)
-async def admin_face_enroll_page(user_session: Optional[str] = Cookie(None)):
-    access = gate_perm(user_session, can_manage_face_data)
-    if not access: return RedirectResponse(url="/login", status_code=303)
-    back = "/admin/dashboard" if access["role"] == "admin" else staff_home_url(access)
-    body = f"""<div class="dk-note">{ic('flask', 16)} <b>ฟีเจอร์สแกนหน้า — อยู่ในช่วงทดสอบ</b><br>
-        ระบบเก็บเฉพาะ "เวกเตอร์ใบหน้า" (ตัวเลข 128 ค่า) ไม่เก็บวิดีโอ · ควรได้รับความยินยอมจากนักเรียน/ผู้ปกครองก่อนลงทะเบียนใบหน้า<br>
-        วิธีที่แม่นที่สุดคือกดปุ่มกล้อง ({ic('camera', 14)}) ถ่ายหน้าตรงรายคน (หน้าตรง แสงพอ ไม่สวมหน้ากาก/หมวก) · หรือสร้างอัตโนมัติจากรูปโปรไฟล์</div>
-    <div id="feMsg" class="dk-note" style="display:none;"></div>
-    <div class="dk-card"><div class="dk-filter" style="grid-template-columns:1fr 1fr;">
-        <div><label class="dk-label">ค้นหา</label><input id="feQ" class="dk-input" placeholder="ชื่อ / เลขที่"></div>
-        <div><label class="dk-label">ห้อง</label><select id="feCls" class="dk-input"></select></div></div>
-        <div id="feStat" style="font-size:13px;color:#64748b;margin:10px 0;"></div>
-        <button id="feBatch" class="dk-btn green block" style="padding:12px;margin-bottom:8px;">{ic('star', 16)} สร้างจากรูปโปรไฟล์ (เฉพาะคนที่ยังไม่มี)</button>
-        <button id="feBulkBtn" class="dk-btn light block" style="padding:12px;margin-bottom:4px;">{ic('upload', 16)} อัปโหลดรูปหลายคนพร้อมกัน</button>
-        <div style="font-size:12px;color:#64748b;margin-bottom:12px;">ตั้งชื่อไฟล์เป็น <b>ชื่อ สกุล</b> หรือ <b>รหัสนักเรียน</b> เช่น "สุชาดา สุดตา.jpg" · หนึ่งคนอัปได้หลายรูป (ชื่อ สกุล 1.jpg, 2.jpg) · รูปควรเห็นหน้าตรง มีคนเดียว</div>
-        <input id="feFile" type="file" accept="image/*" multiple style="display:none;"><input id="feBulk" type="file" accept="image/*" multiple style="display:none;">
-        <div id="feList"></div></div>
-    <div id="camBox" style="display:none;position:fixed;inset:0;z-index:1500;background:rgba(2,6,23,.92);padding:16px;overflow:auto;">
-        <div style="max-width:480px;margin:0 auto;color:#fff;text-align:center;"><h3 id="camName" style="margin:6px 0 10px;"></h3>
-        <video id="camVid" playsinline muted autoplay style="width:100%;border-radius:14px;background:#000;transform:scaleX(-1);"></video>
-        <div style="display:flex;gap:8px;margin-top:12px;"><button id="camShoot" class="dk-btn green block" style="padding:13px;">{ic('camera', 16)} ถ่าย 3 ภาพ</button><button id="camClose" class="dk-btn light block" style="padding:13px;">ปิด</button></div></div></div>"""
-    extra = f'<script>{_face_cfg_js()}</script><script src="/facescan.js"></script><script src="/faceenroll.js"></script>'
-    return dk_page("ลงทะเบียนใบหน้า", "สำหรับระบบสแกนหน้าเช็กชื่อ (ทดลอง)", body, back, extra=extra, icon=ic('scan-face', 22), theme="dk-teal")
-
-
-
-@app.get("/api/face/descriptors_all")
-async def api_face_descriptors_all(user_session: Optional[str] = Cookie(None)):
-    access = gate_perm(user_session, can_face_gate)
-    if not access: return JSONResponse({"error": "forbidden"}, status_code=403)
-    fmap = _face_load_map()
-    studs = [{"uid": s["uid"], "name": s["name"], "no": s["no"], "class": s["class"], "descs": fmap.get(s["uid"], [])}
-             for s in get_sorted_master_students() if s["uid"] in fmap]
-    return JSONResponse({"students": studs}, headers={"Cache-Control": "no-store"})
-
-@app.post("/api/face/gate")
-async def api_face_gate(request: Request, user_session: Optional[str] = Cookie(None)):
-    access = gate_perm(user_session, can_face_gate)
-    if not access: return JSONResponse({"ok": False, "msg": "ไม่มีสิทธิ์"}, status_code=403)
-    try: data = await request.json()
-    except Exception: return JSONResponse({"ok": False, "msg": "bad json"}, status_code=400)
-    uid, direction = str(data.get("uid", "")), data.get("direction")
-    if direction not in ("in", "out"): return JSONResponse({"ok": False, "msg": "ทิศทางไม่ถูกต้อง"})
-    st = next((x for x in get_sorted_master_students() if x["uid"] == uid), None)
-    if not st: return JSONResponse({"ok": False, "msg": "ไม่พบนักเรียน"})
-    now = datetime.now(); today, hhmm = now.strftime("%Y-%m-%d"), now.strftime("%H:%M")
-    conn = sqlite3.connect('attendance_pro.db')
-    try:
-        prev = conn.execute("SELECT time FROM face_gate_logs WHERE uid=? AND date=? AND direction=? ORDER BY id LIMIT 1", (uid, today, direction)).fetchone()
-        if prev:
-            return JSONResponse({"ok": True, "status": "dup", "name": st["name"], "time": prev[0]})
-        in_row = conn.execute("SELECT time FROM face_gate_logs WHERE uid=? AND date=? AND direction='in' ORDER BY id LIMIT 1", (uid, today)).fetchone() if direction == "out" else None
-        conn.execute("INSERT INTO face_gate_logs (uid, name, classroom, direction, date, time, scanned_by) VALUES (?,?,?,?,?,?,?)",
-                     (uid, st["name"], st["class"], direction, today, now.strftime("%H:%M:%S")[:5], access["username"]))
-        conn.commit()
-    finally:
-        conn.close()
-    try: await staff_push_gate(st, direction, hhmm)
-    except Exception as e: print(f"staff push error: {e}")
-    return JSONResponse({"ok": True, "status": "ok", "name": st["name"], "time": hhmm, "in_time": in_row[0] if in_row else ""})
-
-@app.get("/app/facegate", response_class=HTMLResponse)
-async def face_gate_page(date: Optional[str] = None, user_session: Optional[str] = Cookie(None)):
-    access = gate_perm(user_session, can_face_gate)
-    if not access: return RedirectResponse(url="/login", status_code=303)
-    day = date if date and len(date) == 10 else datetime.now().strftime("%Y-%m-%d")
-    conn = sqlite3.connect('attendance_pro.db')
-    try:
-        rows = conn.execute("SELECT name, classroom, direction, time FROM face_gate_logs WHERE date=? ORDER BY id DESC", (day,)).fetchall()
-    finally:
-        conn.close()
-    n_in = sum(1 for r in rows if r[2] == "in"); n_out = sum(1 for r in rows if r[2] == "out")
-    items = "".join(
-        f'<div class="dk-row" style="margin:0 0 8px;"><div class="grow"><b>{_he(r[0])}</b><span>{_he(r[1])}</span></div>'
-        f'<span class="dk-pill {"ok" if r[2] == "in" else "mute"}">{"เข้า" if r[2] == "in" else "ออก"} {_he(r[3])} น.</span></div>' for r in rows)
-    back = "/admin/dashboard" if access["role"] == "admin" else staff_home_url(access)
-    body = (f'<div class="dk-note">{ic("flask", 16)} <b>ฟีเจอร์ทดลอง</b> — สแกนใบหน้านักเรียนตอนเข้า/ออก ระบบบันทึกเวลาให้อัตโนมัติ ถ้าสแกนซ้ำจะแจ้งว่าสแกนไปตอนกี่โมงแล้ว</div>'
-            f'<div class="dk-stats">{dk_stat("เข้าแล้ว", n_in, ic("check", 20), "green")}{dk_stat("ออกแล้ว", n_out, ic("log-out", 20), "amber")}</div>'
-            f'<button id="gateOpen" class="dk-btn green block" style="padding:16px;margin-bottom:14px;font-size:15px;">{ic("scan-face", 20)} เปิดกล้องสแกนหน้าเข้า-ออก</button>'
-            f'<div class="dk-card"><div class="dk-card-title">บันทึกวันที่ {_he(day)}<small>{len(rows)} รายการ</small></div>'
-            f'<form method="get" style="margin-bottom:12px;"><input class="dk-input" type="date" name="date" value="{_he(day, quote=True)}" onchange="this.form.submit()"></form>'
-            f'{items or dk_empty(ic("scan-face", 32), "ยังไม่มีการสแกนในวันนี้")}</div>')
-    extra = f'<script>{_face_cfg_js()}</script><script src="/facescan.js"></script><script>document.getElementById("gateOpen").onclick=function(){{FaceScan.open({{gate:true}});}};</script>'
-    return dk_page("สแกนหน้าเข้า-ออก", "ทดลองใช้งาน", body, back, extra=extra, icon=ic("scan-face", 22), theme="dk-teal", head_extra="<script>window.FACE_NO_LIVE=1;</script>")
 
 # ==========================================
 # 🎖️ ระบบคะแนนความประพฤติ
@@ -7262,7 +5718,7 @@ async def admin_conduct_history_page(uid: str, user_session: Optional[str] = Coo
             <td><b>{h['running_total']}</b></td>
             <td>
                 <a href="/api/admin/conduct/delete?entry_id={h['id']}&uid={uid}"
-                   data-confirm="ลบรายการนี้? ระบบจะคืนคะแนนให้นักเรียนอัตโนมัติ"
+                   onclick="return confirm('ลบรายการนี้? ระบบจะคืนคะแนนให้นักเรียนอัตโนมัติ')"
                    class="btn btn-danger" style="padding:4px 9px;font-size:11px;">🗑️ ลบ</a>
             </td>
         </tr>
@@ -7306,50 +5762,41 @@ async def admin_teachers_page(user_session: Optional[str] = Cookie(None)):
 
     role_options = "".join([f'<option value="{key}">{meta["label"]}</option>' for key, meta in TEACHER_ROLES.items()])
 
-    role_tone = {"admin": "bad", "affairs": "warn", "level_head": "ok", "teacher": "mute"}
-    counts = {}
     rows = ""
     for t in teachers:
         username, fullname, role, level_scope = t
         role = role or "teacher"
-        counts[role] = counts.get(role, 0) + 1
         role_meta = TEACHER_ROLES.get(role, TEACHER_ROLES["teacher"])
-        scope_txt = f" · ระดับ {_he(level_scope)}" if role == "level_head" and level_scope else ""
-        q_user = urllib.parse.quote(username or "")
-        initial = _he((fullname or username or "?")[:1])
-        rows += f"""<div class="dk-stu tc-card" data-search="{_he(((fullname or '') + ' ' + (username or '')).lower(), quote=True)}" style="margin:0;">
-            <div class="dk-stu-head" style="margin-bottom:8px;">
-                <div class="dk-avatar" style="background:linear-gradient(135deg,#0f766e,#0d9488);">{initial}</div>
-                <div class="nm"><b>{_he(fullname or '-')}</b><span>@{_he(username or '')}</span></div>
-            </div>
-            <div style="margin-bottom:10px;"><span class="dk-pill {role_tone.get(role, 'mute')}">{_he(role_meta['label'])}{scope_txt}</span></div>
-            <a href="/admin/teacher_subjects?teacher={q_user}" class="dk-btn light sm" style="width:100%;margin-bottom:8px;">🤝 กำหนดวิชาที่เช็กชื่อได้</a>
-            {f'<a href="/admin/subject_scope?head={q_user}" class="dk-btn sm" style="width:100%;margin-bottom:8px;background:linear-gradient(135deg,#6d28d9,#5b21b6);">📚 กำหนดวิชาที่รับผิดชอบ</a>' if role == "subject_head" else ""}
-            <div style="display:flex;gap:8px;">
-                <a href="/admin/confirm_edit_teacher?target_username={q_user}" class="dk-btn light sm" style="flex:1;">📝 แก้ไข</a>
-                <a href="/admin/confirm_delete_teacher?target_username={q_user}" class="dk-btn danger sm" style="flex:1;">🗑️ ลบ</a>
-            </div></div>"""
+        scope_txt = f" · ระดับ {level_scope}" if role == "level_head" and level_scope else ""
+        rows += f"""<tr>
+            <td><code>{username}</code></td>
+            <td>{fullname}</td>
+            <td><span style="font-size:12px; font-weight:700;">{role_meta['label']}{scope_txt}</span></td>
+            <td><div style='display:flex;gap:6px;'><a href='/admin/confirm_edit_teacher?target_username={username}' class='btn btn-warning' style='padding:5px 10px; font-size:11.5px;'>📝 แก้ไข</a><a href='/admin/confirm_delete_teacher?target_username={username}' class='btn btn-danger' style='padding:5px 10px; font-size:11.5px;'>🗑️ ลบ</a></div></td>
+        </tr>"""
 
-    stats = (dk_stat("บัญชีทั้งหมด", len(teachers), "👥", "blue") + dk_stat("ครูผู้สอน", counts.get("teacher", 0), "👩‍🏫", "green")
-             + dk_stat("หัวหน้าระดับ", counts.get("level_head", 0), "🎓", "violet") + dk_stat("ฝ่ายกิจการ", counts.get("affairs", 0), "🛡️", "amber"))
-    create = f"""<div class="dk-card"><div class="dk-card-title">➕ สร้างบัญชีครูใหม่</div>
-        <form action="/api/admin/create_teacher" method="post" class="dk-grid c2" style="align-items:end;">
-            <div><label class="dk-label">Username</label><input class="dk-input" type="text" name="u" placeholder="Username" required></div>
-            <div><label class="dk-label">Password</label><input class="dk-input" type="text" name="p" placeholder="Password" required></div>
-            <div><label class="dk-label">ชื่อครู</label><input class="dk-input" type="text" name="f" placeholder="ชื่อครู" required></div>
-            <div><label class="dk-label">บทบาท / สิทธิ์การใช้งาน</label>
-                <select class="dk-select" name="role" id="createRoleSel" onchange="document.getElementById('createScopeWrap').style.display = this.value==='level_head' ? 'block' : 'none';">{role_options}</select></div>
-            <div id="createScopeWrap" style="display:none;"><label class="dk-label">ระดับชั้นที่รับผิดชอบ</label><input class="dk-input" type="text" name="level_scope" placeholder="เช่น ม.2"></div>
-            <div style="grid-column:1/-1;"><button type="submit" class="dk-btn block" style="padding:13px;">➕ สร้างบัญชี</button></div>
-        </form></div>"""
-    listing = f"""<div class="dk-card"><div class="dk-card-title">📋 รายชื่อครูในระบบ<small>{len(teachers)} บัญชี</small></div>
-        <input id="tcSearch" class="dk-input" placeholder="🔍 ค้นหาชื่อหรือ Username" style="margin-bottom:12px;">
-        <div class="dk-grid c3">{rows}</div></div>"""
-    js = """<script>(function(){var i=document.getElementById('tcSearch');if(!i)return;i.addEventListener('input',function(){var q=this.value.trim().toLowerCase();
-        document.querySelectorAll('.tc-card').forEach(function(c){c.style.display=(!q||c.getAttribute('data-search').indexOf(q)!==-1)?'':'none';});});})();</script>"""
-    perm_btn = '<a href="/admin/permissions" class="dk-btn hero">🔐 จัดการสิทธิ์</a>' if access["role"] == "admin" else ""
-    return dk_page("จัดการครู & สิทธิ์การใช้งาน", "สร้าง แก้ไข และกำหนดบทบาทของบัญชีครู", f'<div class="dk-stats">{stats}</div>{create}{listing}',
-                   back_url, perm_btn, js, icon="👤 ")
+    return f"""<html>{STYLE_HEADER}<body><div class="navbar"><h1>👤 จัดการครู &amp; สิทธิ์การใช้งาน</h1><a href="{back_url}" class="btn btn-secondary">⬅ ประตูหลัก</a></div><div class="main-container">
+        <div class="card">
+            <h2>➕ สร้างบัญชีครูใหม่</h2>
+            <form action="/api/admin/create_teacher" method="post">
+                <input type="text" name="u" placeholder="Username" required>
+                <input type="text" name="p" placeholder="Password" required>
+                <input type="text" name="f" placeholder="ชื่อครู" required>
+                <label style="font-size:12.5px; font-weight:700; color:#475569; display:block; margin:8px 0 4px;">บทบาท / สิทธิ์การใช้งาน</label>
+                <select name="role" id="createRoleSel" onchange="document.getElementById('createScopeWrap').style.display = this.value==='level_head' ? 'block' : 'none';">
+                    {role_options}
+                </select>
+                <div id="createScopeWrap" style="display:none;">
+                    <input type="text" name="level_scope" placeholder="ระดับชั้นที่รับผิดชอบ เช่น ม.2">
+                </div>
+                <button type="submit" class="btn-submit">➕ สร้างบัญชี</button>
+            </form>
+        </div>
+        <div class="card">
+            <h2>📋 รายชื่อครูในระบบ</h2>
+            <table><thead><tr><th>User</th><th>ชื่อ</th><th>บทบาท</th><th>การจัดการ</th></tr></thead><tbody>{rows}</tbody></table>
+        </div>
+    </div></body></html>"""
 
 @app.post("/api/admin/create_teacher")
 async def api_create_teacher(u: str = Form(...), p: str = Form(...), f: str = Form(...), role: str = Form("teacher"), level_scope: str = Form(""), user_session: Optional[str] = Cookie(None)):
@@ -7418,21 +5865,41 @@ async def admin_edit_teacher_page(target_username: str = Form(...), admin_passwo
 
     role_options = "".join([f'<option value="{key}" {"selected" if key==current_role else ""}>{meta["label"]}</option>' for key, meta in TEACHER_ROLES.items()])
     
-    form = f"""<div class="dk-card"><div class="dk-card-title">✏️ แก้ไขข้อมูล: {_he(t[0])}</div>
-        <form action="/api/admin/update_teacher" method="post" style="display:grid;gap:12px;">
-            <input type="hidden" name="old_username" value="{_he(t[0], quote=True)}">
-            <div><label class="dk-label">Username (ชื่อผู้ใช้)</label><input class="dk-input" type="text" name="new_username" value="{_he(t[0], quote=True)}" required></div>
-            <div><label class="dk-label">Password (รหัสผ่าน)</label><input class="dk-input" type="text" name="new_password" value="{_he(t[1] or '', quote=True)}" required></div>
-            <div><label class="dk-label">ชื่อ-นามสกุลครู</label><input class="dk-input" type="text" name="new_fullname" value="{_he(t[2] or '', quote=True)}" required></div>
-            <div><label class="dk-label">บทบาท / สิทธิ์การใช้งาน</label>
-                <select class="dk-select" name="new_role" id="editRoleSel" onchange="document.getElementById('editScopeWrap').style.display = this.value==='level_head' ? 'block' : 'none';">{role_options}</select></div>
-            <div id="editScopeWrap" style="display:{'block' if current_role=='level_head' else 'none'};">
-                <label class="dk-label">ระดับชั้นที่รับผิดชอบ (หัวหน้าระดับ)</label><input class="dk-input" type="text" name="new_level_scope" value="{_he(current_scope, quote=True)}" placeholder="เช่น ม.2"></div>
-            <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:12px;padding:12px;font-size:12.5px;color:#b91c1c;line-height:1.6;">
-                ⚠️ หากเปลี่ยน Username ครูจะต้องใช้ชื่อใหม่ในการ Login และระบบจะอัปเดตข้อมูลในคลาสเรียนที่เกี่ยวข้องให้อัตโนมัติ</div>
-            <button type="submit" class="dk-btn block" style="padding:13px;">💾 บันทึกการเปลี่ยนแปลง</button>
-        </form></div>"""
-    return dk_page("แก้ไขบัญชีครู", f"@{_he(t[0])}", form, "/admin/teachers", icon="✏️ ")
+    return f"""
+    <html>{STYLE_HEADER}
+    <body>
+        <div class="navbar">
+            <h1><img src="{LOGO_URL}" class="nav-logo"> ✏️ แก้ไขบัญชีครู</h1>
+            <a href="/admin/teachers" class="btn btn-secondary">⬅ กลับ</a>
+        </div>
+        <div class="main-container">
+            <div class="card">
+                <h2>✏️ แก้ไขข้อมูล: {t[0]}</h2>
+                <form action="/api/admin/update_teacher" method="post">
+                    <input type="hidden" name="old_username" value="{t[0]}">
+                    <label style="font-size:13px; font-weight:700; color:#475569; display:block; margin-bottom:4px;">Username (ชื่อผู้ใช้)</label>
+                    <input type="text" name="new_username" value="{t[0]}" required>
+                    <label style="font-size:13px; font-weight:700; color:#475569; display:block; margin-bottom:4px;">Password (รหัสผ่าน)</label>
+                    <input type="text" name="new_password" value="{t[1]}" required>
+                    <label style="font-size:13px; font-weight:700; color:#475569; display:block; margin-bottom:4px;">ชื่อ-นามสกุลครู</label>
+                    <input type="text" name="new_fullname" value="{t[2]}" required>
+                    <label style="font-size:13px; font-weight:700; color:#475569; display:block; margin-bottom:4px;">บทบาท / สิทธิ์การใช้งาน</label>
+                    <select name="new_role" id="editRoleSel" onchange="document.getElementById('editScopeWrap').style.display = this.value==='level_head' ? 'block' : 'none';">
+                        {role_options}
+                    </select>
+                    <div id="editScopeWrap" style="display:{'block' if current_role=='level_head' else 'none'};">
+                        <label style="font-size:13px; font-weight:700; color:#475569; display:block; margin-bottom:4px;">ระดับชั้นที่รับผิดชอบ (หัวหน้าระดับ)</label>
+                        <input type="text" name="new_level_scope" value="{current_scope}" placeholder="เช่น ม.2">
+                    </div>
+                    <div style="background:#fef2f2; border:1px solid #fecaca; border-radius:8px; padding:12px; margin-bottom:14px; font-size:12px; color:#b91c1c;">
+                        ⚠️ หากเปลี่ยน Username ครูจะต้องใช้ชื่อใหม่ในการ Login และระบบจะอัปเดตข้อมูลในคลาสเรียนที่เกี่ยวข้องให้อัตโนมัติ
+                    </div>
+                    <button type="submit" class="btn-submit">💾 บันทึกการเปลี่ยนแปลง</button>
+                </form>
+            </div>
+        </div>
+    </body></html>
+    """
 
 @app.post("/api/admin/update_teacher")
 async def api_update_teacher(old_username: str = Form(...), new_username: str = Form(...), new_password: str = Form(...), new_fullname: str = Form(...), new_role: str = Form("teacher"), new_level_scope: str = Form(""), user_session: Optional[str] = Cookie(None)):
@@ -7661,13 +6128,6 @@ def init_db():
         pass  # คอลัมน์มีอยู่แล้ว
     cursor.execute("UPDATE leave_requests SET leave_type='อื่นๆ' WHERE leave_type IS NULL OR leave_type=''")
     # 🔐 ตารางสิทธิ์แบบ Role-based ที่แก้ไขได้จากหน้าแอดมิน (ไม่ต้องแก้โค้ด)
-    cursor.execute('''CREATE TABLE IF NOT EXISTS face_gate_logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, uid TEXT, name TEXT, classroom TEXT, direction TEXT, date TEXT, time TEXT, scanned_by TEXT
-    )''')
-    cursor.execute('''CREATE INDEX IF NOT EXISTS idx_face_gate ON face_gate_logs (date, uid, direction)''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS face_descriptors (
-        uid TEXT PRIMARY KEY, descriptors TEXT, source TEXT, updated_by TEXT, updated_at TEXT
-    )''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS role_permissions (
         role TEXT,
         perm_key TEXT,
@@ -7791,1214 +6251,8 @@ def init_db():
     )''')
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_payments_student ON payments (student_uid)")
 
-    # 📚 หัวหน้าวิชา: วิชาที่รับผิดชอบ (แอดมินกำหนด / หัวหน้าวิชาสร้างเอง)
-    cursor.execute('''CREATE TABLE IF NOT EXISTS subject_head_groups (
-        head_username TEXT NOT NULL, group_id INTEGER NOT NULL, PRIMARY KEY (head_username, group_id))''')
-    # 🤝 ครูร่วม/ครูฝึกสอน: วิชาที่ถูกกำหนดให้เช็กชื่อร่วม (กำหนดรายบุคคลโดยผู้ดูแล)
-    cursor.execute('''CREATE TABLE IF NOT EXISTS group_teachers (
-        group_id INTEGER NOT NULL, teacher_username TEXT NOT NULL, PRIMARY KEY (group_id, teacher_username))''')
-
-    # 📋 ระบบตรวจระเบียบ: ตัวชี้วัด (แก้ไขได้) + ผลการตรวจรายวันรายคน
-    cursor.execute('''CREATE TABLE IF NOT EXISTS inspection_criteria (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL UNIQUE,
-        icon TEXT DEFAULT '✅',
-        is_active INTEGER DEFAULT 1,
-        sort_order INTEGER DEFAULT 0,
-        created_by TEXT,
-        created_at TEXT
-    )''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS inspection_records (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        inspect_date TEXT NOT NULL,
-        classroom TEXT,
-        student_uid TEXT NOT NULL,
-        student_name TEXT,
-        student_no TEXT,
-        criterion_id INTEGER NOT NULL,
-        criterion_name TEXT,
-        result TEXT NOT NULL,
-        inspector TEXT,
-        inspector_label TEXT,
-        created_at TEXT,
-        UNIQUE (inspect_date, student_uid, criterion_id)
-    )''')
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_insp_rec_date ON inspection_records (inspect_date, classroom)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_insp_rec_student ON inspection_records (student_uid)")
-    # ตัวชี้วัดเริ่มต้น (ใส่เฉพาะตอนตารางยังว่าง เพื่อไม่ฟื้นของที่แอดมินลบไปแล้ว)
-    cursor.execute("SELECT COUNT(*) FROM inspection_criteria")
-    if cursor.fetchone()[0] == 0:
-        _seed_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        for _i, (_n, _ic) in enumerate([("ทรงผม", "scissors"), ("บัตรนักเรียน", "id-card"), ("การแต่งกาย", "shirt")], start=1):
-            cursor.execute(
-                "INSERT INTO inspection_criteria (name, icon, is_active, sort_order, created_by, created_at) VALUES (?,?,1,?,?,?)",
-                (_n, _ic, _i, "system", _seed_now))
-
     conn.commit()
     conn.close()
-
-# ==========================================
-# 🎨 DASHBOARD UI KIT — ชุดสไตล์แดชบอร์ดกลาง (คลาสขึ้นต้น dk-) ใช้ร่วมกันทุกหน้าที่ปรับใหม่
-# ==========================================
-from html import escape as _he
-
-DASH_KIT = """
-<style>
-    body.dk-body { background:#f0f4f8; font-family:'Sarabun','Inter',sans-serif; margin:0; color:#0f172a;
-        padding-bottom:calc(96px + env(safe-area-inset-bottom,0px)); }
-    .dk-body * { box-sizing:border-box; }
-
-    /* ── Hero ── */
-    .dk-hero { background:linear-gradient(135deg,#0f172a 0%,#1e3a8a 55%,#1d4ed8 100%); color:#fff;
-        padding:calc(env(safe-area-inset-top,0px) + 16px) 16px 58px; position:relative; overflow:hidden; }
-    .dk-hero::before { content:""; position:absolute; inset:0; pointer-events:none;
-        background:radial-gradient(circle at 92% 15%,rgba(96,165,250,.28),transparent 50%),
-                   radial-gradient(circle at 8% 90%,rgba(212,175,55,.16),transparent 45%); }
-    .dk-hero-in { position:relative; max-width:1100px; margin:0 auto; }
-    .dk-hero-top { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:14px; }
-    .dk-back { width:38px; height:38px; border-radius:11px; background:rgba(255,255,255,.12);
-        border:1px solid rgba(255,255,255,.2); color:#fff; display:flex; align-items:center; justify-content:center;
-        text-decoration:none; font-size:18px; font-weight:700; }
-    .dk-hero-actions { display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
-    .dk-hero h1 { margin:0; font-size:22px; font-weight:800; display:flex; align-items:center; gap:10px; line-height:1.25; }
-    .dk-hero p { margin:5px 0 0; font-size:13px; color:rgba(255,255,255,.72); }
-    .dk-wrap { max-width:1100px; margin:-36px auto 0; padding:0 14px; position:relative; }
-
-    /* ── Stat tiles ── */
-    .dk-stats { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; margin-bottom:16px; }
-    @media (min-width:720px) { .dk-stats { grid-template-columns:repeat(4,1fr); } }
-    .dk-stat { background:#fff; border-radius:16px; padding:13px; border:1px solid #e6eaf1;
-        box-shadow:0 8px 20px -10px rgba(15,23,42,.22); display:flex; align-items:center; gap:11px; min-width:0; }
-    .dk-stat-ico { width:42px; height:42px; border-radius:12px; display:flex; align-items:center; justify-content:center; font-size:20px; flex:none; }
-    .dk-stat b { display:block; font-size:22px; font-weight:800; line-height:1.1; }
-    .dk-stat span { font-size:11.5px; color:#64748b; font-weight:600; }
-    .dk-stat b span { font-size:inherit; color:inherit; font-weight:inherit; }
-    .t-blue { background:#dbeafe; color:#1d4ed8; } .t-green { background:#dcfce7; color:#15803d; }
-    .t-red { background:#fee2e2; color:#b91c1c; } .t-amber { background:#fef3c7; color:#b45309; }
-    .t-violet { background:#ede9fe; color:#6d28d9; } .t-slate { background:#e2e8f0; color:#334155; }
-
-    /* ── Cards / layout ── */
-    .dk-card { background:#fff; border-radius:18px; padding:16px; border:1px solid #e6eaf1;
-        box-shadow:0 1px 3px rgba(15,23,42,.05); margin-bottom:14px; }
-    .dk-card-title { display:flex; align-items:center; justify-content:space-between; gap:8px;
-        font-size:14.5px; font-weight:800; margin:0 0 12px; }
-    .dk-card-title { justify-content:flex-start; gap:10px; }
-    .dk-card-title small { font-size:11.5px; font-weight:600; color:#64748b; margin-left:auto; }
-    .dk-card-title > .kx-i:first-child { width:30px; height:30px; padding:6px; border-radius:10px; background:#eef2ff; color:#4338ca !important; }
-    .dk-section { font-size:12px; font-weight:800; color:#64748b; letter-spacing:.4px; margin:18px 4px 10px; }
-    .dk-grid { display:grid; gap:12px; grid-template-columns:1fr; }
-    @media (min-width:720px) { .dk-grid.c2 { grid-template-columns:repeat(2,1fr); } .dk-grid.c3 { grid-template-columns:repeat(3,1fr); } }
-    .dk-empty { text-align:center; color:#94a3b8; padding:34px 10px; font-size:14px; }
-    .dk-empty .em { display:flex; width:68px; height:68px; margin:0 auto 12px; border-radius:20px; background:#eef2ff; color:#4f46e5; align-items:center; justify-content:center; font-size:0; line-height:0; }
-    .dk-empty .em .kx-i { width:32px; height:32px; display:block; margin:0; }
-    .dk-note { background:#eff6ff; border:1px solid #bfdbfe; color:#1e40af; border-radius:14px; padding:12px 14px; font-size:13px; line-height:1.7; margin-bottom:14px; }
-
-    /* ── Buttons / inputs ── */
-    .dk-btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; padding:10px 16px; border:none;
-        border-radius:11px; font-family:inherit; font-size:13.5px; font-weight:700; cursor:pointer; text-decoration:none;
-        background:linear-gradient(135deg,#1d4ed8,#1e3a8a); color:#fff; box-shadow:0 6px 14px -6px rgba(30,58,138,.5); }
-    .dk-btn:active { transform:translateY(1px); }
-    .dk-btn.hero { background:rgba(255,255,255,.14); border:1px solid rgba(255,255,255,.25); box-shadow:none; padding:8px 12px; font-size:12.5px; }
-    .dk-btn.light { background:#f1f5f9; color:#334155; box-shadow:none; }
-    .dk-btn.green { background:linear-gradient(135deg,#16a34a,#15803d); box-shadow:0 6px 14px -6px rgba(21,128,61,.5); }
-    .dk-btn.danger { background:#fee2e2; color:#b91c1c; box-shadow:none; }
-    .dk-btn.sm { padding:6px 10px; font-size:12px; border-radius:9px; }
-    .dk-btn.block { width:100%; }
-    .dk-input, .dk-select { width:100%; padding:10px 12px; border:1.5px solid #dbe2ec; border-radius:11px; font-family:inherit;
-        font-size:14px; background:#fff; color:#0f172a; }
-    .dk-body input.dk-input, .dk-body select.dk-select { margin-bottom:0; }
-    .dk-brand { font-size:15px; font-weight:800; letter-spacing:.3px; } .dk-brand span { opacity:.65; font-weight:600; margin-left:4px; }
-    .dk-teal .dk-hero { background:linear-gradient(135deg,#042f2e 0%,#0f766e 55%,#0d9488 100%); }
-    .dk-teal .dk-hero::before { background:radial-gradient(circle at 92% 15%,rgba(94,234,212,.28),transparent 50%),radial-gradient(circle at 8% 90%,rgba(250,204,21,.14),transparent 45%); }
-    .dk-teal .dk-chip.on { background:#0f766e; border-color:#0f766e; }
-    .dk-teal .dk-btn:not(.light):not(.danger):not(.hero):not(.green) { background:linear-gradient(135deg,#0f766e,#115e59); box-shadow:0 6px 14px -6px rgba(15,118,110,.55); }
-    .dk-role { display:inline-flex; align-items:center; gap:6px; margin-top:10px; padding:4px 12px; border-radius:999px; background:rgba(255,255,255,.16); border:1px solid rgba(255,255,255,.25); font-size:12px; font-weight:700; }
-    .dk-tools { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:6px; }
-    @media (min-width:720px) { .dk-tools { grid-template-columns:repeat(6,1fr); } }
-    .dk-tool { position:relative; display:flex; flex-direction:column; align-items:center; gap:8px; text-align:center; text-decoration:none; color:#0f172a;
-        background:#fff; border:1px solid #e6eaf1; border-radius:16px; padding:14px 6px 12px; font-size:12px; font-weight:700; line-height:1.3; box-shadow:0 1px 3px rgba(15,23,42,.05); }
-    .dk-tool:active { transform:scale(.97); }
-    .dk-tool-ic { width:46px; height:46px; border-radius:14px; display:flex; align-items:center; justify-content:center; }
-    .dk-tool-badge { position:absolute; top:6px; right:8px; min-width:20px; height:20px; padding:0 6px; border-radius:999px; background:#ef4444; color:#fff; font-size:11px; font-weight:800; display:flex; align-items:center; justify-content:center; }
-    .dk-subj { background:#fff; border:1px solid #e6eaf1; border-radius:18px; padding:14px; box-shadow:0 1px 3px rgba(15,23,42,.05); }
-    .dk-subj-top { display:flex; align-items:center; gap:12px; margin-bottom:12px; }
-    .dk-subj-top .grow { flex:1; min-width:0; } .dk-subj-top b { display:block; font-size:15.5px; }
-    .dk-subj-top span.sub { font-size:12px; color:#64748b; font-weight:600; }
-    .dk-subj-meta { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:12px; }
-    .dk-subj-act { display:grid; grid-template-columns:repeat(2,1fr); gap:8px; }
-    .dk-iconpick { display:flex; flex-wrap:wrap; gap:8px; }
-    .dk-iconpick label { position:relative; cursor:pointer; margin:0; }
-    .dk-iconpick input { position:absolute; opacity:0; inset:0; }
-    .dk-iconpick span { width:44px; height:44px; border-radius:13px; background:#f1f5f9; border:2px solid transparent; color:#475569; display:flex; align-items:center; justify-content:center; }
-    .dk-iconpick input:checked + span { background:#dbeafe; border-color:#1d4ed8; color:#1d4ed8; }
-    .dk-body table.dk-table { border:none; margin:0; }
-    .dk-body .dk-hero h1 { color:#fff; }
-    .dk-input:focus, .dk-select:focus { outline:none; border-color:#1d4ed8; box-shadow:0 0 0 3px rgba(29,78,216,.12); }
-    .dk-label { display:block; font-size:12px; font-weight:700; color:#64748b; margin:0 0 5px; }
-    .dk-filter { display:grid; grid-template-columns:1fr; gap:10px; align-items:end; }
-    @media (min-width:720px) { .dk-filter { grid-template-columns:repeat(4,1fr) auto; } }
-
-    /* ── Pills / chips ── */
-    .dk-pill { display:inline-flex; align-items:center; gap:4px; padding:3px 10px; border-radius:999px; font-size:11.5px; font-weight:800; }
-    .dk-pill.ok { background:#dcfce7; color:#15803d; } .dk-pill.bad { background:#fee2e2; color:#b91c1c; }
-    .dk-pill.mute { background:#f1f5f9; color:#64748b; } .dk-pill.warn { background:#fef3c7; color:#b45309; }
-    .dk-chips { display:flex; gap:8px; overflow-x:auto; padding-bottom:4px; }
-    .dk-chip { flex:none; padding:7px 14px; border-radius:999px; background:#fff; border:1.5px solid #dbe2ec; color:#475569;
-        font-size:12.5px; font-weight:700; cursor:pointer; font-family:inherit; }
-    .dk-chip.on { background:#1d4ed8; border-color:#1d4ed8; color:#fff; }
-
-    /* ── Progress ── */
-    .dk-track { height:8px; background:#e8edf5; border-radius:999px; overflow:hidden; }
-    .dk-track > i { display:block; height:100%; border-radius:999px; background:linear-gradient(90deg,#22c55e,#16a34a); }
-    .dk-track.blue > i { background:linear-gradient(90deg,#60a5fa,#1d4ed8); }
-    .dk-rate-row { display:grid; grid-template-columns:130px 1fr 54px; gap:10px; align-items:center; margin:11px 0; font-size:13px; font-weight:700; }
-    .dk-rate-row em { font-style:normal; text-align:right; color:#475569; }
-
-    /* ── Room cards ── */
-    .dk-room { display:block; text-decoration:none; color:inherit; background:#fff; border:1px solid #e6eaf1; border-radius:16px; padding:14px;
-        box-shadow:0 1px 3px rgba(15,23,42,.05); }
-    .dk-room:active { transform:scale(.985); }
-    .dk-room-top { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
-    .dk-room-top b { font-size:17px; font-weight:800; }
-    .dk-room small { display:flex; justify-content:space-between; margin-top:7px; font-size:11.5px; color:#64748b; font-weight:600; }
-
-    /* ── Student inspection rows ── */
-    .dk-stu { background:#fff; border:1.5px solid #e6eaf1; border-radius:16px; padding:12px; margin-bottom:10px; }
-    .dk-stu.has-fail { border-color:#fca5a5; background:#fffafa; }
-    .dk-stu.is-done { border-color:#86efac; }
-    .dk-stu-head { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
-    .dk-avatar { width:38px; height:38px; border-radius:50%; background:linear-gradient(135deg,#1d4ed8,#1e3a8a); color:#fff;
-        display:flex; align-items:center; justify-content:center; font-weight:800; flex:none; }
-    .dk-stu-head .nm { flex:1; min-width:0; }
-    .dk-stu-head .nm b { display:block; font-size:14.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-    .dk-stu-head .nm span { font-size:11.5px; color:#64748b; font-weight:600; }
-    .dk-crits { display:grid; grid-template-columns:1fr; gap:8px; }
-    @media (min-width:720px) { .dk-crits { grid-template-columns:repeat(3,1fr); } }
-    .dk-crit { display:flex; align-items:center; justify-content:space-between; gap:8px; background:#f8fafc; border-radius:12px; padding:7px 8px 7px 11px; }
-    .dk-crit > span { font-size:13px; font-weight:700; min-width:0; }
-    .dk-seg { display:flex; flex:none; background:#e8edf5; border-radius:10px; padding:3px; gap:3px; }
-    .dk-seg button { border:none; background:transparent; padding:7px 12px; border-radius:8px; font-family:inherit;
-        font-size:12.5px; font-weight:800; color:#64748b; cursor:pointer; min-width:58px; }
-    .dk-seg button.on.p { background:#16a34a; color:#fff; box-shadow:0 3px 8px -3px rgba(22,163,74,.7); }
-    .dk-seg button.on.f { background:#dc2626; color:#fff; box-shadow:0 3px 8px -3px rgba(220,38,38,.7); }
-
-    /* ── Sticky save bar ── */
-    .dk-savebar { position:fixed; left:0; right:0; bottom:0; z-index:60; background:rgba(255,255,255,.96); backdrop-filter:blur(10px);
-        border-top:1px solid #e6eaf1; padding:10px 14px calc(10px + env(safe-area-inset-bottom,0px)); display:flex; align-items:center; gap:10px; justify-content:center; }
-    .dk-savebar .msg { font-size:12.5px; font-weight:700; color:#64748b; flex:1; max-width:520px; }
-    .dk-savebar .msg.dirty { color:#b45309; }
-    .dk-toast { position:fixed; left:50%; bottom:90px; transform:translateX(-50%) translateY(20px); background:#0f172a; color:#fff;
-        padding:11px 18px; border-radius:12px; font-size:13.5px; font-weight:700; opacity:0; pointer-events:none; transition:.25s; z-index:80; }
-    .dk-toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
-
-    /* ── Tables / list rows ── */
-    .dk-tablewrap { overflow-x:auto; border-radius:14px; border:1px solid #e6eaf1; background:#fff; }
-    table.dk-table { width:100%; border-collapse:collapse; margin:0; box-shadow:none; border-radius:0; }
-    table.dk-table th { background:#f8fafc; color:#475569; font-size:12px; font-weight:800; padding:11px 12px; text-align:left; border-bottom:1px solid #e6eaf1; white-space:nowrap; }
-    table.dk-table td { padding:11px 12px; font-size:13.5px; border-bottom:1px solid #eef2f7; text-align:left; background:#fff; }
-    table.dk-table tr:last-child td { border-bottom:none; }
-    .dk-row { display:flex; flex-wrap:wrap; align-items:center; gap:12px; background:#fff; border:1px solid #e6eaf1; border-radius:14px; padding:12px; margin-bottom:9px; }
-    .dk-row .grow { flex:1; min-width:0; }
-    .dk-row .grow b { display:block; font-size:14.5px; }
-    .dk-row .grow span { font-size:12px; color:#64748b; font-weight:600; }
-    .dk-ico-box { width:42px; height:42px; border-radius:12px; background:#eef2ff; display:flex; align-items:center; justify-content:center; font-size:21px; flex:none; }
-    .dk-trend { display:flex; align-items:flex-end; gap:5px; height:90px; }
-    .dk-trend div { flex:1; min-width:6px; background:linear-gradient(180deg,#60a5fa,#1d4ed8); border-radius:5px 5px 2px 2px; position:relative; }
-    .dk-trend-lbl { display:flex; justify-content:space-between; font-size:10.5px; color:#94a3b8; margin-top:6px; font-weight:600; }
-    @media (max-width:520px) { table.dk-table th, table.dk-table td { padding:9px 7px; font-size:12.5px; } }
-    @media (max-width:520px) { .dk-rate-row { grid-template-columns:96px 1fr 46px; } .dk-hero h1 { font-size:19px; } }
-</style>
-"""
-
-
-def dk_page(title: str, subtitle: str, body: str, back_url: Optional[str], actions: str = "", extra: str = "", icon: str = "",
-            theme: str = "", head_extra: str = "") -> str:
-    """ห่อเนื้อหาด้วยโครงหน้าแดชบอร์ดมาตรฐาน (hero + wrap) — body/actions/extra ต้อง escape มาแล้ว
-    back_url=None → ไม่มีปุ่มกลับ (ใช้กับหน้าแรก) / theme="teal" → ธีมแดชบอร์ดครู"""
-    sub = f"<p>{subtitle}</p>" if subtitle else ""
-    icon = f'<span class="dk-hi">{icon.strip()}</span>' if icon and icon.strip() else ""
-    left = (f'<a href="{back_url}" class="dk-back" aria-label="กลับ">‹</a>' if back_url
-            else '<div class="dk-brand">K-School <span>Teacher</span></div>')
-    return f"""<html>{STYLE_HEADER}{DASH_KIT}{head_extra}<body class="dk-body {theme}">
-{PAGE_LOADER}
-<div class="dk-hero"><div class="dk-hero-in">
-    <div class="dk-hero-top">
-        {left}
-        <div class="dk-hero-actions">{actions}</div>
-    </div>
-    <h1>{icon}{title}</h1>{sub}
-</div></div>
-<div class="dk-wrap">{body}</div>
-{extra}
-<script src="/facelive.js"></script>
-</body></html>"""
-
-
-def dk_tool(href: str, icon_name: str, label: str, tone: str = "blue", badge: int = 0) -> str:
-    """ปุ่มเมนูแบบกล่อง: ไอคอนในกล่องสี + ป้ายชื่อ (ใช้ชุดไอคอน SVG ของระบบ)"""
-    b = f'<span class="dk-tool-badge">{badge}</span>' if badge else ""
-    return f'<a href="{href}" class="dk-tool">{b}<div class="dk-tool-ic t-{tone}">{ic(icon_name, 22)}</div><span>{label}</span></a>'
-
-
-def dk_stat(label: str, value, icon: str, tone: str = "blue") -> str:
-    return (f'<div class="dk-stat"><div class="dk-stat-ico t-{tone}">{icon}</div>'
-            f'<div><b>{value}</b><span>{label}</span></div></div>')
-
-
-def dk_empty(icon: str, text: str) -> str:
-    return f'<div class="dk-empty"><span class="em">{icon}</span>{text}</div>'
-
-
-# ==========================================
-# 📋 ระบบตรวจระเบียบนักเรียน (ครู / ฝ่ายกิจการ ติ๊กผ่าน-ไม่ผ่านตามตัวชี้วัด)
-#   /inspection            ตรวจรายห้อง/รายวัน
-#   /inspection/report     รายงานสรุป (+ส่งออก CSV)
-#   /inspection/criteria   เพิ่ม/ลบ/เปิด-ปิด ตัวชี้วัด
-#   /student/inspection    นักเรียนดูผลของตัวเอง
-# ==========================================
-import json as _json
-import csv as _csv
-import io as _io
-
-_SVG_CLIP = '<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>'
-_SVG_BARS = '<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>'
-_SVG_SLIDERS = '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>'
-
-
-def inspection_menu_cells(access: dict) -> str:
-    """เมนูระบบตรวจระเบียบสำหรับหน้าแดชบอร์ดครู/แอดมิน — แสดงเฉพาะที่บทบาทนี้มีสิทธิ์"""
-    def cell(href, svg, bg, color, label):
-        return f'''<a href="{href}" class="ah-cell">
-            <div class="ah-cell-icon-wrap" style="background:{bg};color:{color};">
-              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{svg}</svg>
-            </div>
-            <span class="ah-cell-label">{label}</span>
-        </a>'''
-    cells = ""
-    if can_manage_inspection(access):
-        cells += cell("/inspection", _SVG_CLIP, "#ecfdf5", "#047857", "ตรวจระเบียบ")
-    if can_view_inspection_report(access):
-        cells += cell("/inspection/report", _SVG_BARS, "#eff6ff", "#1d4ed8", "รายงานระเบียบ")
-    if can_manage_inspection_criteria(access):
-        cells += cell("/inspection/criteria", _SVG_SLIDERS, "#fff7ed", "#c2410c", "ตัวชี้วัดระเบียบ")
-    return cells
-
-
-INSPECTION_ICON_CHOICES = ["scissors", "id-card", "shirt", "user", "backpack", "book", "clipboard-check", "shield", "star", "flag",
-                           "tag", "heart", "zap", "clock", "bell", "award", "school", "key", "eye", "check-circle"]
-
-
-def _insp_icon_name(icon: str) -> str:
-    """รับได้ทั้งชื่อไอคอน (ใหม่) และ emoji เดิมที่เคยบันทึกไว้ → ชื่อไอคอนในชุด SVG ของระบบ"""
-    if icon in KX_ICONS:
-        return icon
-    return KX_EMOJI.get((icon or "").replace("\ufe0f", ""), ("check-circle", None))[0]
-
-
-def _insp_icon(icon: str, size: int = 18) -> str:
-    return ic(_insp_icon_name(icon), size)
-
-
-def _insp_back_url(access: dict) -> str:
-    if access.get("role") == "admin":
-        return "/admin/dashboard"
-    return f"/app/dashboard?user={urllib.parse.quote(access.get('username') or '')}"
-
-
-def _insp_today() -> str:
-    return datetime.now().strftime("%Y-%m-%d")
-
-
-def _insp_valid_date(s: Optional[str]) -> str:
-    try:
-        return datetime.strptime((s or "").strip(), "%Y-%m-%d").strftime("%Y-%m-%d")
-    except ValueError:
-        return _insp_today()
-
-
-def _insp_thai_date(s: str) -> str:
-    try:
-        d = datetime.strptime(s, "%Y-%m-%d")
-        return f"{d.day:02d}/{d.month:02d}/{d.year + 543}"
-    except ValueError:
-        return s
-
-
-def _insp_level_key(lv: str):
-    digits = ''.join(ch for ch in lv if ch.isdigit())
-    return (0, int(digits), lv) if digits else (1, 0, lv)
-
-
-def get_inspection_criteria(active_only: bool = True) -> list:
-    conn = sqlite3.connect('attendance_pro.db')
-    cur = conn.cursor()
-    q = "SELECT id, name, icon, is_active, sort_order FROM inspection_criteria"
-    if active_only:
-        q += " WHERE is_active = 1"
-    q += " ORDER BY sort_order, id"
-    cur.execute(q)
-    rows = [{"id": r[0], "name": r[1], "icon": r[2] or "✅", "is_active": r[3], "sort_order": r[4]} for r in cur.fetchall()]
-    conn.close()
-    return rows
-
-
-def _insp_visible_students(access: dict) -> list:
-    return [s for s in get_sorted_master_students() if in_inspection_scope(access, s['class'])]
-
-
-def _insp_gate(user_session: Optional[str], checker, json_mode: bool = False):
-    """คืน (access, error_response|None)"""
-    access = get_access(user_session)
-    ok = access["authenticated"] and access["role"] != "student" and checker(access)
-    if not ok:
-        if json_mode:
-            return access, JSONResponse({"ok": False, "error": "ไม่มีสิทธิ์ใช้งานฟังก์ชันนี้"}, status_code=403)
-        return access, RedirectResponse(url="/login", status_code=303)
-    if access["role"] == "level_head" and not access["level_scope"]:
-        msg = "บัญชีของคุณยังไม่ถูกกำหนดระดับชั้นที่รับผิดชอบ กรุณาติดต่อผู้ดูแลระบบ"
-        if json_mode:
-            return access, JSONResponse({"ok": False, "error": msg}, status_code=403)
-        return access, alert_redirect(msg, type="error", url=_insp_back_url(access))
-    return access, None
-
-
-# ──────────────── หน้าตรวจระเบียบ ────────────────
-INSPECTION_JS = """
-<script>
-(function () {
-    var ROOM = __ROOM__, DATE = __DATE__;
-    var dirty = {};
-    var list = document.getElementById('stuList');
-    var filterMode = 'all', q = '';
-    var toastEl = document.getElementById('dkToast');
-
-    function toast(t) { toastEl.textContent = t; toastEl.classList.add('show'); setTimeout(function () { toastEl.classList.remove('show'); }, 2200); }
-    function keyOf(uid, cid) { return JSON.stringify([uid, cid]); }
-
-    function setVal(seg, v) {
-        seg.setAttribute('data-v', v);
-        var bs = seg.querySelectorAll('button');
-        for (var i = 0; i < bs.length; i++) bs[i].classList.toggle('on', bs[i].getAttribute('data-v') === v);
-    }
-    function markDirty(row, seg) {
-        var uid = row.getAttribute('data-uid'), cid = seg.getAttribute('data-cid');
-        var v = seg.getAttribute('data-v') || '', orig = seg.getAttribute('data-orig') || '';
-        var k = keyOf(uid, cid);
-        if (v === orig) delete dirty[k]; else dirty[k] = [uid, parseInt(cid, 10), v];
-    }
-    function refresh() {
-        var rows = list.querySelectorAll('.dk-stu');
-        var done = 0, fail = 0, shown = 0;
-        for (var i = 0; i < rows.length; i++) {
-            var segs = rows[i].querySelectorAll('.dk-seg'), marked = 0, f = 0;
-            for (var j = 0; j < segs.length; j++) {
-                var v = segs[j].getAttribute('data-v') || '';
-                if (v) marked++;
-                if (v === 'fail') f++;
-            }
-            var complete = marked === segs.length;
-            rows[i].classList.toggle('has-fail', f > 0);
-            rows[i].classList.toggle('is-done', complete && f === 0);
-            if (complete) done++;
-            if (f > 0) fail++;
-            var name = (rows[i].getAttribute('data-name') || '').toLowerCase();
-            var show = (!q || name.indexOf(q) !== -1 || (rows[i].getAttribute('data-no') || '') === q);
-            if (filterMode === 'todo') show = show && !complete;
-            if (filterMode === 'fail') show = show && f > 0;
-            rows[i].style.display = show ? '' : 'none';
-            if (show) shown++;
-        }
-        document.getElementById('stDone').textContent = done;
-        document.getElementById('stTodo').textContent = rows.length - done;
-        document.getElementById('stFail').textContent = fail;
-        document.getElementById('prog').style.width = (rows.length ? Math.round(done * 100 / rows.length) : 0) + '%';
-        document.getElementById('emptyHint').style.display = shown ? 'none' : 'block';
-        var n = Object.keys(dirty).length, msg = document.getElementById('saveMsg');
-        msg.textContent = n ? ('มีการเปลี่ยนแปลงที่ยังไม่บันทึก ' + n + ' รายการ') : 'ผลตรวจทั้งหมดถูกบันทึกแล้ว';
-        msg.classList.toggle('dirty', n > 0);
-        document.getElementById('saveBtn').disabled = n === 0;
-        document.getElementById('saveBtn').style.opacity = n ? '1' : '.5';
-    }
-
-    list.addEventListener('click', function (e) {
-        var btn = e.target.closest('.dk-seg button');
-        if (btn) {
-            var seg = btn.parentNode, row = seg.closest('.dk-stu');
-            var nv = btn.getAttribute('data-v');
-            if (seg.getAttribute('data-v') === nv) nv = '';
-            setVal(seg, nv); markDirty(row, seg); refresh(); return;
-        }
-        var ap = e.target.closest('[data-allpass]');
-        if (ap) {
-            var row2 = ap.closest('.dk-stu'), segs = row2.querySelectorAll('.dk-seg');
-            for (var i = 0; i < segs.length; i++) if (!segs[i].getAttribute('data-v')) { setVal(segs[i], 'pass'); markDirty(row2, segs[i]); }
-            refresh();
-        }
-    });
-
-    document.getElementById('passAll').addEventListener('click', function () {
-        var rows = list.querySelectorAll('.dk-stu');
-        for (var i = 0; i < rows.length; i++) {
-            if (rows[i].style.display === 'none') continue;
-            var segs = rows[i].querySelectorAll('.dk-seg');
-            for (var j = 0; j < segs.length; j++) if (!segs[j].getAttribute('data-v')) { setVal(segs[j], 'pass'); markDirty(rows[i], segs[j]); }
-        }
-        refresh(); toast('ติ๊ก “ผ่าน” ให้ช่องที่ยังว่างแล้ว อย่าลืมกดบันทึก');
-    });
-
-    var chips = document.querySelectorAll('.dk-chip');
-    for (var c = 0; c < chips.length; c++) chips[c].addEventListener('click', function () {
-        for (var k = 0; k < chips.length; k++) chips[k].classList.remove('on');
-        this.classList.add('on'); filterMode = this.getAttribute('data-f'); refresh();
-    });
-    document.getElementById('search').addEventListener('input', function () { q = this.value.trim().toLowerCase(); refresh(); });
-
-    function save() {
-        var changes = Object.keys(dirty).map(function (k) { return dirty[k]; });
-        if (!changes.length) return Promise.resolve(true);
-        var btn = document.getElementById('saveBtn'); btn.disabled = true;
-        if (window.KX) KX.loading(true, 'กำลังบันทึกผลตรวจ...');
-        return fetch('/api/inspection/save', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ room: ROOM, date: DATE, changes: changes }) })
-        .then(function (r) { return r.json(); })
-        .then(function (j) {
-            if (window.KX) KX.loading(false);
-            if (!j.ok) { btn.disabled = false; toast('บันทึกไม่สำเร็จ: ' + (j.error || '')); return false; }
-            var segs = list.querySelectorAll('.dk-seg');
-            for (var i = 0; i < segs.length; i++) segs[i].setAttribute('data-orig', segs[i].getAttribute('data-v') || '');
-            dirty = {}; refresh(); toast('บันทึกแล้ว ' + j.saved + ' รายการ'); return true;
-        })
-        .catch(function () { if (window.KX) KX.loading(false); btn.disabled = false; toast('เชื่อมต่อเซิร์ฟเวอร์ไม่ได้'); return false; });
-    }
-    document.getElementById('saveBtn').addEventListener('click', save);
-
-    // ออกจากหน้าตอนยังไม่บันทึก → กล่องถามของเราเอง (ไม่ใช้ dialog ของเบราว์เซอร์)
-    function arm() {
-        if (!window.KX || !KX.guard) { setTimeout(arm, 50); return; }
-        KX.guard({ dirty: function () { return Object.keys(dirty).length > 0; }, save: save,
-                   message: 'ผลตรวจที่ติ๊กไว้ยังไม่ถูกบันทึก ต้องการบันทึกก่อนออกจากหน้านี้ไหม?' });
-    }
-    arm();
-    refresh();
-})();
-</script>
-"""
-
-
-@app.get("/inspection", response_class=HTMLResponse)
-async def inspection_page(room: Optional[str] = None, date: Optional[str] = None, user_session: Optional[str] = Cookie(None)):
-    access, err = _insp_gate(user_session, can_manage_inspection)
-    if err: return err
-    date = _insp_valid_date(date)
-    back = _insp_back_url(access)
-    students = _insp_visible_students(access)
-    criteria = get_inspection_criteria(active_only=True)
-
-    actions = ""
-    if can_view_inspection_report(access):
-        actions += '<a href="/inspection/report" class="dk-btn hero">📊 รายงาน</a>'
-    if can_manage_inspection_criteria(access):
-        actions += '<a href="/inspection/criteria" class="dk-btn hero">⚙️ ตัวชี้วัด</a>'
-
-    if not criteria:
-        link = '<br><a href="/inspection/criteria" class="dk-btn" style="margin-top:12px;">ไปเพิ่มตัวชี้วัด</a>' if can_manage_inspection_criteria(access) else ""
-        body = f'<div class="dk-card">{dk_empty("🧾", "ยังไม่มีตัวชี้วัดที่เปิดใช้งาน — โปรดให้ฝ่ายกิจการ/ผู้ดูแลระบบเพิ่มตัวชี้วัดก่อน" + link)}</div>'
-        return dk_page("ตรวจระเบียบนักเรียน", "ยังไม่มีตัวชี้วัด", body, back, actions, icon="📋 ")
-
-    rooms = sorted(set(s['class'] for s in students))
-
-    # ───── ยังไม่เลือกห้อง: การ์ดเลือกห้อง ─────
-    if not room:
-        conn = sqlite3.connect('attendance_pro.db')
-        cur = conn.cursor()
-        cur.execute("""SELECT classroom, COUNT(DISTINCT student_uid), SUM(CASE WHEN result='fail' THEN 1 ELSE 0 END)
-                       FROM inspection_records WHERE inspect_date = ? GROUP BY classroom""", (date,))
-        prog = {r[0]: (r[1], r[2] or 0) for r in cur.fetchall()}
-        conn.close()
-
-        by_level = {}
-        for r in rooms:
-            by_level.setdefault(get_grade_level(r), []).append(r)
-        count_in_room = {}
-        for s in students:
-            count_in_room[s['class']] = count_in_room.get(s['class'], 0) + 1
-
-        total_students = len(students)
-        checked_total = sum(prog.get(r, (0, 0))[0] for r in rooms)
-        fail_total = sum(prog.get(r, (0, 0))[1] for r in rooms)
-        stats = (dk_stat("ห้องที่ดูแล", len(rooms), "🏫", "blue") + dk_stat("นักเรียนทั้งหมด", total_students, "🎒", "violet")
-                 + dk_stat("ตรวจแล้ว (คน)", checked_total, "✅", "green") + dk_stat("ไม่ผ่าน (รายการ)", fail_total, "⚠️", "red"))
-
-        sections = ""
-        for lv in sorted(by_level, key=_insp_level_key):
-            cards = ""
-            for r in by_level[lv]:
-                n = count_in_room.get(r, 0)
-                done, fails = prog.get(r, (0, 0))
-                pct = round(done * 100 / n) if n else 0
-                badge = f'<span class="dk-pill bad">ไม่ผ่าน {fails}</span>' if fails else (
-                    '<span class="dk-pill ok">ตรวจแล้ว</span>' if n and done >= n else '<span class="dk-pill mute">รอตรวจ</span>')
-                cards += f"""<a class="dk-room" href="/inspection?room={urllib.parse.quote(r)}&date={date}">
-                    <div class="dk-room-top"><b>{_he(r)}</b>{badge}</div>
-                    <div class="dk-track blue"><i style="width:{pct}%"></i></div>
-                    <small><span>ตรวจแล้ว {done}/{n} คน</span><span>{pct}%</span></small></a>"""
-            sections += f'<div class="dk-section">ระดับชั้น {_he(lv)}</div><div class="dk-grid c3">{cards}</div>'
-
-        date_form = f"""<div class="dk-card"><form method="get" action="/inspection" class="dk-filter" style="grid-template-columns:1fr auto;">
-            <div><label class="dk-label">📅 วันที่ตรวจ</label><input type="date" name="date" value="{date}" class="dk-input"></div>
-            <button class="dk-btn" type="submit">ดูวันนี้</button></form></div>"""
-        body = f'<div class="dk-stats">{stats}</div>{date_form}{sections or dk_empty("🏫", "ไม่พบห้องเรียนในขอบเขตของคุณ")}'
-        return dk_page("ตรวจระเบียบนักเรียน", f"เลือกห้องเพื่อเริ่มตรวจ · วันที่ {_insp_thai_date(date)} · {len(criteria)} ตัวชี้วัด",
-                       body, back, actions, icon="📋 ")
-
-    # ───── เลือกห้องแล้ว: ฟอร์มติ๊กผ่าน/ไม่ผ่าน ─────
-    if room not in rooms:
-        return alert_redirect("ไม่พบห้องเรียนนี้ หรือคุณไม่มีสิทธิ์ตรวจห้องนี้", type="error", url="/inspection")
-    stu = [s for s in students if s['class'] == room]
-    conn = sqlite3.connect('attendance_pro.db')
-    cur = conn.cursor()
-    cur.execute("SELECT student_uid, criterion_id, result FROM inspection_records WHERE inspect_date = ? AND classroom = ?", (date, room))
-    existing = {(r[0], r[1]): r[2] for r in cur.fetchall()}
-    conn.close()
-
-    rows = ""
-    for s in stu:
-        crit_html = ""
-        for c in criteria:
-            v = existing.get((s['uid'], c['id']), "")
-            p_on = " on" if v == "pass" else ""
-            f_on = " on" if v == "fail" else ""
-            crit_html += f"""<div class="dk-crit"><span style="display:flex;align-items:center;gap:8px;">{_insp_icon(c['icon'], 17)} {_he(c['name'])}</span>
-                <div class="dk-seg" data-cid="{c['id']}" data-v="{v}" data-orig="{v}">
-                    <button type="button" class="p{p_on}" data-v="pass">ผ่าน</button>
-                    <button type="button" class="f{f_on}" data-v="fail">ไม่ผ่าน</button>
-                </div></div>"""
-        initial = _he(s['name'][:1]) if s['name'] else "?"
-        rows += f"""<div class="dk-stu" data-uid="{_he(s['uid'], quote=True)}" data-name="{_he(s['name'], quote=True)}" data-no="{_he(s['no'], quote=True)}">
-            <div class="dk-stu-head"><div class="dk-avatar">{initial}</div>
-                <div class="nm"><b>{_he(s['name'])}</b><span>เลขที่ {_he(s['no'])}</span></div>
-                <button type="button" class="dk-btn light sm" data-allpass>ผ่านทั้งหมด</button></div>
-            <div class="dk-crits">{crit_html}</div></div>"""
-
-    stats = (dk_stat("นักเรียนในห้อง", len(stu), "🎒", "blue") + dk_stat("ตรวจครบแล้ว", '<span id="stDone">0</span>', "✅", "green")
-             + dk_stat("ยังไม่ครบ", '<span id="stTodo">0</span>', "⏳", "amber") + dk_stat("มีรายการไม่ผ่าน", '<span id="stFail">0</span>', "⚠️", "red"))
-    tools = f"""<div class="dk-card">
-        <div class="dk-track blue" style="margin-bottom:12px;"><i id="prog" style="width:0%"></i></div>
-        <input id="search" class="dk-input" placeholder="🔍 ค้นหาชื่อ หรือเลขที่" style="margin-bottom:10px;">
-        <div class="dk-chips"><button type="button" class="dk-chip on" data-f="all">ทั้งหมด</button>
-            <button type="button" class="dk-chip" data-f="todo">ยังไม่ครบ</button>
-            <button type="button" class="dk-chip" data-f="fail">ไม่ผ่าน</button>
-            <button type="button" class="dk-chip" id="passAll" style="border-color:#86efac;color:#15803d;">✓ ติ๊กผ่านช่องที่ว่างทั้งหมด</button></div>
-    </div>"""
-    savebar = """<div class="dk-savebar"><div class="msg" id="saveMsg">ผลตรวจทั้งหมดถูกบันทึกแล้ว</div>
-        <button type="button" class="dk-btn green" id="saveBtn" disabled>💾 บันทึกผลตรวจ</button></div><div class="dk-toast" id="dkToast"></div>"""
-    js = INSPECTION_JS.replace("__ROOM__", _json.dumps(room).replace("</", "<\\/")).replace("__DATE__", _json.dumps(date))
-    body = (f'<div class="dk-stats">{stats}</div>{tools}<div id="stuList">{rows}</div>'
-            f'<div id="emptyHint" style="display:none;">{dk_empty("🔎", "ไม่พบรายชื่อตามเงื่อนไขที่เลือก")}</div>')
-    actions = f'<a href="/inspection?date={date}" class="dk-btn hero">🏫 เปลี่ยนห้อง</a>'
-    return dk_page(f"ห้อง {_he(room)}", f"ตรวจระเบียบวันที่ {_insp_thai_date(date)} · แตะ “ผ่าน/ไม่ผ่าน” ของแต่ละตัวชี้วัด แล้วกดบันทึก",
-                   body, back, actions, savebar + js, icon="📋 ")
-
-
-@app.post("/api/inspection/save")
-async def api_inspection_save(request: Request, user_session: Optional[str] = Cookie(None)):
-    access, err = _insp_gate(user_session, can_manage_inspection, json_mode=True)
-    if err: return err
-    try:
-        data = await request.json()
-        room = str(data.get("room", "")).strip()
-        date = datetime.strptime(str(data.get("date", "")).strip(), "%Y-%m-%d").strftime("%Y-%m-%d")
-        changes = data.get("changes", [])
-        if not isinstance(changes, list) or len(changes) > 20000:
-            raise ValueError
-    except Exception:
-        return JSONResponse({"ok": False, "error": "ข้อมูลที่ส่งมาไม่ถูกต้อง"}, status_code=400)
-    if not room or not in_inspection_scope(access, room):
-        return JSONResponse({"ok": False, "error": "คุณไม่มีสิทธิ์ตรวจห้องนี้"}, status_code=403)
-    if date > _insp_today():
-        return JSONResponse({"ok": False, "error": "ไม่สามารถบันทึกผลตรวจล่วงหน้าได้"}, status_code=400)
-
-    stu_map = {s['uid']: s for s in get_sorted_master_students() if s['class'] == room}
-    crit_map = {c['id']: c for c in get_inspection_criteria(active_only=False)}
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    inspector = access.get("fullname") or access.get("username") or "-"
-    saved = cleared = 0
-    new_fails = {}
-    conn = sqlite3.connect('attendance_pro.db')
-    cur = conn.cursor()
-    try:
-        for ch in changes:
-            if not isinstance(ch, list) or len(ch) != 3:
-                continue
-            uid, cid, v = ch
-            if uid not in stu_map or cid not in crit_map or v not in ("pass", "fail", ""):
-                continue
-            s, c = stu_map[uid], crit_map[cid]
-            if v == "":
-                cur.execute("DELETE FROM inspection_records WHERE inspect_date=? AND student_uid=? AND criterion_id=?", (date, uid, cid))
-                cleared += 1
-                continue
-            if not c["is_active"]:
-                continue  # ตัวชี้วัดที่ปิดอยู่ รับเฉพาะการล้างค่า ไม่รับค่าใหม่
-            cur.execute("""INSERT INTO inspection_records
-                (inspect_date, classroom, student_uid, student_name, student_no, criterion_id, criterion_name, result, inspector, inspector_label, created_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?)
-                ON CONFLICT(inspect_date, student_uid, criterion_id) DO UPDATE SET
-                    result=excluded.result, inspector=excluded.inspector, inspector_label=excluded.inspector_label,
-                    created_at=excluded.created_at, criterion_name=excluded.criterion_name, classroom=excluded.classroom""",
-                (date, room, uid, s['name'], s['no'], cid, c['name'], v, access.get("username"), inspector, now))
-            saved += 1
-            if v == "fail":
-                new_fails.setdefault(uid, []).append(c['name'])
-        conn.commit()
-    finally:
-        conn.close()
-
-    # 🔔 แจ้งนักเรียนที่ได้รับผล “ไม่ผ่าน” (เฉพาะการตรวจของวันนี้)
-    if date == _insp_today():
-        for uid, names in list(new_fails.items())[:300]:
-            try:
-                await push_student_notify("ผลตรวจระเบียบ", "ไม่ผ่าน: " + ", ".join(names) + " — โปรดปรับปรุงให้เรียบร้อย",
-                                          tone="warning", target_uids=[uid])
-            except Exception:
-                pass
-    add_log(f"{inspector} บันทึกผลตรวจระเบียบห้อง {room} วันที่ {date} ({saved} รายการ)")
-    return JSONResponse({"ok": True, "saved": saved + cleared})
-
-
-# ──────────────── จัดการตัวชี้วัด ────────────────
-@app.get("/inspection/criteria", response_class=HTMLResponse)
-async def inspection_criteria_page(user_session: Optional[str] = Cookie(None)):
-    access, err = _insp_gate(user_session, can_manage_inspection_criteria)
-    if err: return err
-    items = get_inspection_criteria(active_only=False)
-    conn = sqlite3.connect('attendance_pro.db')
-    cur = conn.cursor()
-    cur.execute("SELECT criterion_id, COUNT(*) FROM inspection_records GROUP BY criterion_id")
-    usage = dict(cur.fetchall())
-    conn.close()
-
-    rows = ""
-    for i, c in enumerate(items):
-        state = '<span class="dk-pill ok">เปิดใช้งาน</span>' if c['is_active'] else '<span class="dk-pill mute">ปิดอยู่</span>'
-        toggle_label = "ปิด" if c['is_active'] else "เปิด"
-        up = f"""<form method="post" action="/api/inspection/criteria/move" style="margin:0;"><input type="hidden" name="cid" value="{c['id']}">
-                 <input type="hidden" name="direction" value="up"><button class="dk-btn light sm" {'disabled style="opacity:.35"' if i == 0 else ''}>↑</button></form>"""
-        down = f"""<form method="post" action="/api/inspection/criteria/move" style="margin:0;"><input type="hidden" name="cid" value="{c['id']}">
-                 <input type="hidden" name="direction" value="down"><button class="dk-btn light sm" {'disabled style="opacity:.35"' if i == len(items) - 1 else ''}>↓</button></form>"""
-        rows += f"""<div class="dk-row">
-            <div class="dk-ico-box">{_insp_icon(c['icon'], 22)}</div>
-            <div class="grow"><b>{_he(c['name'])}</b><span>{state} · ตรวจไปแล้ว {usage.get(c['id'], 0)} ครั้ง</span></div>
-            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">
-                {up}{down}
-                <form method="post" action="/api/inspection/criteria/toggle" style="margin:0;"><input type="hidden" name="cid" value="{c['id']}">
-                    <button class="dk-btn light sm">{toggle_label}</button></form>
-                <form method="post" action="/api/inspection/criteria/delete" style="margin:0;"
-                      data-confirm="ลบตัวชี้วัด “{_he(c['name'], quote=True)}” ?&#10;ประวัติผลตรวจเดิมยังคงอยู่ในรายงาน">
-                    <input type="hidden" name="cid" value="{c['id']}"><button class="dk-btn danger sm">ลบ</button></form>
-            </div></div>"""
-
-    active_n = sum(1 for c in items if c['is_active'])
-    stats = dk_stat("ตัวชี้วัดทั้งหมด", len(items), "🧾", "blue") + dk_stat("เปิดใช้งาน", active_n, "✅", "green") + \
-        dk_stat("ปิดอยู่", len(items) - active_n, "⏸️", "slate") + dk_stat("ผลตรวจที่บันทึกแล้ว", sum(usage.values()), "📋", "violet")
-    picks = "".join(
-        f'<label><input type="radio" name="icon" value="{n}" {"checked" if i == 0 else ""}><span>{ic(n, 20)}</span></label>'
-        for i, n in enumerate(INSPECTION_ICON_CHOICES))
-    add_form = f"""<div class="dk-card"><div class="dk-card-title">➕ เพิ่มตัวชี้วัดใหม่</div>
-        <form method="post" action="/api/inspection/criteria/add" style="display:grid;gap:12px;">
-            <div><label class="dk-label">เลือกไอคอน</label><div class="dk-iconpick">{picks}</div></div>
-            <div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end;">
-                <div><label class="dk-label">ชื่อตัวชี้วัด</label><input class="dk-input" name="name" maxlength="40" required placeholder="เช่น เล็บ, รองเท้า, ถุงเท้า"></div>
-                <button class="dk-btn" type="submit">เพิ่ม</button></div></form></div>"""
-    body = (f'<div class="dk-stats">{stats}</div>{add_form}'
-            f'<div class="dk-note">💡 ตัวชี้วัดที่ “ปิด” จะไม่แสดงในหน้าตรวจ แต่ประวัติเดิมยังอยู่ · ตัวชี้วัดที่ “ลบ” จะหายจากหน้าตรวจ ส่วนประวัติที่เคยบันทึกไว้ยังคงแสดงในรายงาน</div>'
-            f'<div class="dk-card-title" style="margin:6px 4px 10px;">รายการตัวชี้วัด</div>{rows or dk_empty("🧾", "ยังไม่มีตัวชี้วัด")}')
-    return dk_page("ตัวชี้วัดการตรวจระเบียบ", "เพิ่ม ลบ เปิด/ปิด และจัดลำดับหัวข้อที่ครูใช้ติ๊กผ่าน/ไม่ผ่าน", body,
-                   "/inspection" if can_manage_inspection(access) else _insp_back_url(access), icon="⚙️ ")
-
-
-def _insp_criteria_mutation(user_session, fn):
-    access, err = _insp_gate(user_session, can_manage_inspection_criteria)
-    if err: return err
-    conn = sqlite3.connect('attendance_pro.db')
-    try:
-        msg, kind = fn(conn.cursor(), access)
-        conn.commit()
-    finally:
-        conn.close()
-    return alert_redirect(msg, type=kind, url="/inspection/criteria")
-
-
-@app.post("/api/inspection/criteria/add")
-async def api_inspection_criteria_add(name: str = Form(""), icon: str = Form(""), user_session: Optional[str] = Cookie(None)):
-    name = " ".join(name.split())[:40]
-    icon = icon.strip() if icon.strip() in KX_ICONS else "check-circle"
-    def run(cur, access):
-        if not name:
-            return "กรุณากรอกชื่อตัวชี้วัด", "error"
-        cur.execute("SELECT 1 FROM inspection_criteria WHERE name = ?", (name,))
-        if cur.fetchone():
-            return f"มีตัวชี้วัด “{name}” อยู่แล้ว", "warning"
-        cur.execute("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM inspection_criteria")
-        nxt = cur.fetchone()[0]
-        cur.execute("INSERT INTO inspection_criteria (name, icon, is_active, sort_order, created_by, created_at) VALUES (?,?,1,?,?,?)",
-                    (name, icon, nxt, access.get("fullname") or access.get("username"), datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-        return f"เพิ่มตัวชี้วัด “{name}” เรียบร้อยแล้ว", "success"
-    return _insp_criteria_mutation(user_session, run)
-
-
-@app.post("/api/inspection/criteria/toggle")
-async def api_inspection_criteria_toggle(cid: int = Form(...), user_session: Optional[str] = Cookie(None)):
-    def run(cur, access):
-        cur.execute("SELECT name, is_active FROM inspection_criteria WHERE id = ?", (cid,))
-        row = cur.fetchone()
-        if not row:
-            return "ไม่พบตัวชี้วัดนี้", "error"
-        new_state = 0 if row[1] else 1
-        cur.execute("UPDATE inspection_criteria SET is_active = ? WHERE id = ?", (new_state, cid))
-        return f"{'เปิด' if new_state else 'ปิด'}ใช้งานตัวชี้วัด “{row[0]}” แล้ว", "success"
-    return _insp_criteria_mutation(user_session, run)
-
-
-@app.post("/api/inspection/criteria/delete")
-async def api_inspection_criteria_delete(cid: int = Form(...), user_session: Optional[str] = Cookie(None)):
-    def run(cur, access):
-        cur.execute("SELECT name FROM inspection_criteria WHERE id = ?", (cid,))
-        row = cur.fetchone()
-        if not row:
-            return "ไม่พบตัวชี้วัดนี้ (อาจถูกลบไปแล้ว)", "error"
-        cur.execute("DELETE FROM inspection_criteria WHERE id = ?", (cid,))
-        return f"ลบตัวชี้วัด “{row[0]}” เรียบร้อยแล้ว", "success"
-    return _insp_criteria_mutation(user_session, run)
-
-
-@app.post("/api/inspection/criteria/move")
-async def api_inspection_criteria_move(cid: int = Form(...), direction: str = Form(...), user_session: Optional[str] = Cookie(None)):
-    def run(cur, access):
-        cur.execute("SELECT id FROM inspection_criteria ORDER BY sort_order, id")
-        ids = [r[0] for r in cur.fetchall()]
-        if cid not in ids or direction not in ("up", "down"):
-            return "ไม่พบตัวชี้วัดนี้", "error"
-        i = ids.index(cid)
-        j = i - 1 if direction == "up" else i + 1
-        if 0 <= j < len(ids):
-            ids[i], ids[j] = ids[j], ids[i]
-        for pos, _id in enumerate(ids, start=1):
-            cur.execute("UPDATE inspection_criteria SET sort_order = ? WHERE id = ?", (pos, _id))
-        return "จัดลำดับตัวชี้วัดแล้ว", "success"
-    return _insp_criteria_mutation(user_session, run)
-
-
-# ──────────────── รายงาน ────────────────
-def _insp_load_records(access: dict, d_from: str, d_to: str, level: str = "", room: str = "") -> list:
-    conn = sqlite3.connect('attendance_pro.db')
-    cur = conn.cursor()
-    cur.execute("""SELECT inspect_date, classroom, student_uid, student_name, student_no, criterion_id, criterion_name, result, inspector_label
-                   FROM inspection_records WHERE inspect_date BETWEEN ? AND ? ORDER BY inspect_date DESC, classroom""", (d_from, d_to))
-    out = []
-    for r in cur.fetchall():
-        cls = r[1] or ""
-        if not in_inspection_scope(access, cls):
-            continue
-        if level and get_grade_level(cls) != level:
-            continue
-        if room and cls != room:
-            continue
-        out.append({"date": r[0], "room": cls, "uid": r[2], "name": r[3] or "", "no": r[4] or "", "cid": r[5],
-                    "crit": r[6] or "", "result": r[7], "by": r[8] or ""})
-    conn.close()
-    return out
-
-
-def _insp_report_range(d_from: Optional[str], d_to: Optional[str]):
-    today = datetime.now()
-    f = _insp_valid_date(d_from) if d_from else (today - timedelta(days=6)).strftime("%Y-%m-%d")
-    t = _insp_valid_date(d_to) if d_to else today.strftime("%Y-%m-%d")
-    if f > t:
-        f, t = t, f
-    return f, t
-
-
-@app.get("/inspection/report", response_class=HTMLResponse)
-async def inspection_report_page(date_from: Optional[str] = None, date_to: Optional[str] = None,
-                                 level: Optional[str] = "", room: Optional[str] = "", user_session: Optional[str] = Cookie(None)):
-    access, err = _insp_gate(user_session, can_view_inspection_report)
-    if err: return err
-    d_from, d_to = _insp_report_range(date_from, date_to)
-    level, room = (level or "").strip(), (room or "").strip()
-    if access["role"] == "level_head":
-        level = access["level_scope"]
-    recs = _insp_load_records(access, d_from, d_to, level, room)
-
-    visible = _insp_visible_students(access)
-    levels = sorted(set(get_grade_level(s['class']) for s in visible), key=_insp_level_key)
-    rooms = sorted(set(s['class'] for s in visible if not level or get_grade_level(s['class']) == level))
-    lv_opts = '<option value="">ทุกระดับชั้น</option>' + "".join(
-        f'<option value="{_he(l, quote=True)}" {"selected" if l == level else ""}>{_he(l)}</option>' for l in levels)
-    rm_opts = '<option value="">ทุกห้อง</option>' + "".join(
-        f'<option value="{_he(r, quote=True)}" {"selected" if r == room else ""}>{_he(r)}</option>' for r in rooms)
-    lv_field = "" if access["role"] == "level_head" else f'<div><label class="dk-label">ระดับชั้น</label><select name="level" class="dk-select">{lv_opts}</select></div>'
-    if access["role"] == "level_head":
-        lv_field = f'<div><label class="dk-label">ระดับชั้น</label><input class="dk-input" value="{_he(level)}" disabled></div>'
-    filter_form = f"""<div class="dk-card"><form method="get" action="/inspection/report" class="dk-filter">
-        <div><label class="dk-label">ตั้งแต่วันที่</label><input type="date" name="date_from" value="{d_from}" class="dk-input"></div>
-        <div><label class="dk-label">ถึงวันที่</label><input type="date" name="date_to" value="{d_to}" class="dk-input"></div>
-        {lv_field}
-        <div><label class="dk-label">ห้อง</label><select name="room" class="dk-select">{rm_opts}</select></div>
-        <button class="dk-btn" type="submit">แสดงรายงาน</button></form></div>"""
-
-    total = len(recs)
-    passed = sum(1 for r in recs if r['result'] == 'pass')
-    failed = total - passed
-    rate = round(passed * 100 / total) if total else 0
-    students_checked = len(set(r['uid'] for r in recs))
-    stats = (dk_stat("ผลตรวจทั้งหมด", total, "📋", "blue") + dk_stat("อัตราผ่าน", f"{rate}%", "🏅", "green")
-             + dk_stat("ไม่ผ่าน (รายการ)", failed, "⚠️", "red") + dk_stat("นักเรียนที่ถูกตรวจ", students_checked, "🎒", "violet"))
-
-    # อัตราผ่านรายตัวชี้วัด
-    per_c = {}
-    for r in recs:
-        d = per_c.setdefault(r['cid'], {"name": r['crit'], "p": 0, "f": 0})
-        d["p" if r['result'] == 'pass' else "f"] += 1
-    crit_html = ""
-    for d in sorted(per_c.values(), key=lambda x: x["name"]):
-        n = d["p"] + d["f"]
-        pct = round(d["p"] * 100 / n) if n else 0
-        crit_html += f'<div class="dk-rate-row"><span>{_he(d["name"])}</span><div class="dk-track"><i style="width:{pct}%"></i></div><em>{pct}%</em></div>'
-    crit_card = f'<div class="dk-card"><div class="dk-card-title">อัตราผ่านรายตัวชี้วัด<small>ไม่ผ่าน {failed} / {total}</small></div>{crit_html or dk_empty("📭", "ไม่มีข้อมูลในช่วงนี้")}</div>'
-
-    # แนวโน้มรายวัน (อัตราผ่าน)
-    per_day = {}
-    for r in recs:
-        d = per_day.setdefault(r['date'], [0, 0])
-        d[0] += 1 if r['result'] == 'pass' else 0
-        d[1] += 1
-    days = sorted(per_day)[-31:]
-    trend_card = ""
-    if days:
-        bars = "".join(f'<div title="{_insp_thai_date(d)} · ผ่าน {round(per_day[d][0] * 100 / per_day[d][1])}%" style="height:{max(6, round(per_day[d][0] * 100 / per_day[d][1]))}%"></div>' for d in days)
-        trend_card = f'<div class="dk-card"><div class="dk-card-title">แนวโน้มอัตราผ่านรายวัน</div><div class="dk-trend">{bars}</div><div class="dk-trend-lbl"><span>{_insp_thai_date(days[0])}</span><span>{_insp_thai_date(days[-1])}</span></div></div>'
-
-    # สรุปรายห้อง
-    per_room = {}
-    for r in recs:
-        d = per_room.setdefault(r['room'], {"n": 0, "f": 0, "s": set()})
-        d["n"] += 1
-        d["f"] += 1 if r['result'] == 'fail' else 0
-        d["s"].add(r['uid'])
-    room_rows = "".join(
-        f'<tr><td><b>{_he(k)}</b></td><td>{len(v["s"])}</td><td>{v["n"]}</td><td>{v["f"]}</td>'
-        f'<td><span class="dk-pill {"ok" if v["n"] and (v["n"] - v["f"]) * 100 / v["n"] >= 90 else "warn"}">{round((v["n"] - v["f"]) * 100 / v["n"]) if v["n"] else 0}%</span></td></tr>'
-        for k, v in sorted(per_room.items()))
-    room_card = ""
-    if room_rows:
-        room_card = f"""<div class="dk-card"><div class="dk-card-title">สรุปรายห้อง</div><div class="dk-tablewrap"><table class="dk-table">
-            <thead><tr><th>ห้อง</th><th>ตรวจ (คน)</th><th>ผลตรวจ</th><th>ไม่ผ่าน</th><th>อัตราผ่าน</th></tr></thead><tbody>{room_rows}</tbody></table></div></div>"""
-
-    # นักเรียนที่ไม่ผ่านบ่อย
-    per_stu = {}
-    for r in recs:
-        if r['result'] != 'fail':
-            continue
-        d = per_stu.setdefault(r['uid'], {"name": r['name'], "room": r['room'], "no": r['no'], "crit": {}, "days": set()})
-        d["crit"][r['crit']] = d["crit"].get(r['crit'], 0) + 1
-        d["days"].add(r['date'])
-    fail_rows = ""
-    for d in sorted(per_stu.values(), key=lambda x: (-len(x["days"]), x["room"], x["name"]))[:100]:
-        chips = " ".join(f'<span class="dk-pill bad">{_he(k)} ×{v}</span>' for k, v in sorted(d["crit"].items()))
-        fail_rows += f'<tr><td><b>{_he(d["name"])}</b><br><span style="font-size:11.5px;color:#64748b;">{_he(d["room"])} · เลขที่ {_he(d["no"])}</span></td><td>{len(d["days"])} วัน</td><td>{chips}</td></tr>'
-    fail_card = (f'<div class="dk-card"><div class="dk-card-title">นักเรียนที่ไม่ผ่านระเบียบ<small>{len(per_stu)} คน</small></div><div class="dk-tablewrap"><table class="dk-table">'
-                 f'<thead><tr><th>นักเรียน</th><th>วันที่ไม่ผ่าน</th><th>หัวข้อที่ไม่ผ่าน</th></tr></thead><tbody>{fail_rows}</tbody></table></div></div>'
-                 if fail_rows else f'<div class="dk-card">{dk_empty("🎉", "ไม่มีนักเรียนที่ไม่ผ่านระเบียบในช่วงนี้")}</div>')
-
-    qs = urllib.parse.urlencode({"date_from": d_from, "date_to": d_to, "level": level, "room": room})
-    actions = f'<a href="/inspection/report.csv?{qs}" class="dk-btn hero">⬇️ CSV</a>'
-    if can_manage_inspection(access):
-        actions += '<a href="/inspection" class="dk-btn hero">📋 ตรวจระเบียบ</a>'
-    body = f'<div class="dk-stats">{stats}</div>{filter_form}<div class="dk-grid c2">{crit_card}{trend_card}</div>{room_card}{fail_card}'
-    return dk_page("รายงานการตรวจระเบียบ", f"{_insp_thai_date(d_from)} – {_insp_thai_date(d_to)}", body, _insp_back_url(access), actions, icon="📊 ")
-
-
-def _csv_safe(v) -> str:
-    s = str(v if v is not None else "")
-    return "'" + s if s[:1] in ("=", "+", "-", "@") else s
-
-
-@app.get("/inspection/report.csv")
-async def inspection_report_csv(date_from: Optional[str] = None, date_to: Optional[str] = None,
-                                level: Optional[str] = "", room: Optional[str] = "", user_session: Optional[str] = Cookie(None)):
-    access, err = _insp_gate(user_session, can_view_inspection_report)
-    if err: return err
-    d_from, d_to = _insp_report_range(date_from, date_to)
-    level = access["level_scope"] if access["role"] == "level_head" else (level or "").strip()
-    recs = _insp_load_records(access, d_from, d_to, level, (room or "").strip())
-    buf = _io.StringIO()
-    w = _csv.writer(buf)
-    w.writerow(["วันที่", "ห้อง", "เลขที่", "ชื่อ-สกุล", "ตัวชี้วัด", "ผล", "ผู้ตรวจ"])
-    for r in recs:
-        w.writerow([_csv_safe(r['date']), _csv_safe(r['room']), _csv_safe(r['no']), _csv_safe(r['name']), _csv_safe(r['crit']),
-                    "ผ่าน" if r['result'] == 'pass' else "ไม่ผ่าน", _csv_safe(r['by'])])
-    return Response(content=("﻿" + buf.getvalue()).encode("utf-8"), media_type="text/csv; charset=utf-8",
-                    headers={"Content-Disposition": f'attachment; filename="inspection_{d_from}_{d_to}.csv"'})
-
-
-# ──────────────── มุมมองนักเรียน (อ่านอย่างเดียว) ────────────────
-@app.get("/student/inspection", response_class=HTMLResponse)
-async def student_inspection_page(user_session: Optional[str] = Cookie(None)):
-    if not user_session or not user_session.startswith("student_"):
-        return RedirectResponse(url="/login", status_code=303)
-    uid = urllib.parse.unquote(user_session.replace("student_", "", 1))
-    me = next((s for s in get_sorted_master_students() if s['uid'] == uid), None)
-    if not me:
-        resp = RedirectResponse(url="/login", status_code=303)
-        resp.delete_cookie(key="user_session")
-        return resp
-    since = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
-    conn = sqlite3.connect('attendance_pro.db')
-    cur = conn.cursor()
-    cur.execute("""SELECT inspect_date, criterion_name, result, inspector_label FROM inspection_records
-                   WHERE student_uid = ? AND inspect_date >= ? ORDER BY inspect_date DESC, criterion_id""", (uid, since))
-    recs = cur.fetchall()
-    conn.close()
-    total = len(recs)
-    fails = sum(1 for r in recs if r[2] == 'fail')
-    rate = round((total - fails) * 100 / total) if total else 0
-    stats = (dk_stat("ตรวจแล้ว (30 วัน)", total, "📋", "blue") + dk_stat("อัตราผ่าน", f"{rate}%" if total else "-", "🏅", "green")
-             + dk_stat("ไม่ผ่าน", fails, "⚠️", "red") + dk_stat("ห้อง", _he(me['class']), "🏫", "violet"))
-    by_day = {}
-    for d, crit, res, by in recs:
-        by_day.setdefault(d, []).append((crit, res, by))
-    days_html = ""
-    for d, items in by_day.items():
-        pills = " ".join(f'<span class="dk-pill {"ok" if res == "pass" else "bad"}">{"✓" if res == "pass" else "✗"} {_he(c or "-")}</span>' for c, res, _ in items)
-        who = _he(items[0][2] or "-")
-        days_html += f'<div class="dk-row"><div class="grow"><b>{_insp_thai_date(d)}</b><span>ผู้ตรวจ: {who}</span><div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">{pills}</div></div></div>'
-    body = (f'<div class="dk-stats">{stats}</div>'
-            + (days_html or f'<div class="dk-card">{dk_empty("📭", "ยังไม่มีผลตรวจระเบียบใน 30 วันที่ผ่านมา")}</div>'))
-    return dk_page("ผลตรวจระเบียบของฉัน", f"{_he(me['name'])} · ย้อนหลัง 30 วัน", body, "/student/dashboard",
-                   extra=realtime_notify_script(uid), icon="📋 ")
-
-
-
-# ==========================================
-# 📚 หัวหน้าวิชา — จัดการทุกวิชาที่รับผิดชอบ / มอบวิชาให้ครูย่อย / (แอดมิน) กำหนดวิชาให้หัวหน้า
-# ==========================================
-def _sh_gate(user_session: Optional[str]):
-    access = get_access(user_session)
-    if not access["authenticated"] or access["role"] in ("student", "admin") or not can_manage_subject_scope(access):
-        return access, RedirectResponse(url="/login", status_code=303)
-    return access, None
-
-
-@app.get("/subject-head", response_class=HTMLResponse)
-async def subject_head_page(user_session: Optional[str] = Cookie(None)):
-    access, err = _sh_gate(user_session)
-    if err: return err
-    user = access["username"]; uq = urllib.parse.quote(user)
-    scope = head_scope_group_ids(user)
-    conn = sqlite3.connect('attendance_pro.db'); cur = conn.cursor()
-    cur.execute("SELECT username, fullname, role FROM teachers ORDER BY fullname")
-    teachers = cur.fetchall()
-    name_map = {t[0]: t[1] for t in teachers}
-    groups = []
-    if scope:
-        marks = ",".join("?" * len(scope))
-        cur.execute(f"SELECT group_id, group_name, teacher_username, branch FROM course_groups WHERE group_id IN ({marks}) ORDER BY group_name", tuple(scope))
-        groups = cur.fetchall()
-    counts = {}
-    for g in groups:
-        cur.execute("SELECT COUNT(*) FROM group_assignments WHERE group_id=?", (g[0],))
-        counts[g[0]] = cur.fetchone()[0]
-    conn.close()
-
-    teacher_opts = lambda sel: "".join(
-        f'<option value="{_he(t[0], quote=True)}" {"selected" if t[0] == sel else ""}>{_he(t[1] or t[0])}{" (คุณ)" if t[0] == user else ""}</option>' for t in teachers)
-    per_teacher = {}
-    for g in groups:
-        per_teacher[g[2]] = per_teacher.get(g[2], 0) + 1
-
-    cards = ""
-    for gid, gname, owner, branch in groups:
-        cards += f"""<div class="dk-subj">
-            <div class="dk-subj-top"><div class="dk-ico-box" style="background:#ede9fe;color:#6d28d9;">{ic('layers', 22)}</div>
-                <div class="grow"><b>{_he(gname)}</b><span class="sub">{_he(branch or '-')} · {counts.get(gid, 0)} คน</span></div></div>
-            <div class="dk-subj-meta"><span class="dk-pill ok">{ic('user', 13)} ครูผู้สอน: {_he(name_map.get(owner, owner or '-'))}</span></div>
-            <div class="dk-subj-act" style="margin-bottom:10px;"><a href="/app/rollcall/{gid}?user={uq}" class="dk-btn sm">{ic('clipboard-check', 15)} เช็กชื่อ</a>
-                <a href="/app/classroom/{gid}?user={uq}" class="dk-btn light sm">{ic('school', 15)} จัดการวิชา</a></div>
-            <form method="post" action="/api/subject-head/assign" style="display:grid;grid-template-columns:1fr auto;gap:8px;align-items:end;">
-                <input type="hidden" name="group_id" value="{gid}">
-                <div><label class="dk-label">มอบวิชานี้ให้ครู</label><select class="dk-select" name="teacher_username" data-title="เลือกครูผู้สอน">{teacher_opts(owner)}</select></div>
-                <button class="dk-btn green sm" style="padding:11px 14px;">{ic('send', 15)} มอบ</button></form></div>"""
-    if not cards:
-        cards = f'<div class="dk-card" style="grid-column:1/-1;">{dk_empty("📚", "ยังไม่มีวิชาในความรับผิดชอบ — ให้แอดมินกำหนดวิชาให้ หรือเพิ่มวิชาใหม่ด้านล่าง")}</div>'
-
-    team = "".join(
-        f'<div class="dk-row" style="margin:0;"><div class="dk-avatar" style="background:linear-gradient(135deg,#0f766e,#0d9488);">{_he((t[1] or t[0])[:1])}</div>'
-        f'<div class="grow"><b>{_he(t[1] or t[0])}</b><span>@{_he(t[0])}</span></div><span class="dk-pill {"ok" if per_teacher.get(t[0]) else "mute"}">{per_teacher.get(t[0], 0)} วิชา</span></div>'
-        for t in teachers if (t[2] or "teacher") in ("teacher", "subject_head"))
-    create = f"""<div class="dk-card"><div class="dk-card-title">➕ เพิ่มวิชาใหม่ในความรับผิดชอบ</div>
-        <form method="post" action="/api/subject-head/create" class="dk-grid c2" style="align-items:end;">
-            <div><label class="dk-label">ชื่อวิชา</label><input class="dk-input" type="text" name="group_name" required maxlength="80" placeholder="เช่น นาฏศิลป์ไทย 1"></div>
-            <div><label class="dk-label">สาขา</label><input class="dk-input" type="text" name="branch" required maxlength="60" placeholder="เช่น นาฏศิลป์"></div>
-            <div style="grid-column:1/-1;"><label class="dk-label">มอบให้ครู</label><select class="dk-select" name="teacher_username" data-title="เลือกครูผู้สอน">{teacher_opts(user)}</select></div>
-            <button class="dk-btn block" style="grid-column:1/-1;">{ic('plus', 16)} สร้างวิชา</button></form></div>"""
-    stats = (dk_stat("วิชาที่รับผิดชอบ", len(groups), "📚", "violet") + dk_stat("นักเรียนรวม", sum(counts.values()), "🎒", "blue")
-             + dk_stat("ครูย่อยที่ได้รับวิชา", len([k for k in per_teacher if k != user]), "👥", "green") + dk_stat("วิชาที่ถือเอง", per_teacher.get(user, 0), "👤", "amber"))
-    body = (f'<div class="dk-stats">{stats}</div><div class="dk-section">วิชาที่รับผิดชอบ</div><div class="dk-grid c2">{cards}</div>'
-            f'<div class="dk-section">เพิ่มวิชา</div>{create}<div class="dk-section">ครูย่อย / ครูผู้สอน</div><div class="dk-grid c2">{team or dk_empty("👥", "ยังไม่มีครู")}</div>')
-    return dk_page("จัดการวิชาที่รับผิดชอบ", "เช็กชื่อ จัดการ และมอบวิชาให้ครูย่อย", body, staff_home_url(access), icon="📚 ", theme="dk-teal")
-
-
-@app.post("/api/subject-head/assign")
-async def api_subject_head_assign(group_id: int = Form(...), teacher_username: str = Form(...), user_session: Optional[str] = Cookie(None)):
-    access, err = _sh_gate(user_session)
-    if err: return err
-    if group_id not in head_scope_group_ids(access["username"]):
-        return alert_redirect("วิชานี้ไม่อยู่ในความรับผิดชอบของคุณ", type="error", url="/subject-head")
-    conn = sqlite3.connect('attendance_pro.db'); cur = conn.cursor()
-    cur.execute("SELECT fullname FROM teachers WHERE username=?", (teacher_username,))
-    t = cur.fetchone()
-    if not t:
-        conn.close(); return alert_redirect("ไม่พบครูที่เลือก", type="error", url="/subject-head")
-    cur.execute("UPDATE course_groups SET teacher_username=? WHERE group_id=?", (teacher_username, group_id))
-    conn.commit(); conn.close()
-    add_log(f"{access['fullname']} (หัวหน้าวิชา) มอบวิชา #{group_id} ให้ {t[0] or teacher_username}")
-    return alert_redirect(f"มอบวิชาให้ {t[0] or teacher_username} เรียบร้อยแล้ว", type="success", url="/subject-head")
-
-
-@app.post("/api/subject-head/create")
-async def api_subject_head_create(group_name: str = Form(...), branch: str = Form(...), teacher_username: str = Form(...), user_session: Optional[str] = Cookie(None)):
-    access, err = _sh_gate(user_session)
-    if err: return err
-    group_name, branch = " ".join(group_name.split())[:80], " ".join(branch.split())[:60]
-    conn = sqlite3.connect('attendance_pro.db'); cur = conn.cursor()
-    cur.execute("SELECT 1 FROM teachers WHERE username=?", (teacher_username,))
-    if not group_name or not branch or not cur.fetchone():
-        conn.close(); return alert_redirect("กรอกข้อมูลไม่ครบ หรือไม่พบครูที่เลือก", type="error", url="/subject-head")
-    cur.execute("INSERT INTO course_groups (group_name, teacher_username, branch) VALUES (?,?,?)", (group_name, teacher_username, branch))
-    gid = cur.lastrowid
-    cur.execute("INSERT OR IGNORE INTO subject_head_groups (head_username, group_id) VALUES (?,?)", (access["username"], gid))
-    conn.commit(); conn.close()
-    return alert_redirect(f"สร้างวิชา “{group_name}” เรียบร้อยแล้ว", type="success", url="/subject-head")
-
-
-@app.get("/admin/subject_scope", response_class=HTMLResponse)
-async def admin_subject_scope_page(head: str, user_session: Optional[str] = Cookie(None)):
-    access = gate_perm(user_session, can_manage_teacher_accounts)
-    if not access: return RedirectResponse(url="/login", status_code=303)
-    conn = sqlite3.connect('attendance_pro.db'); cur = conn.cursor()
-    cur.execute("SELECT fullname, role FROM teachers WHERE username=?", (head,))
-    t = cur.fetchone()
-    if not t:
-        conn.close(); return alert_redirect("ไม่พบบัญชีครู", type="error", url="/admin/teachers")
-    cur.execute("SELECT group_id FROM subject_head_groups WHERE head_username=?", (head,))
-    mine = {r[0] for r in cur.fetchall()}
-    cur.execute("SELECT group_id, group_name, teacher_username, branch FROM course_groups ORDER BY group_name")
-    groups = cur.fetchall()
-    cur.execute("SELECT username, fullname FROM teachers")
-    nm = dict(cur.fetchall()); conn.close()
-    rows = "".join(
-        f'<label class="dk-row sc-row" data-q="{_he((g[1] + " " + (g[3] or "")).lower(), quote=True)}" style="cursor:pointer;margin:0;">'
-        f'<input type="checkbox" name="gid" value="{g[0]}" {"checked" if g[0] in mine else ""} style="width:20px;height:20px;accent-color:#0f766e;">'
-        f'<div class="grow"><b>{_he(g[1])}</b><span>{_he(g[3] or "-")} · ครูผู้สอน: {_he(nm.get(g[2], g[2] or "-"))}</span></div></label>' for g in groups)
-    warn = "" if t[1] == "subject_head" else '<div class="dk-note" style="background:#fef3c7;border-color:#fde68a;color:#92400e;">บัญชีนี้ยังไม่ได้ตั้งบทบาทเป็น “หัวหน้าวิชา” — วิชาที่เลือกจะมีผลเมื่อเปลี่ยนบทบาทแล้ว</div>'
-    form = f"""<form method="post" action="/api/admin/subject_scope"><input type="hidden" name="head" value="{_he(head, quote=True)}">
-        {warn}<div class="dk-card"><div class="dk-card-title">เลือกวิชาที่ {_he(t[0] or head)} รับผิดชอบ<small id="scCount">{len(mine)} วิชา</small></div>
-        <input id="scSearch" class="dk-input" placeholder="ค้นหาวิชา" style="margin-bottom:12px;">
-        <div style="display:grid;gap:8px;">{rows or dk_empty("📚", "ยังไม่มีวิชาในระบบ")}</div></div>
-        <button class="dk-btn green block" style="padding:14px;">{ic('save', 16)} บันทึกวิชาที่รับผิดชอบ</button></form>"""
-    js = """<script>(function(){var q=document.getElementById('scSearch'),c=document.getElementById('scCount');
-        function cnt(){c.textContent=document.querySelectorAll('input[name=gid]:checked').length+' วิชา';}
-        document.addEventListener('change',function(e){if(e.target.name==='gid')cnt();});
-        q.addEventListener('input',function(){var v=q.value.trim().toLowerCase();document.querySelectorAll('.sc-row').forEach(function(r){r.style.display=(!v||r.getAttribute('data-q').indexOf(v)>=0)?'':'none';});});})();</script>"""
-    return dk_page("กำหนดวิชาที่รับผิดชอบ", f"หัวหน้าวิชา: {_he(t[0] or head)}", form, "/admin/teachers", extra=js, icon="📚 ", theme="dk-teal")
-
-
-@app.post("/api/admin/subject_scope")
-async def api_admin_subject_scope(request: Request, user_session: Optional[str] = Cookie(None)):
-    access = gate_perm(user_session, can_manage_teacher_accounts)
-    if not access: return HTMLResponse("Unauthorized", status_code=401)
-    form = await request.form()
-    head = str(form.get("head", "")).strip()
-    gids = set()
-    for v in form.getlist("gid"):
-        try: gids.add(int(v))
-        except ValueError: pass
-    conn = sqlite3.connect('attendance_pro.db'); cur = conn.cursor()
-    cur.execute("SELECT 1 FROM teachers WHERE username=?", (head,))
-    if not cur.fetchone():
-        conn.close(); return alert_redirect("ไม่พบบัญชีครู", type="error", url="/admin/teachers")
-    cur.execute("SELECT group_id FROM course_groups")
-    valid = {r[0] for r in cur.fetchall()}
-    cur.execute("DELETE FROM subject_head_groups WHERE head_username=?", (head,))
-    for g in gids & valid:
-        cur.execute("INSERT OR IGNORE INTO subject_head_groups (head_username, group_id) VALUES (?,?)", (head, g))
-    conn.commit(); conn.close()
-    add_log(f"{access['fullname']} กำหนดวิชาที่หัวหน้าวิชา {head} รับผิดชอบ ({len(gids & valid)} วิชา)")
-    return alert_redirect(f"บันทึกวิชาที่รับผิดชอบ {len(gids & valid)} วิชาเรียบร้อยแล้ว", type="success", url="/admin/teachers")
-
-
-# ==========================================
-# 🤝 กำหนดรายบุคคล: ครูแต่ละคนเช็กชื่อวิชาไหนได้บ้าง (ครูร่วม / ครูฝึกสอน)
-# ==========================================
-@app.get("/admin/teacher_subjects", response_class=HTMLResponse)
-async def admin_teacher_subjects_page(teacher: str, user_session: Optional[str] = Cookie(None)):
-    access = gate_perm(user_session, can_manage_teacher_accounts)
-    if not access: return RedirectResponse(url="/login", status_code=303)
-    conn = sqlite3.connect('attendance_pro.db'); cur = conn.cursor()
-    cur.execute("SELECT fullname, role FROM teachers WHERE username=?", (teacher,))
-    t = cur.fetchone()
-    if not t:
-        conn.close(); return alert_redirect("ไม่พบบัญชีครู", type="error", url="/admin/teachers")
-    cur.execute("SELECT group_id FROM group_teachers WHERE teacher_username=?", (teacher,))
-    mine = {r[0] for r in cur.fetchall()}
-    cur.execute("SELECT group_id, group_name, teacher_username, branch FROM course_groups ORDER BY group_name")
-    groups = cur.fetchall()
-    cur.execute("SELECT username, fullname FROM teachers"); nm = dict(cur.fetchall()); conn.close()
-    rows = ""
-    for gid, gname, owner, branch in groups:
-        own = owner == teacher
-        tag = '<span class="dk-pill ok">ครูหลัก</span>' if own else ""
-        rows += (f'<label class="dk-row sc-row" data-q="{_he((gname + " " + (branch or "")).lower(), quote=True)}" style="cursor:{"default" if own else "pointer"};margin:0;">'
-                 f'<input type="checkbox" name="gid" value="{gid}" {"checked" if (gid in mine or own) else ""} {"disabled" if own else ""} style="width:20px;height:20px;accent-color:#0f766e;">'
-                 f'<div class="grow"><b>{_he(gname)}</b><span>{_he(branch or "-")} · ครูหลัก: {_he(nm.get(owner, owner or "-"))}</span></div>{tag}</label>')
-    trainee_note = '<div class="dk-note">ครูฝึกสอนเช็กชื่อได้อย่างเดียว เห็นเฉพาะวิชาที่เลือกไว้ที่นี่</div>' if t[1] == "trainee" else ""
-    form = f"""<form method="post" action="/api/admin/teacher_subjects"><input type="hidden" name="teacher" value="{_he(teacher, quote=True)}">
-        {trainee_note}<div class="dk-card"><div class="dk-card-title">วิชาที่ {_he(t[0] or teacher)} เช็กชื่อได้<small id="scCount">{len(mine)} วิชาร่วม</small></div>
-        <input id="scSearch" class="dk-input" placeholder="ค้นหาวิชา" style="margin-bottom:12px;">
-        <div style="display:grid;gap:8px;">{rows or dk_empty("📚", "ยังไม่มีวิชาในระบบ")}</div></div>
-        <button class="dk-btn green block" style="padding:14px;">{ic('save', 16)} บันทึก</button></form>"""
-    js = """<script>(function(){var q=document.getElementById('scSearch'),c=document.getElementById('scCount');
-        function cnt(){c.textContent=document.querySelectorAll('input[name=gid]:checked:not(:disabled)').length+' วิชาร่วม';}
-        document.addEventListener('change',function(e){if(e.target.name==='gid')cnt();});
-        q.addEventListener('input',function(){var v=q.value.trim().toLowerCase();document.querySelectorAll('.sc-row').forEach(function(r){r.style.display=(!v||r.getAttribute('data-q').indexOf(v)>=0)?'':'none';});});})();</script>"""
-    return dk_page("กำหนดวิชาที่เช็กชื่อได้", f"รายบุคคล: {_he(t[0] or teacher)}", form, "/admin/teachers", extra=js, icon="🤝 ", theme="dk-teal")
-
-
-@app.post("/api/admin/teacher_subjects")
-async def api_admin_teacher_subjects(request: Request, user_session: Optional[str] = Cookie(None)):
-    access = gate_perm(user_session, can_manage_teacher_accounts)
-    if not access: return HTMLResponse("Unauthorized", status_code=401)
-    form = await request.form()
-    teacher = str(form.get("teacher", "")).strip()
-    gids = set()
-    for v in form.getlist("gid"):
-        try: gids.add(int(v))
-        except ValueError: pass
-    conn = sqlite3.connect('attendance_pro.db'); cur = conn.cursor()
-    cur.execute("SELECT 1 FROM teachers WHERE username=?", (teacher,))
-    if not cur.fetchone():
-        conn.close(); return alert_redirect("ไม่พบบัญชีครู", type="error", url="/admin/teachers")
-    cur.execute("SELECT group_id FROM course_groups WHERE teacher_username<>?", (teacher,))
-    valid = {r[0] for r in cur.fetchall()}
-    keep = gids & valid
-    cur.execute("DELETE FROM group_teachers WHERE teacher_username=?", (teacher,))
-    for g in keep:
-        cur.execute("INSERT OR IGNORE INTO group_teachers (group_id, teacher_username) VALUES (?,?)", (g, teacher))
-    conn.commit(); conn.close()
-    add_log(f"{access['fullname']} กำหนดวิชาที่ {teacher} เช็กชื่อร่วมได้ ({len(keep)} วิชา)")
-    return alert_redirect(f"บันทึกแล้ว: เช็กชื่อร่วม {len(keep)} วิชา", type="success", url="/admin/teachers")
-
 
 THAI_WEEKDAYS = {1: "จันทร์", 2: "อังคาร", 3: "พุธ", 4: "พฤหัสบดี", 5: "ศุกร์", 6: "เสาร์", 7: "อาทิตย์"}
 
@@ -9542,10 +6796,10 @@ async def admin_leave_requests(leave_type: Optional[str] = None, user_session: O
             <div style="display:flex;gap:6px;justify-content:center;">
                 <a href="/api/admin/leave/approve?req_id={req_id}" class="btn"
                    style="background:#10b981;color:white;padding:5px 10px;border-radius:6px;font-size:12px;font-weight:700;"
-                   data-confirm="อนุมัติคำร้องลาของ {_he(str(name), quote=True)} วันที่ {_he(str(date), quote=True)}?">✅ อนุมัติ</a>
+                   onclick="return confirm('อนุมัติคำร้องลาของ {name} วันที่ {date}?')">✅ อนุมัติ</a>
                 <a href="/api/admin/leave/reject?req_id={req_id}" class="btn"
                    style="background:#ef4444;color:white;padding:5px 10px;border-radius:6px;font-size:12px;font-weight:700;"
-                   data-confirm="ปฏิเสธคำร้องนี้?">❌ ปฏิเสธ</a>
+                   onclick="return confirm('ปฏิเสธคำร้องนี้?')">❌ ปฏิเสธ</a>
             </div>"""
         else:
             actions = f'<span style="color:#94a3b8;font-size:12px;">ดำเนินการแล้ว</span>'
@@ -9686,7 +6940,7 @@ async def api_leave_reject(req_id: int, user_session: Optional[str] = Cookie(Non
 # ==========================================
 # 🔐 ADMIN — จัดการสิทธิ์ผู้ใช้แบบ Role-based (ปรับได้จากหน้าเว็บ ไม่ต้องแก้โค้ด)
 # ==========================================
-ROLE_LABEL_TH = {r: TEACHER_ROLES[r]["label"] for r in CONFIGURABLE_ROLES}
+ROLE_LABEL_TH = {"teacher": "👩‍🏫 ครูผู้สอน", "level_head": "🎓 หัวหน้าระดับ", "affairs": "🛡️ ฝ่ายกิจการนักเรียน"}
 
 @app.get("/admin/permissions", response_class=HTMLResponse)
 async def admin_permissions_page(user_session: Optional[str] = Cookie(None)):
@@ -10350,7 +7604,7 @@ async def admin_announcements_page(user_session: Optional[str] = Cookie(None)):
                 <span style="font-size:11px; color:#94a3b8; font-weight:600;">🕐 {created_at} · ระดับ: {m['label']}</span>
                 <div style="display:flex; gap:6px;">
                     <a href="/api/admin/announcement/toggle?id={id_}" class="btn btn-secondary" style="padding:5px 10px; font-size:11px;">{"🙈 ซ่อน" if is_active else "👁️ แสดง"}</a>
-                    <a href="/api/admin/announcement/delete?id={id_}" class="btn btn-danger" style="padding:5px 10px; font-size:11px;" data-confirm="ยืนยันลบประกาศนี้?">🗑️ ลบ</a>
+                    <a href="/api/admin/announcement/delete?id={id_}" class="btn btn-danger" style="padding:5px 10px; font-size:11px;" onclick="return confirm('ยืนยันลบประกาศนี้?')">🗑️ ลบ</a>
                 </div>
             </div>
         </div>
@@ -10602,7 +7856,7 @@ async def app_classroom_hub(group_id: int, user: str, user_session: Optional[str
     if not row:
         return alert_redirect("ไม่พบกลุ่มวิชานี้", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
     group_name, owner = row
-    if not can_access_group(user, group_id, owner):
+    if owner != user:
         return alert_redirect("คุณไม่มีสิทธิ์เข้าถึงกลุ่มวิชานี้", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
 
     qs = f"?user={urllib.parse.quote(user)}"
@@ -10646,7 +7900,7 @@ async def app_timetable_manage(group_id: int, user: str, user_session: Optional[
     cursor = conn.cursor()
     cursor.execute("SELECT group_name, teacher_username FROM course_groups WHERE group_id=?", (group_id,))
     row = cursor.fetchone()
-    if not row or not can_access_group(user, group_id, row[1]):
+    if not row or row[1] != user:
         conn.close()
         return alert_redirect("ไม่มีสิทธิ์เข้าถึง", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
     group_name = row[0]
@@ -10660,7 +7914,7 @@ async def app_timetable_manage(group_id: int, user: str, user_session: Optional[
             <td style="text-align:left;">วัน{THAI_WEEKDAYS.get(s[1], s[1])}</td>
             <td>{s[2]} - {s[3]}</td>
             <td>{s[4] or '-'}</td>
-            <td><a href="/api/teacher/timetable/delete?slot_id={s[0]}&user={uq}&group_id={group_id}" class="btn btn-danger" style="padding:4px 10px;font-size:11px;" data-confirm="ลบคาบเรียนนี้?">ลบ</a></td>
+            <td><a href="/api/teacher/timetable/delete?slot_id={s[0]}&user={uq}&group_id={group_id}" class="btn btn-danger" style="padding:4px 10px;font-size:11px;" onclick="return confirm('ลบคาบเรียนนี้?')">ลบ</a></td>
         </tr>""" for s in slots])
 
     day_options = "".join([f'<option value="{k}">วัน{v}</option>' for k, v in THAI_WEEKDAYS.items()])
@@ -10708,7 +7962,7 @@ async def api_timetable_add(group_id: int = Form(...), user: str = Form(...), da
     cursor = conn.cursor()
     cursor.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (group_id,))
     row = cursor.fetchone()
-    if not row or not can_access_group(user, group_id, row[0]):
+    if not row or row[0] != user:
         conn.close()
         return alert_redirect("ไม่มีสิทธิ์", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
     cursor.execute("INSERT INTO timetable_slots (group_id, day_of_week, start_time, end_time, room, created_by, created_at) VALUES (?,?,?,?,?,?,?)",
@@ -10725,7 +7979,7 @@ async def api_timetable_delete(slot_id: int, group_id: int, user: str, user_sess
     cursor = conn.cursor()
     cursor.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (group_id,))
     row = cursor.fetchone()
-    if row and can_access_group(user, group_id, row[0]):
+    if row and row[0] == user:
         cursor.execute("DELETE FROM timetable_slots WHERE slot_id=?", (slot_id,))
         conn.commit()
     conn.close()
@@ -10788,7 +8042,7 @@ async def app_homework_manage(group_id: int, user: str, user_session: Optional[s
     cursor = conn.cursor()
     cursor.execute("SELECT group_name, teacher_username FROM course_groups WHERE group_id=?", (group_id,))
     row = cursor.fetchone()
-    if not row or not can_access_group(user, group_id, row[1]):
+    if not row or row[1] != user:
         conn.close()
         return alert_redirect("ไม่มีสิทธิ์เข้าถึง", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
     group_name = row[0]
@@ -10812,7 +8066,7 @@ async def app_homework_manage(group_id: int, user: str, user_session: Optional[s
             <div style="font-size:11.5px;color:#94a3b8;margin-bottom:10px;">📅 กำหนดส่ง: {due_date or 'ไม่ระบุ'}</div>
             <div style="display:flex;gap:6px;">
                 <a href="/app/homework/{group_id}/{a_id}/submissions?user={uq}" class="btn btn-secondary" style="padding:6px 12px;font-size:12px;">👁️ ดูงานที่ส่ง</a>
-                <a href="/api/teacher/homework/delete?assignment_id={a_id}&group_id={group_id}&user={uq}" class="btn btn-danger" style="padding:6px 12px;font-size:12px;" data-confirm="ลบการบ้านนี้?">🗑️ ลบ</a>
+                <a href="/api/teacher/homework/delete?assignment_id={a_id}&group_id={group_id}&user={uq}" class="btn btn-danger" style="padding:6px 12px;font-size:12px;" onclick="return confirm('ลบการบ้านนี้?')">🗑️ ลบ</a>
             </div>
         </div>"""
     conn.close()
@@ -10854,7 +8108,7 @@ async def api_homework_add(group_id: int = Form(...), user: str = Form(...), tit
     cursor = conn.cursor()
     cursor.execute("SELECT teacher_username, group_name FROM course_groups WHERE group_id=?", (group_id,))
     row = cursor.fetchone()
-    if not row or not can_access_group(user, group_id, row[0]):
+    if not row or row[0] != user:
         conn.close()
         return alert_redirect("ไม่มีสิทธิ์", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
     group_name = row[1]
@@ -10883,7 +8137,7 @@ async def api_homework_delete(assignment_id: int, group_id: int, user: str, user
     cursor = conn.cursor()
     cursor.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (group_id,))
     row = cursor.fetchone()
-    if row and can_access_group(user, group_id, row[0]):
+    if row and row[0] == user:
         cursor.execute("DELETE FROM assignments WHERE assignment_id=?", (assignment_id,))
         cursor.execute("DELETE FROM assignment_submissions WHERE assignment_id=?", (assignment_id,))
         conn.commit()
@@ -10898,7 +8152,7 @@ async def app_homework_submissions(group_id: int, assignment_id: int, user: str,
     cursor = conn.cursor()
     cursor.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (group_id,))
     row = cursor.fetchone()
-    if not row or not can_access_group(user, group_id, row[0]):
+    if not row or row[0] != user:
         conn.close()
         return alert_redirect("ไม่มีสิทธิ์", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
     cursor.execute("SELECT title FROM assignments WHERE assignment_id=?", (assignment_id,))
@@ -11019,7 +8273,7 @@ async def app_grades_manage(group_id: int, user: str, user_session: Optional[str
     cursor = conn.cursor()
     cursor.execute("SELECT group_name, teacher_username, grades_visibility FROM course_groups WHERE group_id=?", (group_id,))
     row = cursor.fetchone()
-    if not row or not can_access_group(user, group_id, row[1]):
+    if not row or row[1] != user:
         conn.close()
         return alert_redirect("ไม่มีสิทธิ์เข้าถึง", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
     group_name = row[0]
@@ -11067,7 +8321,7 @@ async def app_grades_manage(group_id: int, user: str, user_session: Optional[str
                        title="แก้ไขชื่อ/คะแนนเต็ม"
                        style="color:#2563eb;text-decoration:none;font-size:11px;font-weight:800;">✎</a>
                     <a href="/api/teacher/grades/delete_item?item_id={it[0]}&group_id={group_id}&user={uq}"
-                       data-confirm="ลบรายการคะแนนนี้? (ลบแล้วคะแนนของทุกคนในคอลัมน์นี้จะหายไปด้วย)"
+                       onclick="return confirm('ลบรายการคะแนนนี้? (ลบแล้วคะแนนของทุกคนในคอลัมน์นี้จะหายไปด้วย)')"
                        style="color:#f87171;text-decoration:none;font-size:11px;font-weight:800;">✕</a>
                 </div>
                 <a href="/app/grades/{group_id}/edit_item?item_id={it[0]}&user={uq}" style="text-decoration:none;">
@@ -11251,7 +8505,7 @@ async def app_grades_manage(group_id: int, user: str, user_session: Optional[str
             if (val !== "" && parseFloat(val) > maxVal) {{
                 input.classList.remove('gr-saved');
                 input.classList.add('gr-error');
-                smartAlert({{ title: 'คะแนนเกินคะแนนเต็ม', message: 'คะแนนที่กรอก (' + val + ') เกินคะแนนเต็ม (' + maxVal + ')', type: 'warning' }});
+                alert('คะแนนที่กรอก (' + val + ') เกินคะแนนเต็ม (' + maxVal + ')');
                 return;
             }}
 
@@ -11294,7 +8548,7 @@ async def api_grades_add_item(group_id: int = Form(...), user: str = Form(...), 
     cursor = conn.cursor()
     cursor.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (group_id,))
     row = cursor.fetchone()
-    if not row or not can_access_group(user, group_id, row[0]):
+    if not row or row[0] != user:
         conn.close()
         return alert_redirect("ไม่มีสิทธิ์", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
     cursor.execute("INSERT INTO grade_items (group_id, item_name, max_score, category, created_by, created_at) VALUES (?,?,?,?,?,?)",
@@ -11312,7 +8566,7 @@ async def app_grades_edit_item_page(group_id: int, item_id: int, user: str, user
     cursor = conn.cursor()
     cursor.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (group_id,))
     row = cursor.fetchone()
-    if not row or not can_access_group(user, group_id, row[0]):
+    if not row or row[0] != user:
         conn.close()
         return alert_redirect("ไม่มีสิทธิ์เข้าถึง", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
     cursor.execute("SELECT item_id, item_name, max_score, category FROM grade_items WHERE item_id=? AND group_id=?", (item_id, group_id))
@@ -11386,7 +8640,7 @@ async def api_grades_edit_item(group_id: int = Form(...), user: str = Form(...),
     cursor = conn.cursor()
     cursor.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (group_id,))
     row = cursor.fetchone()
-    if not row or not can_access_group(user, group_id, row[0]):
+    if not row or row[0] != user:
         conn.close()
         return alert_redirect("ไม่มีสิทธิ์", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
     cursor.execute("SELECT item_id FROM grade_items WHERE item_id=? AND group_id=?", (item_id, group_id))
@@ -11417,7 +8671,7 @@ async def api_grades_set_score(group_id: int = Form(...), user: str = Form(...),
     cursor = conn.cursor()
     cursor.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (group_id,))
     row = cursor.fetchone()
-    if not row or not can_access_group(user, group_id, row[0]):
+    if not row or row[0] != user:
         conn.close()
         return alert_redirect("ไม่มีสิทธิ์", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
     cursor.execute("""INSERT INTO grade_scores (item_id, student_uid, score) VALUES (?,?,?)
@@ -11436,7 +8690,7 @@ async def api_grades_bulk_add_items(group_id: int = Form(...), user: str = Form(
     cursor = conn.cursor()
     cursor.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (group_id,))
     row = cursor.fetchone()
-    if not row or not can_access_group(user, group_id, row[0]):
+    if not row or row[0] != user:
         conn.close()
         return alert_redirect("ไม่มีสิทธิ์", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
 
@@ -11487,7 +8741,7 @@ async def api_grades_ajax_set_score(group_id: int = Form(...), user: str = Form(
     cursor = conn.cursor()
     cursor.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (group_id,))
     row = cursor.fetchone()
-    if not row or not can_access_group(user, group_id, row[0]):
+    if not row or row[0] != user:
         conn.close()
         return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
 
@@ -11528,7 +8782,7 @@ async def api_grades_delete_item(item_id: int, group_id: int, user: str, user_se
     cursor = conn.cursor()
     cursor.execute("SELECT teacher_username FROM course_groups WHERE group_id=?", (group_id,))
     row = cursor.fetchone()
-    if not row or not can_access_group(user, group_id, row[0]):
+    if not row or row[0] != user:
         conn.close()
         return alert_redirect("ไม่มีสิทธิ์", type="error", url=f"/app/dashboard?user={urllib.parse.quote(user)}")
     cursor.execute("DELETE FROM grade_scores WHERE item_id=?", (item_id,))
@@ -11619,8 +8873,7 @@ async def student_grades(user_session: Optional[str] = Cookie(None)):
 # ---------- 💳 ชำระเงิน (แอดมินบันทึกรายการ/สถานะ / นักเรียนดูยอด) ----------
 @app.get("/admin/payments", response_class=HTMLResponse)
 async def admin_payments_page(user_session: Optional[str] = Cookie(None)):
-    access = gate_perm(user_session, can_manage_payments)
-    if not access:
+    if user_session != "admin":
         return RedirectResponse(url="/login", status_code=303)
     conn = sqlite3.connect('attendance_pro.db')
     cursor = conn.cursor()
@@ -11630,40 +8883,60 @@ async def admin_payments_page(user_session: Optional[str] = Cookie(None)):
 
     students = get_sorted_master_students()
     student_map = {s['uid']: s for s in students}
-    student_options = "".join([f'<option value="{_he(s["uid"], quote=True)}">{_he(s["name"])} ({_he(s["class"])} เลขที่ {_he(s["no"])})</option>' for s in students])
+    student_options = "".join([f'<option value="{s["uid"]}">{s["name"]} ({s["class"]} เลขที่ {s["no"]})</option>' for s in students])
 
-    total_amt = sum(r[3] for r in rows)
-    paid_amt = sum(r[3] for r in rows if r[4] == "paid")
-    stats = (dk_stat("รายการทั้งหมด", len(rows), "🧾", "blue") + dk_stat("ยอดเรียกเก็บรวม", f"{total_amt:,.0f}", "💰", "violet")
-             + dk_stat("ชำระแล้ว (บาท)", f"{paid_amt:,.0f}", "✅", "green") + dk_stat("ค้างชำระ (บาท)", f"{total_amt - paid_amt:,.0f}", "⏳", "red"))
     cards = ""
     for p_id, uid, item_name, amount, status, due_date in rows:
         s = student_map.get(uid, {"name": uid, "class": "-", "no": "-"})
         is_paid = status == "paid"
-        cards += f"""<div class="dk-stu {'is-done' if is_paid else 'has-fail'}" style="margin:0;">
-            <div class="dk-stu-head" style="margin-bottom:8px;"><div class="dk-ico-box">💳</div>
-                <div class="nm"><b>{_he(item_name)}</b><span>{_he(s['name'])} · {_he(s['class'])} เลขที่ {_he(s['no'])}</span></div>
-                <span class="dk-pill {'ok' if is_paid else 'bad'}">{'ชำระแล้ว' if is_paid else 'ยังไม่ชำระ'}</span></div>
-            <div style="font-size:13px;margin:0 0 10px;color:#475569;font-weight:600;">💰 {amount:,.2f} บาท · กำหนดชำระ: {_he(due_date or 'ไม่ระบุ')}</div>
-            <div style="display:flex;gap:8px;">
-                <a href="/api/admin/payment/toggle?payment_id={p_id}" class="dk-btn light sm" style="flex:1;">{'↩️ ยกเลิกชำระ' if is_paid else '✅ บันทึกว่าชำระแล้ว'}</a>
-                <a href="/api/admin/payment/delete?payment_id={p_id}" class="dk-btn danger sm" data-confirm="ลบรายการนี้?">🗑️ ลบ</a>
-            </div></div>"""
-    form = f"""<div class="dk-card"><div class="dk-card-title">➕ เพิ่มรายการเรียกเก็บเงิน</div>
-        <form action="/api/admin/payment/add" method="post" class="dk-grid c2" style="align-items:end;">
-            <div style="grid-column:1/-1;"><label class="dk-label">นักเรียน</label><select class="dk-select" name="student_uid" data-title="เลือกนักเรียน" required>{student_options}</select></div>
-            <div><label class="dk-label">รายการ</label><input class="dk-input" type="text" name="item_name" placeholder="เช่น ค่าเทอม 1/2569" required></div>
-            <div><label class="dk-label">จำนวนเงิน (บาท)</label><input class="dk-input" type="number" step="0.01" name="amount" required></div>
-            <div><label class="dk-label">กำหนดชำระ</label><input class="dk-input" type="date" name="due_date"></div>
-            <button type="submit" class="dk-btn green">💾 เพิ่มรายการ</button></form></div>"""
-    listing = f'<div class="dk-card-title" style="margin:6px 4px 10px;">รายการทั้งหมด</div><div class="dk-grid c2">{cards}</div>' if cards else f'<div class="dk-card">{dk_empty("🧾", "ยังไม่มีรายการ")}</div>'
-    return dk_page("การเงิน / ชำระเงิน", "รายการเรียกเก็บและสถานะการชำระของนักเรียน", f'<div class="dk-stats">{stats}</div>{form}{listing}',
-                   staff_home_url(access), icon="💳 ")
+        cards += f"""
+        <div class="card" style="margin-bottom:10px; border-left:4px solid {'#15803d' if is_paid else '#b91c1c'};">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+                <div>
+                    <div style="font-weight:800;font-size:14px;">{item_name}</div>
+                    <div style="font-size:12px;color:#64748b;">{s['name']} · {s['class']} เลขที่ {s['no']}</div>
+                </div>
+                <span style="font-weight:800;color:{'#15803d' if is_paid else '#b91c1c'};font-size:12.5px;white-space:nowrap;">{'✅ ชำระแล้ว' if is_paid else '⏳ ยังไม่ชำระ'}</span>
+            </div>
+            <div style="font-size:13px;margin:8px 0;">💰 {amount:g} บาท · กำหนดชำระ: {due_date or 'ไม่ระบุ'}</div>
+            <div style="display:flex;gap:6px;">
+                <a href="/api/admin/payment/toggle?payment_id={p_id}" class="btn btn-secondary" style="padding:5px 10px;font-size:11px;">{'↩️ ยกเลิกชำระ' if is_paid else '✅ บันทึกว่าชำระแล้ว'}</a>
+                <a href="/api/admin/payment/delete?payment_id={p_id}" class="btn btn-danger" style="padding:5px 10px;font-size:11px;" onclick="return confirm('ลบรายการนี้?')">🗑️ ลบ</a>
+            </div>
+        </div>"""
+
+    return f"""
+    <html>{STYLE_HEADER}
+    <body>
+        <div class="navbar">
+            <h1><img src="{LOGO_URL}" class="nav-logo"> 💳 ชำระเงิน</h1>
+            <a href="/admin/dashboard" class="btn btn-secondary">⬅ กลับหน้าควบคุม</a>
+        </div>
+        <div class="main-container">
+            <div class="card">
+                <h2>➕ เพิ่มรายการเรียกเก็บเงิน</h2>
+                <form action="/api/admin/payment/add" method="post">
+                    <label style="font-size:12.5px;font-weight:700;color:#475569;">นักเรียน:</label>
+                    <select name="student_uid" required>{student_options}</select>
+                    <label style="font-size:12.5px;font-weight:700;color:#475569;">รายการ:</label>
+                    <input type="text" name="item_name" placeholder="เช่น ค่าเทอม 1/2569" required>
+                    <label style="font-size:12.5px;font-weight:700;color:#475569;">จำนวนเงิน (บาท):</label>
+                    <input type="number" step="0.01" name="amount" required>
+                    <label style="font-size:12.5px;font-weight:700;color:#475569;">กำหนดชำระ:</label>
+                    <input type="date" name="due_date">
+                    <button type="submit" class="btn-submit">💾 เพิ่มรายการ</button>
+                </form>
+            </div>
+            <div class="card"><h2 style="margin:0;">📋 รายการทั้งหมด ({len(rows)})</h2></div>
+            {cards if cards else "<p style='color:#94a3b8;text-align:center;padding:20px 0;'>ยังไม่มีรายการ</p>"}
+        </div>
+    </body></html>
+    """
 
 @app.post("/api/admin/payment/add")
 async def api_payment_add(student_uid: str = Form(...), item_name: str = Form(...), amount: float = Form(...),
                            due_date: str = Form(""), user_session: Optional[str] = Cookie(None)):
-    if not gate_perm(user_session, can_manage_payments): return HTMLResponse("Unauthorized", status_code=401)
+    if user_session != "admin": return HTMLResponse("Unauthorized", status_code=401)
     conn = sqlite3.connect('attendance_pro.db')
     cursor = conn.cursor()
     cursor.execute("INSERT INTO payments (student_uid, item_name, amount, status, due_date, recorded_by, created_at) VALUES (?,?,?,?,?,?,?)",
@@ -11674,7 +8947,7 @@ async def api_payment_add(student_uid: str = Form(...), item_name: str = Form(..
 
 @app.get("/api/admin/payment/toggle")
 async def api_payment_toggle(payment_id: int, user_session: Optional[str] = Cookie(None)):
-    if not gate_perm(user_session, can_manage_payments): return HTMLResponse("Unauthorized", status_code=401)
+    if user_session != "admin": return HTMLResponse("Unauthorized", status_code=401)
     conn = sqlite3.connect('attendance_pro.db')
     cursor = conn.cursor()
     cursor.execute("SELECT status FROM payments WHERE payment_id=?", (payment_id,))
@@ -11689,7 +8962,7 @@ async def api_payment_toggle(payment_id: int, user_session: Optional[str] = Cook
 
 @app.get("/api/admin/payment/delete")
 async def api_payment_delete(payment_id: int, user_session: Optional[str] = Cookie(None)):
-    if not gate_perm(user_session, can_manage_payments): return HTMLResponse("Unauthorized", status_code=401)
+    if user_session != "admin": return HTMLResponse("Unauthorized", status_code=401)
     conn = sqlite3.connect('attendance_pro.db')
     cursor = conn.cursor()
     cursor.execute("DELETE FROM payments WHERE payment_id=?", (payment_id,))
