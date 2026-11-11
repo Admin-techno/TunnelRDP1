@@ -1919,11 +1919,15 @@ def can_rollcall_group(user: str, group_id: int) -> bool:
         conn.close()
     if not r:
         return False
-    return can_access_group(user, group_id, r[0]) or group_id in co_group_ids(user)
+    return r[0] == user or can_access_group(user, group_id, r[0]) or group_id in co_group_ids(user)
 
 def rollcall_groups_for_user(cursor, user: str) -> list:
     """วิชาที่เช็กชื่อได้ทั้งหมด = วิชาที่จัดการได้ + วิชาที่ร่วมเช็ก -> [(group_id, group_name)]"""
-    rows = [] if _user_role(user) == "trainee" else list(groups_for_user(cursor, user))
+    if _user_role(user) == "trainee":
+        cursor.execute("SELECT group_id, group_name FROM course_groups WHERE teacher_username = ?", (user,))
+        rows = list(cursor.fetchall())
+    else:
+        rows = list(groups_for_user(cursor, user))
     seen = {r[0] for r in rows}
     cursor.execute("""SELECT g.group_id, g.group_name FROM course_groups g
                       JOIN group_teachers x ON x.group_id = g.group_id WHERE x.teacher_username = ?
@@ -7240,7 +7244,8 @@ DASH_KIT = """
     .dk-grid { display:grid; gap:12px; grid-template-columns:1fr; }
     @media (min-width:720px) { .dk-grid.c2 { grid-template-columns:repeat(2,1fr); } .dk-grid.c3 { grid-template-columns:repeat(3,1fr); } }
     .dk-empty { text-align:center; color:#94a3b8; padding:34px 10px; font-size:14px; }
-    .dk-empty .em { font-size:38px; display:block; margin-bottom:6px; }
+    .dk-empty .em { display:flex; width:68px; height:68px; margin:0 auto 12px; border-radius:20px; background:#eef2ff; color:#4f46e5; align-items:center; justify-content:center; font-size:0; line-height:0; }
+    .dk-empty .em .kx-i { width:32px; height:32px; display:block; margin:0; }
     .dk-note { background:#eff6ff; border:1px solid #bfdbfe; color:#1e40af; border-radius:14px; padding:12px 14px; font-size:13px; line-height:1.7; margin-bottom:14px; }
 
     /* ── Buttons / inputs ── */
