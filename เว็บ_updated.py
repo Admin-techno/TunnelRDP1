@@ -4656,9 +4656,14 @@ async def app_dashboard(user: str, user_session: Optional[str] = Cookie(None)):
     scope_tag = f" · {_he(access['level_scope'])}" if access["role"] == "level_head" and access["level_scope"] else ""
     hero_actions = (f'<a href="/app/notifications" class="dk-btn hero">{ic("bell", 15)} ประกาศ</a>'
                     f'<a href="/logout" class="dk-btn hero">{ic("log-out", 15)}</a>')
+    role_short = _he(TEACHER_ROLES.get(access["role"], TEACHER_ROLES["teacher"])["label"].split(" ", 1)[-1])
+    tools_section = (
+        '<div class="dk-section">เมนูของคุณ · ' + role_short + scope_tag + '</div>'
+        '<div class="dk-tools">' + tools + '</div>'
+    ) if tools else ''
     body = (f'<div id="announcement-section" style="margin-bottom:14px;display:none;"><div id="announcement-list"></div></div>'
             f'<div class="dk-stats">{stats}</div>'
-            f'{('<div class="dk-section">เมนูของคุณ · ' + _he(TEACHER_ROLES.get(access["role"], TEACHER_ROLES["teacher"])["label"].split(" ", 1)[-1]) + scope_tag + '</div><div class="dk-tools">' + tools + '</div>') if tools else ''}'
+            f'{tools_section}'
             f'<div class="dk-section">วิชาที่ดูแล ({len(subjects)})</div><div class="dk-grid c2">{subj_cards}</div>'
             f'<div class="ah-footer" style="margin-top:20px;">powered by <span>K-Techinteractive</span></div>')
     role_text = _he(access["role_label"].split(" ", 1)[-1]) if access["role_label"] else "ครู"
